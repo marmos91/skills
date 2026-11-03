@@ -86,6 +86,24 @@ overrides live in env:
   `parallelizable: true/false` + `depends_on` so work can be sequenced.
 - `issues` step renders one GH issue per epic, body = goal + findings + acceptance + deps.
 
+## Optional: hand the roadmap to a planning system (only when the user asks)
+
+If superpowers or bigpowers is installed, the epics can be driven through its
+planning pipeline instead of the built-in steps. Do NOT do this unprompted —
+the standalone `roadmap`/`issues` steps are the default.
+
+- **superpowers** — per epic: `superpowers:writing-plans` → implementation
+  plan, then `superpowers:executing-plans` / `superpowers:subagent-driven-development`
+  to run it. Good for epics needing brainstormed design first (`superpowers:brainstorming`).
+- **bigpowers** — the full lifecycle: feed each epic through `elaborate-spec` →
+  `scope-work` → `slice-tasks` → `plan-work`, sequence with `plan-release`
+  (WSJF), execute with `execute-plan`/`build-epic`. Epics land as
+  `specs/epics/eNN-<slug>/` capsules; issues then come from `change-request`.
+
+Either way, `epics.json` remains the source of truth: reconcile the planning
+system's own artifacts against it (title match, findings covered) before
+execution, and never drop a verified finding in the translation.
+
 ## Iterate
 
 Add a lens: add a brief in `audit.sh` `expert_brief`, optionally add it to `AUDIT_LENSES`, delete
