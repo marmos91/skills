@@ -506,21 +506,33 @@ fs.writeFileSync(process.argv[4], out.join("\n")+(out.length?"\n":""));' "${EPIC
             _total="$(wc -l <"$STATE/tmp/wave-epics.txt" | tr -d ' ')"
             if [ "$_total" = "0" ]; then continue; fi
             log "wave $_wave_no: $_total epic(s)"
-            _from=1
-            while [ "$_from" -le "$_total" ]; do
-                _to=$((_from+CONCURRENCY-1))
-                sed -n "${_from},${_to}p" "$STATE/tmp/wave-epics.txt" >"$STATE/tmp/slice.txt"
-                : >"$STATE/tmp/running.pids"
-                while IFS="$(printf '\t')" read -r _ep _par; do
-                    [ -n "$_ep" ] || continue
-                    { run_epic "$_ep" || echo "$_ep" >>"$STATE/failed-epics"; } &
-                    echo "$!" >>"$STATE/tmp/running.pids"
-                done <"$STATE/tmp/slice.txt"
-                _pids="$(cat "$STATE/tmp/running.pids")"
-                # shellcheck disable=SC2086
-                wait $_pids || true
-                _from=$((_to+1))
-            done
+            # Lane-slot pool instead of batch-of-CONCURRENCY waves: dispatch an
+            # epic as soon as a lane frees up (batching made the whole flight wait
+            # for its slowest member — a 40-min implementer idled 3 lanes).
+            : >"$STATE/tmp/running.pids"
+            _pn=0
+            _gin=0
+            while IFS="$(printf '\t')" read -r _ep _par; do
+                [ -n "$_ep" ] || continue
+                while [ "$_pn" -ge "$CONCURRENCY" ]; do
+                    # reap one: remove any finished pid from running.pids
+                    _freed="0"
+                    : >"$STATE/tmp/.reap"
+                    while read -r _p; do
+                        [ -n "$_p" ] || continue
+                        if kill -0 "$_p" 2>/dev/null; then echo "$_p" >>"$STATE/tmp/.reap"; else _freed=1; fi
+                    done <"$STATE/tmp/running.pids"
+                    mv "$STATE/tmp/.reap" "$STATE/tmp/running.pids"
+                    [ "$_freed" = "1" ] || sleep 10
+                    _pn=$(wc -l <"$STATE/tmp/running.pids" | tr -d ' ')
+                done
+                { run_epic "$_ep" || echo "$_ep" >>"$STATE/failed-epics"; } &
+                echo "$!" >>"$STATE/tmp/running.pids"
+                _pn=$((_pn+1))
+                _gin=$((_gin+1))
+            done <"$STATE/tmp/wave-epics.txt"
+            while read -r _p; do [ -n "$_p" ] && wait "$_p" || true; done <"$STATE/tmp/running.pids"
+            rm -f "$STATE/tmp/.reap"
             continue
         fi
     done <"$STATE/waves.txt"
