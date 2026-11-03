@@ -284,6 +284,7 @@ stage_implement() {
         echo "Implement every plan step. House rules: minimal complete diff, no speculative flexibility, reuse existing helpers, follow the repo code style (read AGENTS.md); run the repo formatter on files you touched."
         echo "Tests: add ONLY the tests the plan names (non-trivial logic). Do not test the obvious; do not add tests for deletes/moves."
         echo "Then VERIFY with the plan's commands from your worktree (the repo's own lint/typecheck/test commands per AGENTS.md). Fix what they report until green, or say explicitly which command could not run — never claim green you did not see."
+        echo "Do NOT run scripts/review-lens.sh or any multi-lens review gate — the orchestrator runs the review gate for you after you finish; your verification is lint/typecheck/tests only."
         echo "Reply markdown: per finding id what you implemented, deviations + reasons, verification results (verbatim tail), anything incomplete."
         echo "HARD BOUND: implement, verify, report, stop. No refactors beyond the plan."
     } >"$_pf"
