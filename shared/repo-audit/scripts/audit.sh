@@ -544,6 +544,43 @@ step_issues() {
     done <"$STATE/issues.tsv"
 }
 
+write_resume_doc() {
+    # Durable map of the run: every step's artifacts + counts, the exact resume
+    # command, rewritten at status calls and after each `all` step finishes so
+    # a crashed run leaves current navigation (steps are marker-idempotent).
+    {
+        echo "# repo-audit run state"
+        echo ""
+        echo "Updated: $(date -u +%Y-%m-%dT%H:%M:%SZ)  REPO=$REPO  BASE_REF=$BASE_REF"
+        echo "STATE=$STATE  WORKTREE=$WORKTREE"
+        echo ""
+        echo "Steps run in order: init recon research find verify aggregate roadmap report (issues separate)."
+        echo "Each step is idempotent and keeps existing artifacts; a crashed run resumes at the first MISSING row."
+        echo ""
+        echo "| step | artifact | status |"
+        echo "|---|---|---|"
+        [ -e "$WORKTREE/.git" ] && echo "| init | worktree $WORKTREE | done ($(git -C "$WORKTREE" rev-parse --short HEAD 2>/dev/null)) |" || echo "| init | worktree | MISSING (audit.sh init) |"
+        for f in areas.json research.md findings.fp findings.json findings-refuted.json epics.json report.md issues.tsv; do
+            if [ -s "$STATE/$f" ]; then echo "| artifact | $f | done |"; else echo "| artifact | $f | MISSING |"; fi
+        done
+        if [ -s "$STATE/areas.json" ] && [ -d "$STATE/findings" ]; then
+            _pairs=$(wc -l <"$STATE/pairs.txt" 2>/dev/null | tr -d ' ')
+            _done=$(ls "$STATE/findings" | grep -c json)
+            _pending=$((_pairs - _done))
+            [ "$_pairs" -gt 0 ] && echo "| find | findings/ ($_done/$_pairs lens×area reports) | $_done done, $_pending pending (re-run: audit.sh find) |"
+        fi
+        if [ -d "$STATE/verified" ] && [ -s "$STATE/findings.fp" ]; then
+            echo "| verify | verified/ ($(ls "$STATE/verified" | grep -c json) verdicts) | fingerprint $(cat "$STATE/findings.fp") |"
+        fi
+        for d in "$STATE"/epic-pass/*.json; do [ -e "$d" ] || continue; echo "| roadmap | epic-pass/$(basename "$d") | done |"; done
+        echo ""
+        echo "## To resume"
+        echo ""
+        echo "    WORKTREE=$WORKTREE sh $0 all    # retries only the gaps"
+        echo ""
+    } >"$STATE/RESUME.md" 2>/dev/null || true
+}
+
 step_status() {
     echo "== repo-audit state =="
     echo "REPO=$REPO  WORKTREE=$WORKTREE  BASE_REF=$BASE_REF  STATE=$STATE"
@@ -584,6 +621,7 @@ all)
     for s in init recon research find verify aggregate roadmap report; do
         log "=== step: $s"
         "step_$s"
+        write_resume_doc
     done
     log "audit complete — report: $STATE/report.md (then: audit.sh issues)"
     ;;

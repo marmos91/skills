@@ -37,6 +37,17 @@ its own git worktree** so two agents never touch the same checkout.
   must be NON-empty: the engine tests them with [ -s ]; a 0-byte marker is
   invisible and re-triggers the stage — write `echo ok > marker`, never
   `: > marker`.)`
+- **Every stage resumable at every intra-step crash point.** The durable map
+  is `$FIXROOT/.fix/RESUME.md`, rewritten at run start, after each epic, and
+  at run end: per-epic stage markers, last review verdicts, FATAL/blocked
+  list, and the exact resume command. After a crash, read it first. Specific
+  crash windows that are actively healed on relaunch: implementer summary
+  written but commit missing → falls through to diff-check+commit (never
+  re-runs the child on a dirty tree); gate revise edits sitting uncommitted →
+  committed as a checkpoint before gate rounds (lenses diff three-dot
+  ranges, so uncommitted edits would be invisible and the gate would loop
+  on stale findings); PR created but pr-url unwritten → the open PR on the
+  epic branch is adopted instead of duplicated.
 - A lens that returns no findings says so; a failed/timeout lens is a FAILED
   GATE — same contract as `scripts/review-lens.sh`.
 - Implementers never commit/push; the orchestrator commits after verifying a
