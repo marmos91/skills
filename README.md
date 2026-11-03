@@ -6,6 +6,7 @@ agent targets:
 - `pi/` — skills for [pi](https://github.com/badlogic/pi-mono) (`~/.pi/agent/skills/`)
 - `claude/` — skills for Claude Code (`~/.claude/skills/`)
 - `shared/` — skills whose content works for both agents verbatim (installed to both)
+
 ## Install
 
 ```sh
@@ -27,13 +28,16 @@ by directory; the description drives automatic routing.
 
 | Skill | Agent | Purpose |
 |---|---|---|
-| repo-audit | both | Multi-lens, multi-agent repo quality audit → adversarially-verified findings → epics → GH issues; resumable. Portable engine: headless `pi -p` children, works under any harness with `pi` installed |
+| repo-audit | both | Multi-lens whole-repo quality audit: cleanliness/design patterns, structure, over-engineering, dead code, tests, docs, UI coherence, security, AI-slop/hallucination, Postgres, API design, correctness. Adversarially-verified findings → epic roadmap → optional GH issues. Portable engine: headless `pi -p` children, resumable |
 | repo-audit-fix | both | Executes audit epics: research → architect plan → plan review → implement → 3-lens gate → PR per epic; wave-parallel worktrees, resumable |
 | refute-root-cause | pi | Adversarial panel that tries to kill a claimed root cause before you fix on it |
 
 (graphify and humanizer were removed from this repo — they exist upstream:
 `graphify install --platform pi|claude` from [Graphify-Labs/graphify](https://github.com/Graphify-Labs/graphify),
 and [/plugin install humanizer@humanizer](https://github.com/blader/humanizer) for Claude Code.)
+
+`shared/` engines are harness-agnostic: they drive headless `pi -p` children, so they
+run under pi, Claude Code, or any agent with the `pi` CLI available.
 
 ## Conventions
 
