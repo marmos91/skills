@@ -323,16 +323,22 @@ stage_gate() {
         log "gate round $_round/$((GATE_ROUNDS+1)): $_ep"
         _branch="$(cat "$_dir/branch")"
         _fail=0
+        # lenses in parallel: 3 sequential 900s reviews become one ~900s round
         for _lens in adversarial correctness simplification; do
-            if ( cd "$REPO_DIR" && REVIEW_PROVIDER="$REVIEW_PROVIDER" REVIEW_MODEL="$REVIEW_MODEL" REVIEW_THINKING="$REVIEW_THINKING" \
-                 sh "$LENS" "$_lens" "$BASE_REF...$_branch" ) \
+            (
+              if ( cd "$REPO_DIR" && REVIEW_PROVIDER="$REVIEW_PROVIDER" REVIEW_MODEL="$REVIEW_MODEL" REVIEW_THINKING="$REVIEW_THINKING" \
+                   sh "$LENS" "$_lens" "$BASE_REF...$_branch" ) \
                  >"$_dir/gate-$_lens.txt" 2>&1; then
                 :
-            else
-                _fail=1
+              else
                 echo "round $_round lens $_lens exit $?" >>"$_dir/gate-failed.txt"
-            fi
+              fi
+            ) &
+            echo "$!" >>"$_dir/gate-lens.pids"
         done
+        # shellcheck disable=SC2154
+        wait $(tr '\n' ' ' <"$_dir/gate-lens.pids") 2>/dev/null; rm -f "$_dir/gate-lens.pids"
+        [ -s "$_dir/gate-failed.txt" ] && _fail=1
         [ "$_fail" = 0 ] && { echo ok >"$_dir/gate-passed"; rm -f "$_dir/gate-failed.txt"; break; }
         [ "$_round" -le "$GATE_ROUNDS" ] || break
         log "revise ($IMPL_MODEL): $_ep (gate findings)"
