@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import crypto from "node:crypto";
 // aggregate.mjs — findings id-hashing, verify batching, and the verified merge.
 //
 //   aggregate.mjs prep   <state>   -> stdout: "batch-id<TAB>count" lines of OPEN
@@ -13,7 +14,6 @@
 // so a batch is always the exact set of findings it names — resume can never
 // apply a stale verdict to a re-shuffled batch, because the id changes.
 import fs from "node:fs";
-import crypto from "node:crypto";
 
 const state = process.argv[3];
 if (!state) {
