@@ -33,6 +33,9 @@ REVIEW_PROVIDER="${REVIEW_PROVIDER:-cubbit}";     REVIEW_MODEL="${REVIEW_MODEL:-
 IMPL_PROVIDER="${IMPL_PROVIDER:-cubbit-headroom}"; IMPL_MODEL="${IMPL_MODEL:-cubbit/mimir}";     IMPL_THINKING="${IMPL_THINKING:-high}"
 CONCURRENCY="${CONCURRENCY:-3}"
 GATE_ROUNDS="${GATE_ROUNDS:-2}"
+# Plan-review revise budget. Small epics approve in 1-2 rounds; large refactor
+# epics legitimately need more -> default 5.
+PLAN_ROUNDS="${PLAN_ROUNDS:-5}"
 TIMEOUT="${TIMEOUT:-3600}"
 EPIC_FILTER="${EPIC_FILTER:-}"
 ISSUE_LABEL="${ISSUE_LABEL:-audit}"
@@ -40,7 +43,7 @@ DRY_RUN="${DRY_RUN:-0}"
 # Project context for every child. Generic default; override per project.
 REPO_CTX="${REPO_CTX:-Context: this repo documents its stack, layout and house rules in AGENTS.md (and README) — read it first and follow its conventions: branch/PR workflow, commit style, test and lint commands, code style. Prefer the smallest complete diff; small pure modules; no speculative flexibility.}"
 
-SCRIPTS="$REPO_DIR/.agents/skills/repo-audit-fix/scripts"
+SCRIPTS="${SCRIPTS:-$REPO_DIR/.agents/skills/repo-audit-fix/scripts}"
 LIB="$SCRIPTS/lib"
 # 3-lens gate: the repo's own review-lens.sh if present (the house gate);
 # otherwise LENS must point at an equivalent gate script (see SKILL.md). If
@@ -214,7 +217,7 @@ stage_planreview() {
     _rounds=0
     while [ ! -s "$_dir/plan-approved" ]; do
         _rounds=$((_rounds+1))
-        [ "$_rounds" -le 3 ] || die "plan review loop exhausted for $_ep"
+        [ "$_rounds" -le "$PLAN_ROUNDS" ] || die "plan review loop exhausted for $_ep"
         log "plan review ($REVIEW_MODEL, round $_rounds): $_ep"
         # retry invalid child output within the same round budget
         _ok=0
@@ -458,7 +461,7 @@ GH_REPO="${GH_REPO:-$( ( cd "$REPO_DIR" && git remote get-url origin 2>/dev/null
 # derived vars are read inside backgrounded stage functions — export them so
 # subshells always inherit the same values even if the caller forgot export
 export STATE FIXROOT REPO_DIR AUDIT_STATE BASE_REF LENS SCRIPTS LIB GH_REPO
-export CONCURRENCY GATE_ROUNDS EPIC_FILTER DRY_RUN ISSUE_LABEL
+export CONCURRENCY GATE_ROUNDS PLAN_ROUNDS EPIC_FILTER DRY_RUN ISSUE_LABEL
 
 case "${1:-help}" in
     plan)   step_plan ;;
