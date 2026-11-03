@@ -218,8 +218,12 @@ stage_planreview() {
     _ep="$1"; _dir="$(epic_dir "$_ep")"
     _rounds=0
     while [ ! -s "$_dir/plan-approved" ]; do
+        # Budget counts REVISES, not reviews: PLAN_ROUNDS revises allow
+        # PLAN_ROUNDS+1 reviews, so the final revise always gets reviewed.
+        # (Old shape — counting reviews — died one round early, FATALing epics
+        # whose final revise had addressed everything.)
+        [ "$_rounds" -lt "$PLAN_ROUNDS" ] || die "plan review loop exhausted for $_ep"
         _rounds=$((_rounds+1))
-        [ "$_rounds" -le "$PLAN_ROUNDS" ] || die "plan review loop exhausted for $_ep"
         log "plan review ($REVIEW_MODEL, round $_rounds): $_ep"
         # retry invalid child output within the same round budget
         _ok=0
