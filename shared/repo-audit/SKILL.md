@@ -49,6 +49,11 @@ scripts/audit.sh issues     # creates one GH issue per epic (run AFTER human rev
 scripts/audit.sh status     # what is done / missing / failed
 ```
 
+After any crash or Ctrl-C, read **`$STATE/RESUME.md`** (`.audit/RESUME.md`): the
+engine rewrites it after every step with per-artifact done/MISSING rows,
+find/verify counts, and the exact resume command. Re-running `audit.sh all`
+retries only the gaps.
+
 Config: `REPO`, `WORKTREE`, `BASE_REF`, `SCOUT_MODEL`, `FINDER_PROVIDER`, `FINDER_MODEL`,
 `PRO_MODEL`, `AUDIT_LENSES`, `CONCURRENCY`, `FINDINGS_CAP`, `TIMEOUT`, `VERIFY_BATCH`.
 Models default to the mimir family (scout=slim, finder=headroom, verify/roadmap=pro).

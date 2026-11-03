@@ -263,6 +263,11 @@ stage_implement() {
     _ep="$1"; _dir="$(epic_dir "$_ep")"; _wt="$(epic_worktree "$_ep")"
     [ -s "$_dir/implemented" ] && return 0
     _pf="$_dir/impl-prompt.txt"
+    # CRASH RESUME: summary written but crash before commit -> skip the child,
+    # fall through to diff-check + commit on the existing dirty tree.
+    if [ -s "$_dir/impl-summary.md" ]; then
+        log "implement: $_ep resuming from impl-summary (pre-commit crash)"
+    else
     {
         echo "EXPERT PERSONA: You are a senior implementing engineer. Follow the approved plan EXACTLY; deviate only when source proves the plan wrong, and record the deviation."
         echo "$REPO_CTX"
@@ -286,6 +291,7 @@ stage_implement() {
         die "implementer child produced no summary for $_ep — tree reset, no marker"
     fi
     mv "$_dir/impl.tmp" "$_dir/impl-summary.md"
+    fi   # end fresh-implement branch (crash-resume path joins here)
     ( cd "$_wt" && [ -n "$(git status --porcelain)" ] ) || die "implementer produced NO diff for $_ep"
     _title="$(plan_field "$_ep" title | head -c 60)"
     _issue="$(plan_field "$_ep" issue)"
@@ -297,6 +303,14 @@ stage_implement() {
 
 stage_gate() {
     _ep="$1"; _dir="$(epic_dir "$_ep")"; _wt="$(epic_worktree "$_ep")"
+    # CRASH RESUME: revise child edited but died before its commit -> unchecked
+    # edits are invisible to the three-dot range the lenses diff. Commit them as
+    # a checkpoint so gate rounds and lens diffs see the real tree.
+    if ( cd "$_wt" && [ -n "$(git status --porcelain)" ] ) 2>/dev/null; then
+        ( cd "$_wt" && git add -A && git -c commit.gpgsign=false commit -q -m "fix(audit): resume checkpoint (pre-gate)" </dev/null ) \
+          || die "gate: cannot commit dirty resume state for $_ep"
+        log "gate: $_ep committed dirty pre-crash state as checkpoint"
+    fi
     _round=0
     while [ ! -s "$_dir/gate-passed" ]; do
         _round=$((_round+1))
@@ -346,6 +360,14 @@ stage_pr() {
     _issue="$(plan_field "$_ep" issue)"
     if [ "$DRY_RUN" = 1 ]; then log "pr DRY_RUN: would create for $_ep (#$_issue)"; echo "DRY https://example.com/PR/$_ep" >"$_dir/pr-url.dry-run"; return 0; fi
     _branch="$(cat "$_dir/branch")"
+    _url="$( cd "$_wt" && (gh pr list --head "$_branch" --state open --json url --jq '.[0].url // empty' 2>/dev/null) )"
+    if [ -n "$_url" ]; then
+        # CRASH RESUME: PR was created but pr-url never wrote (crash between
+        # gh create and the marker). Reuse the existing PR instead of duping.
+        echo "$_url" >"$_dir/pr-url"
+        log "pr: $_ep adopted existing open PR $_url (resume)"
+        return 0
+    fi
     ( cd "$_wt" && git push -q -u origin "$_branch" ) || die "push failed for $_ep"
     _pr_base="${BASE_REF#origin/}"
     for _d in $(plan_field "$_ep" depends_on 2>/dev/null); do
@@ -366,6 +388,63 @@ stage_pr() {
     esac
 }
 
+write_resume_doc() {
+    # Durable human+machine status doc. Markers are the truth; this is the
+    # navigation aid. Rewritten at run start, after each epic finishes, and
+    # before the process exits, so a crashed run leaves a current map.
+    node - "$STATE" "$FIXROOT" "${EPIC_FILTER:-}" "$BASE_REF" "$SCRIPTS" <<'JS'
+const fs = require("fs");
+const [state, root, filter, baseRef, scriptsDir] = process.argv.slice(2);
+const p = JSON.parse(fs.readFileSync(`${state}/plan.json`, "utf8"));
+const out = [];
+out.push(`# repo-audit-fix run state`);
+out.push(``);
+out.push(`Updated: ${new Date().toISOString()}`);
+out.push(`BASE_REF: ${baseRef}  FIXROOT: ${root}`);
+out.push(``);
+out.push(`Stage order per epic: research -> plan -> plan-review -> implement -> gate -> pr.`);
+out.push(`A stage is DONE only when its marker exists (research.md, plan.md,`);
+out.push(`plan-approved, implemented, gate-passed, pr-url). Mid-flight stages`);
+out.push(`restart on relaunch; every stage is idempotent, half-writes are safe.`);
+out.push(``);
+out.push(`## Epic pipeline state`);
+out.push(``);
+out.push(`| epic | wave | issue | res | plan | appr | impl | gate | pr | failed-at |`);
+out.push(`|---|---|---|---|---|---|---|---|---|---|`);
+for (const e of p.epics) {
+  if (filter && !filter.split(",").includes(e.epic)) continue;
+  const d = `${state}/${e.epic}`;
+  const has = (f) => fs.existsSync(`${d}/${f}`) ? "yes" : "-";
+  const pr = fs.existsSync(`${d}/pr-url`) ? fs.readFileSync(`${d}/pr-url`, "utf8").trim().slice(0, 60) : "-";
+  let failedAt = "-";
+  if (fs.existsSync(`${d}/gate-failed.txt`)) failedAt = "gate (unresolved findings)";
+  else if (has("implemented") === "yes" && has("gate-passed") !== "yes") failedAt = "gate (pending)";
+  else if (fs.existsSync(`${d}/plan-review.json`) && has("plan-approved") !== "yes") {
+    try { failedAt = "plan review (" + JSON.parse(fs.readFileSync(`${d}/plan-review.json`, "utf8")).verdict + ")"; } catch { failedAt = "plan review"; }
+  }
+  out.push(`| ${e.epic} | w${e.wave} | #${e.issue || "-"} | ${has("research.md")} | ${has("plan.md")} | ${has("plan-approved")} | ${has("implemented")} | ${has("gate-passed")} | ${pr} | ${failedAt} |`);
+}
+out.push(``);
+out.push(`## FATAL / blocked epics`);
+out.push(``);
+if (fs.existsSync(`${state}/blocked`) || fs.existsSync(`${state}/failed-epics`)) {
+  for (const f of ["failed-epics", "blocked"]) {
+    if (fs.existsSync(`${state}/${f}`)) {
+      const t = fs.readFileSync(`${state}/${f}`, "utf8").trim();
+      if (t) out.push(`- ${f}: ${t.split("\n").join(", ")}`);
+    }
+  }
+} else out.push(`(none)`);
+out.push(``);
+out.push(`## To resume`);
+out.push(``);
+out.push(`    REPO_DIR=<repo> SCRIPTS=${scriptsDir} AUDIT_STATE=<audit-state> FIXROOT=${root} sh ${scriptsDir}/fix.sh run`);
+out.push(``);
+out.push(`Finished epics skip via their pr-url marker; done stages skip via theirs.`);
+fs.writeFileSync(`${state}/RESUME.md`, out.join("\n") + "\n");
+JS
+}
+
 run_epic() {
     _ep="$1"
     # done-marker is a REAL pr only; a DRY_RUN marker never blocks a real run
@@ -374,16 +453,18 @@ run_epic() {
     if [ -s "$_d/pr-url.dry-run" ] && [ "$DRY_RUN" = 1 ]; then log "$_ep: DRY_PR done — skipping (resume)"; return 0; fi
     rm -f "$_d/pr-url.dry-run"
     ensure_worktree "$_ep"
-    stage_research   "$_ep" || return 1
-    stage_plan       "$_ep" || return 1
-    stage_planreview "$_ep" || return 1
-    stage_implement  "$_ep" || return 1
-    stage_gate       "$_ep" || return 1
+    stage_research   "$_ep" || { write_resume_doc; return 1; }
+    stage_plan       "$_ep" || { write_resume_doc; return 1; }
+    stage_planreview "$_ep" || { write_resume_doc; return 1; }
+    stage_implement  "$_ep" || { write_resume_doc; return 1; }
+    stage_gate       "$_ep" || { write_resume_doc; return 1; }
     stage_pr         "$_ep"
+    write_resume_doc
 }
 
 step_run() {
     step_plan
+    write_resume_doc
     # waves file: "WAVE\t<num>" header lines + "<epic>\t<par|seq>\t<issue>" rows
     node -e '
 const p=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).epics;
@@ -432,6 +513,7 @@ fs.writeFileSync(process.argv[4], out.join("\n")+(out.length?"\n":""));' "${EPIC
             continue
         fi
     done <"$STATE/waves.txt"
+    write_resume_doc
     step_status
 }
 
