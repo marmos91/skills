@@ -15,7 +15,7 @@
 import fs from "node:fs";
 
 const CHUNK_LOC = 18000;
-const LENSES_CODE = ["simplify", "structure", "bugs"];
+const LENSES_CODE = ["simplify", "structure", "bugs", "security", "slop"];
 const EXCLUDE = [
     /^pnpm-lock\.yaml$/,
     /^\.github\//,

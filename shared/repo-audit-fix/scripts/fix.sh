@@ -21,7 +21,7 @@
 # Nothing in-flight is ever read as "done".
 set -eu
 
-REPO="${REPO:-$(basename "$(git rev-parse --show-toplevel 2>/dev/null || echo heimdall)")}"
+REPO="${REPO:-$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")}"
 REPO_DIR="${REPO_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")}"
 AUDIT_STATE="${AUDIT_STATE:-}"   # dir with epics.json + findings.json (audit worktree state)
 FIXROOT="${FIXROOT:-/tmp/audit-fix-$REPO}"
