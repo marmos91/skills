@@ -62,3 +62,14 @@ with date + evidence; strike (~~...~~) when applied and verified.
 - monitor (events/hour, lane count): .pi task "campaign speed monitor"
 - per-stage durations: grep timestamps in campaign log + RESUME.md
 - FAILED GATE / FATAL patterns: campaign log + $STATE/blocked
+
+## Decisions
+
+- 2026-11-03 (v6 wave 1): 5 epics exhausted a genuine 5-revise plan-review
+  budget (ui-a11y-state-feedback, structure-api-domain-layers,
+  bugs-api-write-paths, bugs-web-ux-state, tests-race-and-lease-integrity).
+  Decision: let the campaign finish the other ~34 epics first (zero
+  disruption), then one focused resume pass with PLAN_ROUNDS=8 and
+  EPIC_FILTER=<those five> so the hard plans get a bigger budget without
+  re-running anything else. If those still don't converge at 8, the final
+  plans + last objections go to human review rather than another loop.
