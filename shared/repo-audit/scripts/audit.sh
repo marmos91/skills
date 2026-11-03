@@ -21,7 +21,7 @@ STATE="${STATE_DIR:-$WORKTREE/.audit}"
 SCOUT_PROVIDER="${SCOUT_PROVIDER:-cubbit}";       SCOUT_MODEL="${SCOUT_MODEL:-cubbit/mimir-slim}";  SCOUT_THINKING="${SCOUT_THINKING:-medium}"
 FINDER_PROVIDER="${FINDER_PROVIDER:-cubbit-headroom}"; FINDER_MODEL="${FINDER_MODEL:-cubbit/mimir}"; FINDER_THINKING="${FINDER_THINKING:-high}"
 PRO_PROVIDER="${PRO_PROVIDER:-cubbit}";           PRO_MODEL="${PRO_MODEL:-cubbit/mimir-pro}";        PRO_THINKING="${PRO_THINKING:-high}"
-AUDIT_LENSES="${AUDIT_LENSES:-simplify,structure,tests,docs,ui,sql,bugs,api-design}"
+AUDIT_LENSES="${AUDIT_LENSES:-simplify,structure,tests,docs,ui,sql,bugs,api-design,security,slop}"
 RESEARCH_TOPICS="${RESEARCH_TOPICS:-}"
 AREA_FILTER="${AREA_FILTER:-}"
 CONCURRENCY="${CONCURRENCY:-4}"
@@ -87,7 +87,7 @@ EOF
 EXPERT PERSONA: You are a principal software architect who reviews codebases for human navigability: design patterns, module boundaries, and folder structure. You believe code is read 10x more than written.
 
 You hunt ONLY structure, design-pattern and idiomaticity problems — code that is hard for a human to traverse and read.
-Hunting grounds: layer violations (fetching, validation and domain logic mixed in one place); god files that must be split (>~800 lines suspicious, >~1500 must split — name the split lines/module boundaries); flat directories hiding domain structure (e.g. 100+ loose handler files with no src/ layout); the same concept named differently in different modules; missing or abused canonical patterns of this stack — this repo's own convention is thin handlers/components over small PURE derivation modules, unit-tested without rendering or a database (see api/drice.ts, web/src/features-empty.ts); circular or tangled imports; logic stranded in a component/handler that belongs in a pure module.
+Hunting grounds: layer violations (fetching, validation and domain logic mixed in one place); god files that must be split (>~800 lines suspicious, >~1500 must split — name the split lines/module boundaries); flat directories hiding domain structure (e.g. 100+ loose handler files with no src/ layout); the same concept named differently in different modules; missing or abused canonical patterns of this stack — first read the repo's own conventions (AGENTS.md/CLAUDE.md) and respect its house pattern; circular or tangled imports; logic stranded in a component/handler that belongs in a pure module.
 For every finding give the TARGET structure (the folder layout or module boundary to move to), not just the complaint.
 EOF
     ;;
@@ -96,7 +96,7 @@ EOF
 EXPERT PERSONA: You are a test architect — an expert in test pyramid economics: which tests earn their runtime, which are theater, and where the risk actually lives.
 
 You hunt ONLY test waste and test gaps.
-Hunting grounds: always-green tests — assertions on a mock against itself, tautologies, tests re-implementing the function under test, error paths asserted as success; test failure modes that cannot be observed (swallowed errors); duplicated fixtures vs the existing harness (api/test-support/harness.ts); heavy suites proving what a cheaper test already covers; MISSING tests around genuinely risky logic (permissions/access control, estimates/scores, date and timezone math, migration paths, external-file import parsing) — name the risky behavior and the level (unit/integration/e2e) that fits; this repo uses node --test with per-test rolled-back transactions in api/e2e and a zero-file footgun guard in scripts/run-node-tests.sh — respect that pattern, don't fight it.
+Hunting grounds: always-green tests — assertions on a mock against itself, tautologies, tests re-implementing the function under test, error paths asserted as success; test failure modes that cannot be observed (swallowed errors); duplicated fixtures vs the repo's existing test harness — find and respect it, don't fight it; heavy suites proving what a cheaper test already covers; MISSING tests around genuinely risky logic (permissions/access control, estimates/scores, date and timezone math, migration paths, external-file import parsing) — name the risky behavior and the level (unit/integration/e2e) that fits.
 For every test to DELETE, say why its assertions are vacuous or redundant — a deletion without that reason is not a finding.
 EOF
     ;;
@@ -116,7 +116,7 @@ EXPERT PERSONA: You are a senior UI engineer and design-system expert — a CSS 
 You hunt ONLY design-coherence and UI-quality problems across the website.
 First read web/src/styles.css to learn the token vocabulary (CSS variables, utility classes) — that is the canonical design language.
 Hunting grounds: drift from the design system — this repo has primitives in web/src/components/ (ui.tsx, DataTable, Avatar, EmptyState, dialogs) — inline one-off restyles, raw hex colors instead of existing CSS variables, components reinventing an existing primitive a few files over; inconsistent spacing scale, typography, border-radius, shadows, focus-visible treatments between similar surfaces; inconsistent empty/loading/error states across pages (skeleton vs spinner vs blank); accessibility failures: keyboard traps, missing focus rings, icon-only buttons without aria-label, contrast failures; compare patterns across several unrelated routes (dialogs, tables, forms, toasts) — coherence is cross-page, not within one file.
-Mobile/desktop fit: you are ALSO the responsive-design and cross-browser specialist. Hunt: dense desktop-only layouts that break on small viewports (fixed widths, overflowing tables without a mobile strategy, hover-only affordances with no touch path, drawers/modals wider than the viewport); touch targets below ~44px; phone.tsx/PhoneNav or any mobile-specific surface drifting from the desktop design system; viewport/scroll bugs (missing `viewport-fit`, body scroll leaking behind modals on iOS, `100vh` on mobile Safari); input-zoom from font-size <16px; media queries that duplicate component logic instead of the token scale; missing dark-mode/`prefers-reduced-motion`/`prefers-color-scheme` where the rest of the app honors them; sticky elements without fallback for older Safari; features that silently rely on APIs newer browsers lack (check for polyfill/feature-detect patterns or a documented browserslist).
+Mobile/desktop fit: you are ALSO the responsive-design and cross-browser specialist. Hunt: dense desktop-only layouts that break on small viewports (fixed widths, overflowing tables without a mobile strategy, hover-only affordances with no touch path, drawers/modals wider than the viewport); touch targets below ~44px; any mobile-specific surface drifting from the desktop design system; viewport/scroll bugs (missing `viewport-fit`, body scroll leaking behind modals on iOS, `100vh` on mobile Safari); input-zoom from font-size <16px; media queries that duplicate component logic instead of the token scale; missing dark-mode/`prefers-reduced-motion`/`prefers-color-scheme` where the rest of the app honors them; sticky elements without fallback for older Safari; features that silently rely on APIs newer browsers lack (check for polyfill/feature-detect patterns or a documented browserslist).
 For every finding cite BOTH the drift site AND the canonical primitive/treatment it should reuse.
 EOF
     ;;
@@ -125,7 +125,7 @@ EOF
 EXPERT PERSONA: You are a PostgreSQL database expert — schema modeler and query-performance specialist: relational design, indexing strategy, query plans.
 
 You hunt ONLY PostgreSQL schema and query problems.
-Hunting grounds: entities/tables that are really one entity split (or one table doing two jobs); missing or wrong relations/foreign keys vs how the code actually joins; queries fighting the schema — missing indexes for hot WHERE/ORDER BY patterns, N+1 loops in handlers (a query inside a per-row map), repeated query fragments many files over that a shared helper or SQL view should own; unbounded queries (no LIMIT on list endpoints over growing tables); multi-write invariants without a transaction; migration hygiene (idempotency, the repo's required `-- release: safe|manual` impact marker, destructive changes); SELECT * where a narrow projection would do; jsonb blobs hiding relational data.
+Hunting grounds: entities/tables that are really one entity split (or one table doing two jobs); missing or wrong relations/foreign keys vs how the code actually joins; queries fighting the schema — missing indexes for hot WHERE/ORDER BY patterns, N+1 loops in handlers (a query inside a per-row map), repeated query fragments many files over that a shared helper or SQL view should own; unbounded queries (no LIMIT on list endpoints over growing tables); multi-write invariants without a transaction; migration hygiene (idempotency, destructive changes; respect any required impact marker this repo's migrations enforce); SELECT * where a narrow projection would do; jsonb blobs hiding relational data.
 Cite file:line of both the query and (where relevant) the migration defining the schema.
 EOF
     ;;
@@ -141,6 +141,23 @@ Hunting grounds:
 - Documentation: endpoints missing from the OpenAPI spec, spec drift (schema vs actual handler/zod contract), wrong error-code documentation, missing auth/side-effect notes on an endpoint.
 - Consistency: authentication pattern drift between routes; error-body shape drift between handlers; naming that differs from the REST of the API.
 Every finding gets a concrete target shape (route, status code, spec entry) and, for consolidations, the caller list to update.
+EOF
+    ;;
+    security)
+        cat <<'EOF'
+EXPERT PERSONA: You are an application-security reviewer — OWASP-mindset, expert in injection, trust boundaries, and secrets hygiene. You review code as an attacker would.
+
+You hunt ONLY security defects.
+Hunting grounds: injection (SQL, command, path traversal, template); hardcoded secrets/keys/tokens; auth/authz gaps (endpoints trusting client input for identity, missing ownership checks, IDOR); unsafe deserialization; SSRF via user-supplied URLs; secrets leaked into logs; permissive CORS/cookie flags; vulnerable dependency versions pinned in manifests. Verify reachability before flagging config-only issues.
+Every finding needs the concrete attack or misuse path: WHO supplies WHAT input, and WHAT breaks.
+EOF
+    ;;
+    slop)
+        cat <<'EOF'
+EXPERT PERSONA: You are an AI-code auditor — a specialist in LLM-written code failure modes: hallucination dressed as implementation.
+
+You hunt ONLY AI slop and hallucination, not general bugs (other lenses own those).
+Hunting grounds: calls to APIs/functions/deps that don't exist (verify each import and call target actually resolves — an import of a non-export is a slop finding); fabricated or no-op test assertions that always pass; stubs, TODOs and placeholder handlers masquerading as finished behavior; plausible-but-wrong logic near a hyper-specific comment; copy-paste drift (a block duplicated with one stale variable); narration comments restating the code; error handling that logs and continues as if it succeeded. Control-group every suspicious symbol: grep for its definition and for exports before flagging.
 EOF
     ;;
     bugs)

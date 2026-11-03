@@ -1,14 +1,15 @@
 ---
 name: repo-audit
-description: Whole-repo quality audit — cleanliness/design patterns, structure & folders, over-engineering (ponytail), dead code, duplication, useless tests, docs, UI coherence, MCP/CLI, Postgres entities & queries. Produces a severity-ranked audit report plus an epic roadmap (optionally GH issues). Multi-agent over read-only pi children; fully resumable. Use on "audit this repo", "full codebase review", "build an improvement roadmap".
+description: Whole-repo quality audit — cleanliness/design patterns, structure & folders, over-engineering (ponytail), dead code, duplication, useless tests, docs, UI coherence, security, AI-slop/hallucination, Postgres entities & queries. Produces a severity-ranked audit report plus an epic roadmap (optionally GH issues). Multi-agent over headless read-only `pi -p` children; fully resumable. Use on "audit this repo", "full codebase review", "build an improvement roadmap".
 ---
 
 # Repo Audit (resumable multi-lens)
 
-Runs the audit-ai-codebases *method* (recon → rotate lens per area → adversarial verify → roadmap)
-on an engine that works in this environment: plain `pi -p` read-only children (`read,grep,find,ls`),
-driven by the state machine in `scripts/audit.sh`. Do NOT drive it through pi-subagents workflows —
-that path is broken here (see AGENTS.md "Review gate").
+Runs the multi-lens AI-audit *method* (recon → rotate lens per area → adversarial verify → roadmap)
+through a portable engine: plain headless `pi -p` read-only children (`read,grep,find,ls`),
+driven by the state machine in `scripts/audit.sh`. Works under any harness with `pi` installed
+(pi, Claude Code, ...). Do NOT drive it through pi-subagents workflows — that path is broken
+here (see AGENTS.md "Review gate").
 
 ## Lens catalog (one per concern; add/trim via `AUDIT_LENSES`)
 
@@ -22,8 +23,10 @@ that path is broken here (see AGENTS.md "Review gate").
 | `sql` | Postgres entities, relations, constraints, index-vs-query fit, repeated query fragments, N+1 |
 | `api-design` | RESTful resource modeling, status-code semantics, overlapping/duplicate endpoint consolidation, OpenAPI drift, error-shape and auth consistency |
 | `bugs` | quick correctness pass (contract drift, missing error handling) — feeds the roadmap |
+| `security` | injection, hardcoded secrets, auth/authz gaps, unsafe deserialization, SSRF, dependency vulns |
+| `slop` | AI-slop & hallucinated code: non-existent APIs/imports, no-op test assertions, stubs as done, copy-paste drift |
 
-Each lens is run by a dedicated **expert persona** (lazy-senior/ponytail specialist, principal architect, test economist, docs lead, design-system + responsive CSS expert, Postgres expert, REST authority, staff correctness reviewer). Briefs live in the `expert_brief` case in `scripts/audit.sh`; edit them there to tune a lens.
+Each lens is run by a dedicated **expert persona** (lazy-senior/ponytail specialist, principal architect, test economist, docs lead, design-system + responsive CSS expert, Postgres expert, REST authority, staff correctness reviewer, appsec reviewer, AI-code auditor). Briefs live in the `expert_brief` case in `scripts/audit.sh`; edit them there to tune a lens.
 
 `sql` runs on API/DB areas, `ui` on web areas (the recon scout picks lens×area pairs).
 
@@ -82,6 +85,24 @@ overrides live in env:
 - `epics.json` / roadmap section — epic per concern, each with findings, acceptance criteria, and a
   `parallelizable: true/false` + `depends_on` so work can be sequenced.
 - `issues` step renders one GH issue per epic, body = goal + findings + acceptance + deps.
+
+## Optional: hand the roadmap to a planning system (only when the user asks)
+
+If superpowers or bigpowers is installed, the epics can be driven through its
+planning pipeline instead of the built-in steps. Do NOT do this unprompted —
+the standalone `roadmap`/`issues` steps are the default.
+
+- **superpowers** — per epic: `superpowers:writing-plans` → implementation
+  plan, then `superpowers:executing-plans` / `superpowers:subagent-driven-development`
+  to run it. Good for epics needing brainstormed design first (`superpowers:brainstorming`).
+- **bigpowers** — the full lifecycle: feed each epic through `elaborate-spec` →
+  `scope-work` → `slice-tasks` → `plan-work`, sequence with `plan-release`
+  (WSJF), execute with `execute-plan`/`build-epic`. Epics land as
+  `specs/epics/eNN-<slug>/` capsules; issues then come from `change-request`.
+
+Either way, `epics.json` remains the source of truth: reconcile the planning
+system's own artifacts against it (title match, findings covered) before
+execution, and never drop a verified finding in the translation.
 
 ## Iterate
 

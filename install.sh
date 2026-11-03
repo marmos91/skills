@@ -45,8 +45,16 @@ if [ "${1:-}" = "--rm" ]; then
     exit 0
 fi
 
+install_group() { # install_group <src-root> <dest-dir>
+    local src="$1" dest="$2"
+    [ -d "$src" ] || return 0
+    mkdir -p "$dest"
+    for d in "$src"/*/; do link "${d%/}" "$dest"; done
+}
+
 echo "Installing skills into:"
-[ -d "$REPO/pi" ] && { echo "  pi: $PI_DIR"; mkdir -p "$PI_DIR"; for d in "$REPO"/pi/*/; do link "${d%/}" "$PI_DIR"; done; }
-[ -d "$REPO/claude" ] && { echo "  claude: $CLAUDE_DIR"; mkdir -p "$CLAUDE_DIR"; for d in "$REPO"/claude/*/; do link "${d%/}" "$CLAUDE_DIR"; done; }
+echo "  pi: $PI_DIR";      install_group "$REPO/pi" "$PI_DIR"
+echo "  claude: $CLAUDE_DIR"; install_group "$REPO/claude" "$CLAUDE_DIR"
+echo "  shared -> both";     install_group "$REPO/shared" "$PI_DIR"; install_group "$REPO/shared" "$CLAUDE_DIR"
 
 echo "Done. (Uninstall: ./install.sh --rm)"

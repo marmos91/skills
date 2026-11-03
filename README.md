@@ -28,16 +28,16 @@ by directory; the description drives automatic routing.
 
 | Skill | Agent | Purpose |
 |---|---|---|
-| repo-audit | pi | Multi-lens, multi-agent repo quality audit → findings → epics → GH issues; resumable, adversarially verified |
-| repo-audit-fix | pi | Executes audit epics: research → architect plan → plan review → implement → 3-lens gate → PR per epic; wave-parallel worktrees, resumable |
-| graphify | pi | Codebase → knowledge graph; query/path/explain |
-| audit-ai-codebases / auditing-ai-codebases | pi / claude | Deep multi-pass audit of AI-written repos (tracker: report.md + findings) |
+| repo-audit | both | Multi-lens whole-repo quality audit: cleanliness/design patterns, structure, over-engineering, dead code, tests, docs, UI coherence, security, AI-slop/hallucination, Postgres, API design, correctness. Adversarially-verified findings → epic roadmap → optional GH issues. Portable engine: headless `pi -p` children, resumable |
+| repo-audit-fix | both | Executes audit epics: research → architect plan → plan review → implement → 3-lens gate → PR per epic; wave-parallel worktrees, resumable |
 | refute-root-cause | pi | Adversarial panel that tries to kill a claimed root cause before you fix on it |
-| fixing-audit-findings | claude | Workflow-based remediation of an audit report |
-| humanizer | claude | Detect/rewrite AI tells in prose |
 
-(repo-audit + repo-audit-fix supersede audit-ai-codebases/fixing-audit-findings
-on pi, but the older pair is kept for Claude until the engines are ported.)
+(graphify and humanizer were removed from this repo — they exist upstream:
+`graphify install --platform pi|claude` from [Graphify-Labs/graphify](https://github.com/Graphify-Labs/graphify),
+and [/plugin install humanizer@humanizer](https://github.com/blader/humanizer) for Claude Code.)
+
+`shared/` engines are harness-agnostic: they drive headless `pi -p` children, so they
+run under pi, Claude Code, or any agent with the `pi` CLI available.
 
 ## Conventions
 

@@ -1,6 +1,6 @@
 ---
 name: repo-audit-fix
-description: Use after repo-audit produced findings/epics and the user wants them FIXED. Triggers on "fix the findings", "implement the audit issues", "remediate the epics", "work through the roadmap". For each epic: research → architect plan → plan review → implement → 3-lens gate → PR. Fans out waves in parallel, runs dependencies sequentially, fully resumable.
+description: 'Use after repo-audit produced findings/epics and the user wants them FIXED. Triggers on "fix the findings", "implement the audit issues", "remediate the epics", "work through the roadmap". For each epic: research → architect plan → plan review → implement → 3-lens gate → PR. Fans out waves in parallel, runs dependencies sequentially, fully resumable.'
 ---
 
 # repo-audit-fix
