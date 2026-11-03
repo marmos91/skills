@@ -199,8 +199,9 @@ review_plan_once() {
         echo "$REPO_CTX"
         echo "Inputs: $_dir/epic.json (spec); $_dir/research.md (ground truth); $_dir/plan.md (plan under review). Work read-only in the repo at your cwd."
         echo "Check: does the plan fix EVERY confirmed finding (a silently dropped finding is a defect)? Is each fix actually correct given the source the scout read? Is the design minimal (no speculative abstraction, reuses existing helpers, right layer)? Are the chosen tests only the non-obvious ones? Do the steps keep the tree green?"
-        echo "Reply with ONLY this JSON object, no fences: {\"verdict\":\"approved\"|\"revise\",\"comments\":[\"one per issue: finding/file, what is wrong with the plan, what to change\"]}"
-        echo "If the plan is sound, approve — do not invent issues. Every revise comment must be actionable."
+        echo "Reply with ONLY this JSON object, no fences: {\"verdict\":\"approved\"|\"revise\"|\"revise_minor\",\"blocking\":[\"...\"],\"nits\":[\"...\"]}"
+        echo "Verdict rules: 'approved' = ready to implement, zero blocking defects. 'revise' = a blocking defect exists (wrong fact about the repo, dropped finding, design that fails a check above) — list ONLY blocking defects, not style. 'revise_minor' = no blocking defect, only small improvements — implementer will be told the nits; DO NOT block convergence on them. If you approved an aspect in a previous round, do not re-open it unless a later round broke it."
+        echo "If the plan is sound, approve — do not invent issues. Every blocking comment must be actionable and cite the repo fact it corrects."
         echo "HARD BOUND: read the three files + at most ~10 source files, reply, stop."
     } >"$_pf"
     run_read "$REVIEW_PROVIDER" "$REVIEW_MODEL" "$REVIEW_THINKING" "$_pf" "$_dir/plan-review.tmp" "$(epic_worktree "$_ep")"
@@ -208,7 +209,8 @@ review_plan_once() {
 const fs=require("fs");
 let t=fs.readFileSync(process.argv[1],"utf8").trim();
 try { t = JSON.parse(t); } catch { t = null; }
-if (!t || (t.verdict !== "approved" && t.verdict !== "revise") || !Array.isArray(t.comments)) process.exit(1);
+const okV = ["approved","revise","revise_minor"];
+if (!t || !okV.includes(t.verdict) || !Array.isArray(t.blocking) || !Array.isArray(t.nits)) process.exit(1);
 fs.writeFileSync(process.argv[1], JSON.stringify(t));' "$_dir/plan-review.tmp"
 }
 
@@ -235,13 +237,20 @@ stage_planreview() {
             echo ok >"$_dir/plan-approved"
             break
         fi
+        if [ "$_verdict" = "revise_minor" ]; then
+            # no blocking defect: accept, hand nits to the implementer
+            mv "$_dir/plan-review.tmp" "$_dir/plan-review.json"
+            echo ok >"$_dir/plan-approved"
+            log "plan review: $_ep accepted with minor nits — passed to implementer"
+            break
+        fi
         mv "$_dir/plan-review.tmp" "$_dir/plan-review.json"
         {
             cat "$_dir/plan-prompt.txt"
             echo ""
-            echo "REVISION: the plan reviewer rejected the previous plan. Their comments:"
+            echo "REVISION: the plan reviewer rejected the current plan with BLOCKING comments (their nits are advisory, ignore them here):"
             cat "$_dir/plan-review.json"
-            echo "Write the FULL corrected plan (same format), addressing every comment. Reply with the complete new plan only."
+            echo "Surgical edit rules: produce the FULL plan, but change ONLY what the blocking comments require — every other section must be copied through verbatim, character for character. Do not rewrite, reformat, or 'improve' untouched sections; a pristine carry-over is strictly better than a fresh paraphrase. Address every blocking comment. Reply with the complete new plan only."
         } >"$_dir/plan-prompt-r$_rounds.txt"
         run_read "$PLAN_PROVIDER" "$PLAN_MODEL" "$PLAN_THINKING" "$_dir/plan-prompt-r$_rounds.txt" "$_dir/plan.tmp" "$(epic_worktree "$_ep")"
         [ -s "$_dir/plan.tmp" ] || die "plan revision child empty for $_ep"
@@ -258,6 +267,10 @@ stage_implement() {
         echo "EXPERT PERSONA: You are a senior implementing engineer. Follow the approved plan EXACTLY; deviate only when source proves the plan wrong, and record the deviation."
         echo "$REPO_CTX"
         echo "Inputs: $_dir/plan.md (approved implementation plan — follow it); $_dir/epic.json (spec); $_dir/research.md (ground truth)."
+        if [ -s "$_dir/plan-review.json" ]; then
+            _nits="$(node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); process.stdout.write((r.nits||[]).join("\n"))' "$_dir/plan-review.json" 2>/dev/null)"
+            if [ -n "$_nits" ]; then printf 'Advisory nits from plan review (address if cheap, never at the cost of plan fidelity):\n%s\n' "$_nits"; fi
+        fi
         echo "You work in a dedicated git worktree at your cwd. Other agents work in OTHER worktrees: NEVER run git worktree add/remove/prune, gc, rebase, or anything outside your cwd. NEVER commit or push — leave the tree dirty; the orchestrator commits. Do not use git stash."
         echo "Implement every plan step. House rules: minimal complete diff, no speculative flexibility, reuse existing helpers, follow the repo code style (read AGENTS.md); run the repo formatter on files you touched."
         echo "Tests: add ONLY the tests the plan names (non-trivial logic). Do not test the obvious; do not add tests for deletes/moves."
