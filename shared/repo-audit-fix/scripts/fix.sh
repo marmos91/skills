@@ -526,7 +526,10 @@ fs.writeFileSync(process.argv[4], out.join("\n")+(out.length?"\n":""));' "${EPIC
                     [ "$_freed" = "1" ] || sleep 10
                     _pn=$(wc -l <"$STATE/tmp/running.pids" | tr -d ' ')
                 done
-                { run_epic "$_ep" || echo "$_ep" >>"$STATE/failed-epics"; } &
+                # </dev/null: backgrounded children must NOT inherit the
+                # wave-epics.txt fd as stdin — any child reading stdin advances
+                # the shared offset and the dispatcher skips the remaining epics.
+                { run_epic "$_ep" || echo "$_ep" >>"$STATE/failed-epics"; } </dev/null &
                 echo "$!" >>"$STATE/tmp/running.pids"
                 _pn=$((_pn+1))
                 _gin=$((_gin+1))

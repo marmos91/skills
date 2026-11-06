@@ -73,3 +73,9 @@ with date + evidence; strike (~~...~~) when applied and verified.
   EPIC_FILTER=<those five> so the hard plans get a bigger budget without
   re-running anything else. If those still don't converge at 8, the final
   plans + last objections go to human review rather than another loop.
+
+- 2026-11-04 (v8 end): ledger item 6 TRIGGERED — adversarial lens exit 124
+  (timeout) on 6 gate-blocked epics (diffs up to 2,197 lines). Gate retries
+  run with REVIEW_TIMEOUT=1500. Monitor curve: overnight tail slower
+  (approved 14->22 over 10h, PRs 7->11); convoy fix verified children=5-7
+  during peak.
