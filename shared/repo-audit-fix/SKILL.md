@@ -20,7 +20,7 @@ plan review (mimir)                → adversarial gate on the plan; revise loop
 implement (mimir, full tools)      → code in an isolated epic worktree; runs the plan's verification commands
         ↓
 3-lens gate (review-lens.sh)       → adversarial + correctness + simplification vs BASE_REF
-        ↓ (fail → revise rounds, max GATE_ROUNDS, then BLOCKED)
+        ↓ (BLOCKING → revise, max GATE_ROUNDS, then PARKED; NIT-only = pass)
 PR per epic (gh, Fixes #N)         → never auto-merged; the user merges
 ```
 
@@ -38,8 +38,8 @@ its own git worktree** so two agents never touch the same checkout.
   invisible and re-triggers the stage — write `echo ok > marker`, never
   `: > marker`.)`
 - **Every stage resumable at every intra-step crash point.** The durable map
-  is `$FIXROOT/.fix/RESUME.md`, rewritten at run start, after each epic, and
-  at run end: per-epic stage markers, last review verdicts, FATAL/blocked
+  is `$FIXROOT/.fix/RESUME.md`, rewritten at run start, on every stage
+  transition and gate round, on `status`, and at run end: per-epic stage markers, last review verdicts, FATAL/blocked
   list, and the exact resume command. After a crash, read it first. Specific
   crash windows that are actively healed on relaunch: implementer summary
   written but commit missing → falls through to diff-check+commit (never
@@ -48,8 +48,20 @@ its own git worktree** so two agents never touch the same checkout.
   ranges, so uncommitted edits would be invisible and the gate would loop
   on stale findings); PR created but pr-url unwritten → the open PR on the
   epic branch is adopted instead of duplicated.
-- A lens that returns no findings says so; a failed/timeout lens is a FAILED
-  GATE — same contract as `scripts/review-lens.sh`.
+- **Two-tier gate.** Lenses tag findings `- BLOCKING ...` or `- NIT ...`; the
+  gate passes on zero BLOCKING findings. NITs never trigger a revise round —
+  they go into the PR body (`gate-nits.md`). The simplification lens reports
+  only dead code or a real bug as BLOCKING; taste is NIT. A failed/timeout
+  lens is a FAILED GATE.
+- **Rounds >= 2 review the delta.** After each round the gated HEAD is stored
+  in `gate-sha`; the next round passes each lens `LENS_PRIOR` (its previous
+  BLOCKING findings) and `LENS_DELTA` (`<gate-sha>..<branch>`), so it first
+  verifies the prior findings, then raises new BLOCKING ones only inside the
+  delta — no fresh full-diff hunt every round.
+- **Round count is on disk** (`revise-r*.md` count + 1), so restarts never
+  reset the budget. When it is spent the epic is **parked**: open findings go
+  to `<epic>/blocked.md`, the lane frees, re-runs stay parked without
+  re-gating. Raise `GATE_ROUNDS` to give it more rounds.
 - Implementers never commit/push; the orchestrator commits after verifying a
   real diff exists (empty diff = FATAL).
 - PRs are opened, never merged. The user merges.
@@ -70,11 +82,11 @@ its own git worktree** so two agents never touch the same checkout.
 | `REVIEW_MODEL` | `cubbit/mimir` | plan review + 3-lens gate |
 | `IMPL_MODEL` | `cubbit-headroom/mimir` | implement + revise (full tools) |
 | `CONCURRENCY` | 3 | parallel epics per wave |
-| `GATE_ROUNDS` | 2 | max revise rounds after failed gates |
+| `GATE_ROUNDS` | 2 | max revise rounds after failed gates (counted from disk), then park |
 | `EPIC_FILTER` | — | comma list of epics (testing/partial runs) |
 | `DRY_RUN` | 0 | 1 = skip actual `gh pr create` |
 | `REPO_CTX` | generic | one-line project context for every child |
-| `LENS` | `$REPO_DIR/scripts/review-lens.sh` | the 3-lens gate script (lens, range args; exit 0 = pass). REQUIRED: set `LENS` if the repo has no such script — the engine dies rather than fakes a passed review |
+| `LENS` | `$REPO_DIR/scripts/review-lens.sh` | the 3-lens gate script — see *Lens contract*. REQUIRED: set `LENS` if the repo has no such script (e.g. `LENS=<skill>/scripts/review-lens.sh`, the shipped template) — the engine dies rather than fakes a passed review |
 
 ## Commands
 
@@ -92,8 +104,29 @@ AUDIT_STATE=/path/to/audit/.audit \
   sh .agents/skills/repo-audit-fix/scripts/fix.sh run
 ```
 
+## Lens contract
+
+`$LENS <lens> <range>` with lens in `adversarial|correctness|simplification`
+and range `BASE_REF...branch`; runs from `REPO_DIR` with `REVIEW_PROVIDER`,
+`REVIEW_MODEL`, `REVIEW_THINKING` set.
+
+- Exit 0 = pass (zero BLOCKING findings — **NIT-only output must exit 0**);
+  non-zero = fail.
+- stdout: findings as bullets `- BLOCKING file:line — problem — fix` /
+  `- NIT ...` (continuation lines until the next bullet or blank line are
+  kept). BLOCKING bullets feed the revise round and `blocked.md`; NIT
+  bullets feed the PR body. Untagged output from a failing lens is passed to
+  the revise round raw (legacy lenses keep working, they just converge slower).
+- Optional env on rounds >= 2: `LENS_PRIOR` (file, this lens's previous
+  BLOCKING findings) and `LENS_DELTA` (git range since the last gated sha).
+  Ignoring them is compatible.
+
+`scripts/review-lens.sh` is the reference implementation.
+
 ## Design notes (why, so you don't undo it)
 
+- **Small epics skip research:** <= 3 findings → `research.md` is a stub and
+  the architect verifies the findings itself (saves a lane-slot + ~2 min).
 - **Test minimalism:** the research stage classifies each finding as
   logic-changed (needs a test) vs mechanical (delete/move → no test). The
   architect names ONLY non-obvious tests; the implementer adds only the
@@ -122,7 +155,8 @@ AUDIT_STATE=/path/to/audit/.audit \
 The engine was validated end-to-end before first real use, with a mock `pi`
 on PATH dispatching by prompt persona: full pipeline, exact resume (all
 markers honored), plan-review revise loop, gate-fail → revise rounds →
-BLOCKED after GATE_ROUNDS (no PR), crash-residue worktree recovery, and
+PARKED after GATE_ROUNDS (no PR; restart stays parked, raised budget resumes
+at the on-disk round), NIT-only lens output passes with nits collected, crash-residue worktree recovery, and
 wave-batch parallelism. Re-validate after changes with the same technique:
 `EPIC_FILTER=<one small epic> DRY_RUN=1 LENS=<stub>` is cheap and asserts
 the state machine, not the models.
