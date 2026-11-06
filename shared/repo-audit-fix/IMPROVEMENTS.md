@@ -20,6 +20,33 @@ with date + evidence; strike (~~...~~) when applied and verified.
 - 2026-11-03 — CONCURRENCY 3 -> 5 (v5).
 - 2026-11-03 — RESUME.md durable status doc + every-crash-point resume
   healing (#3).
+- 2026-11-06 — Code gate never converged (dotfiles run: 16 epics, ~4h,
+  ZERO gate passes; slop-install-stow-truth FAILed all 3 lenses after 4
+  revise rounds). Fixes, all verified with a mock `pi` (converge, park,
+  restart, budget raise):
+  - Two-tier gate verdicts: lenses tag `BLOCKING` vs `NIT`, pass = zero
+    BLOCKING; NIT-only exits 0; NITs go to the PR body, never a revise round.
+    Simplification lens: BLOCKING only for dead code / real bug. Evidence:
+    gate-simplification.txt raised 3-7 fresh taste nits per round (e.g.
+    "comment leaks audit jargon"), so the binary gate could never pass.
+    Shipped `scripts/review-lens.sh` template + SKILL.md lens contract.
+  - Rounds >= 2 review the delta: `gate-sha` marker; lenses get
+    `LENS_PRIOR` (their prior BLOCKING findings) + `LENS_DELTA`
+    (`<gate-sha>..branch`), verify the prior ones, raise new BLOCKING only
+    inside the delta. Evidence: each round re-reviewed the full diff and
+    found new things instead of checking fixes. Revise prompt now carries
+    BLOCKING findings only.
+  - Gate round derived from `revise-r*.md` on disk. Evidence: a
+    crash/restart reset the in-memory counter to 0, granting extra rounds.
+    A failed revise child no longer silently consumes a round.
+  - RESUME.md rewritten on every stage transition, every failed gate round,
+    and on `status` (atomic tmp+rename, epics write it concurrently).
+    Evidence: RESUME.md stale 2+h while the run was live.
+  - Park instead of hold: budget spent → `<epic>/blocked.md` with open
+    BLOCKING findings, lane freed, not counted as failed; re-runs stay
+    parked without re-gating. Evidence: 7 wave-1 epics never started in 4h
+    because 6 lane slots were held by non-converging gate loops.
+  - Epics with <= 3 findings skip research (architect verifies itself).
 
 ## Open opportunities (candidates, with trigger conditions)
 

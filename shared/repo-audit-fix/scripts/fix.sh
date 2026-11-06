@@ -50,7 +50,7 @@ LIB="$SCRIPTS/lib"
 # neither, the engine dies loudly rather than faking a passed review.
 LENS="${LENS:-}"
 [ -n "$LENS" ] || LENS="$REPO_DIR/scripts/review-lens.sh"
-[ -e "$LENS" ] || { printf 'fix: FATAL: no review gate at %s — set LENS=<script with review-lens.sh semantics: lens, range args; exit 0 = pass, non-zero = fail)\n' "$LENS" >&2; exit 1; }
+[ -e "$LENS" ] || { printf 'fix: FATAL: no review gate at %s — set LENS=<script with review-lens.sh semantics: lens, range args; exit 0 = pass, non-zero = fail), e.g. LENS=%s/review-lens.sh (shipped template)\n' "$LENS" "$SCRIPTS" >&2; exit 1; }
 
 # timeout probe (coreutils vs gtimeout; may be absent on macOS)
 TIMEOUT_BIN=""
@@ -150,6 +150,14 @@ stage_research() {
 const fs=require("fs");
 const p=JSON.parse(fs.readFileSync(process.argv[1],"utf8")).epics.find(e=>e.epic===process.argv[2]);
 console.log(JSON.stringify(p,null,2));' "$STATE/plan.json" "$_ep" >"$_dir/epic.json"
+    # ponytail: small epics skip the scout (~2 min + a lane); the architect reads
+    # the few files itself. Threshold 3 is a guess — raise if plans get sloppy.
+    _nf="$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).findings.length)' "$_dir/epic.json")"
+    if [ "$_nf" -le 3 ]; then
+        echo "Research skipped: small epic ($_nf findings). Architect: confirm each finding in epic.json against source yourself, mark wrong ones SKIP, and classify logic (needs a test) vs mechanical (no test)." >"$_dir/research.md"
+        log "research skipped ($_nf findings): $_ep"
+        return 0
+    fi
     _pf="$_dir/research-prompt.txt"
     {
         echo "EXPERT PERSONA: You are a quick, surgical code scout. You research EXACTLY what a fix needs before anyone writes it — nothing more."
@@ -303,11 +311,41 @@ stage_implement() {
     ( cd "$_wt" && git add -A \
       && git -c commit.gpgsign=false commit -q \
          -m "fix(audit): $_title" ${_issue:+-m "Fixes #$_issue"} </dev/null ) || die "commit failed for $_ep"
+    rm -f "$_dir/gate-sha"   # fresh implementation: first gate round reviews the full diff
     echo ok >"$_dir/implemented"
+}
+
+# findings_of <BLOCKING|NIT> <lens-output>: each tagged bullet plus its
+# continuation lines (up to the next bullet or a blank line)
+findings_of() {
+    awk -v tag="$1" '
+      /^[[:space:]]*[-*][[:space:]]/ { on = ($0 ~ ("^[[:space:]]*[-*][[:space:]]*[*]*" tag)) }
+      /^[[:space:]]*$/ { on = 0 }
+      on' "$2" 2>/dev/null || true
+}
+
+GATE_LENSES="adversarial correctness simplification"
+
+# park_epic <epic>: gate budget spent. Record the open BLOCKING findings and
+# free the lane — a non-converging epic must not starve the queue.
+park_epic() {
+    _pd="$(epic_dir "$1")"
+    {
+        echo "# $1 parked: gate still failing after $GATE_ROUNDS revise rounds"
+        echo "Fix by hand, or raise GATE_ROUNDS and re-run. Open BLOCKING findings:"
+        for _lens in $GATE_LENSES; do
+            echo ""; echo "## $_lens"
+            _b="$(findings_of BLOCKING "$_pd/gate-$_lens.txt")"
+            if [ -n "$_b" ]; then echo "$_b"; else sed -n '1,40p' "$_pd/gate-$_lens.txt" 2>/dev/null || true; fi
+        done
+    } >"$_pd/blocked.md"
+    grep -qx "$1" "$STATE/blocked" 2>/dev/null || echo "$1" >>"$STATE/blocked"
+    log "gate: $1 PARKED after $GATE_ROUNDS revise rounds — see $_pd/blocked.md"
 }
 
 stage_gate() {
     _ep="$1"; _dir="$(epic_dir "$_ep")"; _wt="$(epic_worktree "$_ep")"
+    [ -s "$_dir/gate-passed" ] && return 0
     # CRASH RESUME: revise child edited but died before its commit -> unchecked
     # edits are invisible to the three-dot range the lenses diff. Commit them as
     # a checkpoint so gate rounds and lens diffs see the real tree.
@@ -316,50 +354,78 @@ stage_gate() {
           || die "gate: cannot commit dirty resume state for $_ep"
         log "gate: $_ep committed dirty pre-crash state as checkpoint"
     fi
-    _round=0
+    _branch="$(cat "$_dir/branch")"
     while [ ! -s "$_dir/gate-passed" ]; do
-        _round=$((_round+1))
-        [ "$_round" -le "$((GATE_ROUNDS+1))" ] || { log "gate: $_ep BLOCKED after $GATE_ROUNDS revise rounds"; echo "$_ep" >>"$STATE/blocked"; return 1; }
+        # round = revise rounds on disk + 1, so a restart never resets the budget
+        set -- "$_dir"/revise-r*.md
+        [ -e "$1" ] || set --
+        _round=$(($# + 1))
+        # parked on an earlier run with the same budget: don't re-gate, stay parked
+        if [ "$_round" -gt "$((GATE_ROUNDS+1))" ] || { [ -s "$_dir/blocked.md" ] && [ "$_round" -gt "$GATE_ROUNDS" ]; }; then
+            park_epic "$_ep"; return 0
+        fi
+        rm -f "$_dir/blocked.md" "$_dir/gate-failed.txt"
         log "gate round $_round/$((GATE_ROUNDS+1)): $_ep"
-        _branch="$(cat "$_dir/branch")"
-        _fail=0
-        # lenses in parallel: 3 sequential 900s reviews become one ~900s round
-        for _lens in adversarial correctness simplification; do
+        _head="$(cd "$_wt" && git rev-parse HEAD)"
+        # rounds >= 2: lenses verify their prior BLOCKING findings and review
+        # only the delta since the last gated sha, instead of the full diff
+        _delta=""
+        [ -s "$_dir/gate-sha" ] && _delta="$(cat "$_dir/gate-sha")..$_branch"
+        for _lens in $GATE_LENSES; do
+            if [ -n "$_delta" ]; then findings_of BLOCKING "$_dir/gate-$_lens.txt" >"$_dir/gate-$_lens.prior"; else : >"$_dir/gate-$_lens.prior"; fi
+            # lenses in parallel: 3 sequential 900s reviews become one ~900s round
             (
               if ( cd "$REPO_DIR" && REVIEW_PROVIDER="$REVIEW_PROVIDER" REVIEW_MODEL="$REVIEW_MODEL" REVIEW_THINKING="$REVIEW_THINKING" \
+                   LENS_PRIOR="$_dir/gate-$_lens.prior" LENS_DELTA="$_delta" \
                    sh "$LENS" "$_lens" "$BASE_REF...$_branch" ) \
-                 >"$_dir/gate-$_lens.txt" 2>&1; then
+                 >"$_dir/gate-$_lens.tmp" 2>&1; then
                 :
               else
                 echo "round $_round lens $_lens exit $?" >>"$_dir/gate-failed.txt"
               fi
+              mv "$_dir/gate-$_lens.tmp" "$_dir/gate-$_lens.txt"
             ) &
             echo "$!" >>"$_dir/gate-lens.pids"
         done
-        # shellcheck disable=SC2154
+        # shellcheck disable=SC2046
         wait $(tr '\n' ' ' <"$_dir/gate-lens.pids") 2>/dev/null; rm -f "$_dir/gate-lens.pids"
-        [ -s "$_dir/gate-failed.txt" ] && _fail=1
-        [ "$_fail" = 0 ] && { echo ok >"$_dir/gate-passed"; rm -f "$_dir/gate-failed.txt"; break; }
-        [ "$_round" -le "$GATE_ROUNDS" ] || break
+        echo "$_head" >"$_dir/gate-sha"
+        if [ ! -s "$_dir/gate-failed.txt" ]; then
+            # zero BLOCKING findings: NITs ride along in the PR body, no revise
+            for _lens in $GATE_LENSES; do
+                _n="$(findings_of NIT "$_dir/gate-$_lens.txt")"
+                [ -z "$_n" ] || printf '### %s\n\n%s\n\n' "$_lens" "$_n"
+            done >"$_dir/gate-nits.md"
+            echo ok >"$_dir/gate-passed"
+            break
+        fi
+        write_resume_doc
+        [ "$_round" -le "$GATE_ROUNDS" ] || { park_epic "$_ep"; return 0; }
         log "revise ($IMPL_MODEL): $_ep (gate findings)"
         {
             echo "EXPERT PERSONA: You are the implementing engineer fixing review findings on your own change."
-            echo "$REPO_CTX Your worktree is your cwd, branch $(cat "$_dir/branch"). NEVER commit/push/stash; the orchestrator commits. Fix only what the reviews found; do not expand scope."
-            echo "Your change (diff vs $BASE_REF) failed the three-lens review gate. The lens reports:"
-            for _lens in adversarial correctness simplification; do
+            echo "$REPO_CTX Your worktree is your cwd, branch $_branch. NEVER commit/push/stash; the orchestrator commits. Fix only what the reviews found; do not expand scope."
+            echo "Your change (diff vs $BASE_REF) failed the three-lens review gate. The BLOCKING findings of the failing lenses:"
+            for _lens in $GATE_LENSES; do
+                grep -q " lens $_lens exit" "$_dir/gate-failed.txt" || continue
                 echo "--- lens: $_lens ---"
-                sed -n '1,80p' "$_dir/gate-$_lens.txt"
+                _b="$(findings_of BLOCKING "$_dir/gate-$_lens.txt")"
+                # untagged (legacy) lens output: hand over the raw report
+                if [ -n "$_b" ]; then echo "$_b"; else sed -n '1,80p' "$_dir/gate-$_lens.txt"; fi
                 echo ""
             done
-            echo "Fix every real finding. A lens finding may be wrong: if source proves one wrong, record the refutation instead of 'fixing' it. Keep the diff minimal."
+            echo "NIT findings are deliberately left out (they go to the PR body) — do not act on them."
+            echo "Fix every real finding. A lens finding may be wrong: if source proves one wrong, record the refutation in a short code comment or your reply instead of 'fixing' it. Keep the diff minimal."
             echo "Re-run the plan's touched-package checks until green. Then reply with what you changed per finding (or why refuted) and stop."
         } >"$_dir/revise-prompt-r$_round.txt"
-        run_code "$IMPL_PROVIDER" "$IMPL_MODEL" "$IMPL_THINKING" "$_dir/revise-prompt-r$_round.txt" "$_dir/revise-r$_round.md" "$_wt"
+        # a failed revise child must not consume a round (no revise-r file) nor loop
+        run_code "$IMPL_PROVIDER" "$IMPL_MODEL" "$IMPL_THINKING" "$_dir/revise-prompt-r$_round.txt" "$_dir/revise-r$_round.md" "$_wt" \
+          || { log "revise child failed for $_ep (round $_round) — retry on next run"; return 1; }
         if ( cd "$_wt" && [ -n "$(git status --porcelain)" ] ); then
             ( cd "$_wt" && git add -A && git -c commit.gpgsign=false commit -q -m "fix(audit): review revisions round $_round" </dev/null )
         fi
-        rm -f "$_dir/gate-failed.txt"
     done
+    rm -f "$_dir/blocked.md"
 }
 
 stage_pr() {
@@ -391,6 +457,9 @@ stage_pr() {
     if [ -n "$_issue" ]; then
         _body="$(printf '%s\nFixes #%s\n' "$_body" "$_issue")"
     fi
+    if [ -s "$_dir/gate-nits.md" ]; then
+        _body="$(printf '%s\n## Review nits (non-blocking)\n\n%s\n' "$_body" "$(cat "$_dir/gate-nits.md")")"
+    fi
     _body="$(printf '%s\n## Process\n\nResearch -> code-architect plan (adversarial plan review) -> implementation in an isolated worktree -> three-lens review gate (adversarial, correctness, simplification) against %s with revise rounds.\n' "$_body" "$BASE_REF")"
     _url="$( cd "$_wt" && gh pr create --base "$_pr_base" --title "$_title" --body "$_body" 2>&1 | tail -1 )"
     case "$_url" in
@@ -401,8 +470,9 @@ stage_pr() {
 
 write_resume_doc() {
     # Durable human+machine status doc. Markers are the truth; this is the
-    # navigation aid. Rewritten at run start, after each epic finishes, and
-    # before the process exits, so a crashed run leaves a current map.
+    # navigation aid. Rewritten at run start, on every stage transition and gate
+    # round, on `status`, and at run end. Parallel epics call this concurrently:
+    # write-to-tmp + rename keeps the file whole.
     node - "$STATE" "$FIXROOT" "${EPIC_FILTER:-}" "$BASE_REF" "$SCRIPTS" <<'JS'
 const fs = require("fs");
 const [state, root, filter, baseRef, scriptsDir] = process.argv.slice(2);
@@ -428,8 +498,10 @@ for (const e of p.epics) {
   const has = (f) => fs.existsSync(`${d}/${f}`) ? "yes" : "-";
   const pr = fs.existsSync(`${d}/pr-url`) ? fs.readFileSync(`${d}/pr-url`, "utf8").trim().slice(0, 60) : "-";
   let failedAt = "-";
-  if (fs.existsSync(`${d}/gate-failed.txt`)) failedAt = "gate (unresolved findings)";
-  else if (has("implemented") === "yes" && has("gate-passed") !== "yes") failedAt = "gate (pending)";
+  const revs = fs.existsSync(d) ? fs.readdirSync(d).filter((f) => /^revise-r\d+\.md$/.test(f)).length : 0;
+  if (fs.existsSync(`${d}/blocked.md`)) failedAt = `parked (gate, ${revs} revises; see blocked.md)`;
+  else if (fs.existsSync(`${d}/gate-failed.txt`)) failedAt = `gate round ${revs + 1} (blocking findings)`;
+  else if (has("implemented") === "yes" && has("gate-passed") !== "yes") failedAt = `gate round ${revs + 1} (pending)`;
   else if (fs.existsSync(`${d}/plan-review.json`) && has("plan-approved") !== "yes") {
     try { failedAt = "plan review (" + JSON.parse(fs.readFileSync(`${d}/plan-review.json`, "utf8")).verdict + ")"; } catch { failedAt = "plan review"; }
   }
@@ -452,7 +524,8 @@ out.push(``);
 out.push(`    REPO_DIR=<repo> SCRIPTS=${scriptsDir} AUDIT_STATE=<audit-state> FIXROOT=${root} sh ${scriptsDir}/fix.sh run`);
 out.push(``);
 out.push(`Finished epics skip via their pr-url marker; done stages skip via theirs.`);
-fs.writeFileSync(`${state}/RESUME.md`, out.join("\n") + "\n");
+fs.writeFileSync(`${state}/RESUME.md.${process.pid}`, out.join("\n") + "\n");
+fs.renameSync(`${state}/RESUME.md.${process.pid}`, `${state}/RESUME.md`);
 JS
 }
 
@@ -464,13 +537,10 @@ run_epic() {
     if [ -s "$_d/pr-url.dry-run" ] && [ "$DRY_RUN" = 1 ]; then log "$_ep: DRY_PR done — skipping (resume)"; return 0; fi
     rm -f "$_d/pr-url.dry-run"
     ensure_worktree "$_ep"
-    stage_research   "$_ep" || { write_resume_doc; return 1; }
-    stage_plan       "$_ep" || { write_resume_doc; return 1; }
-    stage_planreview "$_ep" || { write_resume_doc; return 1; }
-    stage_implement  "$_ep" || { write_resume_doc; return 1; }
-    stage_gate       "$_ep" || { write_resume_doc; return 1; }
-    stage_pr         "$_ep"
-    write_resume_doc
+    for _stage in research plan planreview implement gate pr; do
+        "stage_$_stage" "$_ep" || { write_resume_doc; return 1; }
+        write_resume_doc
+    done
 }
 
 step_run() {
@@ -549,6 +619,7 @@ step_status() {
         echo "no plan yet — run: (fix.sh plan) after setting AUDIT_STATE" >&2
         return 0
     fi
+    write_resume_doc
     node -e '
 const fs=require("fs");
 const p=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
@@ -559,7 +630,7 @@ for(const e of p.epics){
   const pr=fs.existsSync(`${d}/pr-url`)?fs.readFileSync(`${d}/pr-url`,"utf8").trim():"";
   console.log([e.epic.padEnd(38), `w${e.wave}`, `#${e.issue||"-"}`, `res${has("research.md")}`, `plan${has("plan-approved")}`, `impl${has("implemented")}`, `gate${has("gate-passed")}`, pr.slice(0,50)].join(" "));
 }' "$STATE/plan.json" "$STATE" "${EPIC_FILTER:-}" >&2
-    if [ -s "$STATE/blocked" ]; then echo "BLOCKED (gate exhausted):" >&2; cat "$STATE/blocked" >&2; fi
+    if [ -s "$STATE/blocked" ]; then echo "PARKED (gate budget spent; findings in <epic>/blocked.md):" >&2; cat "$STATE/blocked" >&2; fi
     if [ -s "$STATE/failed-epics" ]; then echo "FAILED (crashed stage, will retry on next run):" >&2; cat "$STATE/failed-epics" >&2; fi
     return 0
 }
