@@ -50,7 +50,8 @@ export class SeatDropped extends ChildFailed {
 // Every top-level JSON value in the text: a model may quote a finding in its prose before the real output.
 // With ok (the stage schema), the last value that passes wins; else, or when none passes, the largest one.
 export function salvageJson(text, ok) {
-  const s = String(text).replace(/```[a-zA-Z]*\n?/g, "");
+  // No fence stripping: the scan skips all but { and [, and a fence inside a JSON string (a comment body) must stay.
+  const s = String(text);
   const found = [];
   for (let i = 0; i < s.length; i++) {
     if (s[i] !== "{" && s[i] !== "[") continue;

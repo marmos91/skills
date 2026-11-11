@@ -37,7 +37,8 @@ export function parseHunks(patch) {
   return files;
 }
 
-const FENCE = /^(\s*```)suggestion\b/gm;
+// A fence of 3 or more backticks: a suggestion that itself holds ``` needs a longer one.
+const FENCE = /^(\s*`{3,})suggestion\b/gm;
 
 export function place(findings, hunks, permalinkBase) {
   const inline = [], body = [];

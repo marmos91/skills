@@ -148,7 +148,7 @@ test("invalid output is retried, then ChildFailed", async () => {
   await assert.rejects(runChild(base(claudeSeat, { schema: "reply" })), /invalid reply/);
 });
 
-test("salvageJson strips fences and prose", () => {
+test("salvageJson skips fences and prose", () => {
   assert.deepEqual(salvageJson('Sure!\n```json\n{"a":[1,{"b":"}"}]}\n```\nthanks'), { a: [1, { b: "}" }] });
   assert.deepEqual(salvageJson("x [1,2] y"), [1, 2]);
   assert.equal(salvageJson("nothing"), null);
@@ -276,4 +276,10 @@ test("timeout and turn limit drop the seat at once (SeatDropped, no retry); othe
   stub("claude", `echo x >>"${count}"; exit 3`);
   await assert.rejects(runChild(base(claudeSeat, { retries: 2 })), (e) => e instanceof ChildFailed && !(e instanceof SeatDropped));
   assert.equal(readFileSync(count, "utf8").trim().split("\n").length, 3);
+});
+
+test("salvageJson keeps fences inside JSON strings", () => {
+  const body = "**must:** x\n\n```js\nreturn 1;\n```\n";
+  assert.equal(salvageJson("```json\n" + JSON.stringify({ comments: [{ body }] }) + "\n```").comments[0].body, body);
+  assert.deepEqual(salvageJson('Here it is:\n```json\n{"a": "```suggestion\\nx\\n```"}\n```\nDone.'), { a: "```suggestion\nx\n```" });
 });

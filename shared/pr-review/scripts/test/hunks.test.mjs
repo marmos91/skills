@@ -72,3 +72,9 @@ test("finding without line goes to body without #L", () => {
   const r = place([{ file: "src/a.ts", line: null, body: "general" }], fx("diff-basic.patch"), base);
   assert.equal(r.body[0], `\`src/a.ts\` — general (${base}/src/a.ts)`);
 });
+
+test("a longer suggestion fence is downgraded too", () => {
+  const hunks = new Map([["f", { right: new Map([[5, "del"]]), left: new Set() }]]);
+  const r = place([{ file: "f", line: 5, body: "Use X\n````suggestion\na\n```\nb\n````" }], hunks, base);
+  assert.equal(r.inline[0].body, "Use X\n````\na\n```\nb\n````");
+});

@@ -965,3 +965,19 @@ test("two opus seats: resume reuses finished children", async () => {
   assert.deepEqual(run.calls.map((c) => c.k), ["v~2"]);
   assert.deepEqual(tallyOf(r), { c1: "agreed", c2: "split" });
 });
+
+test("compose output with a fenced suggestion reaches the post with the fence intact", async () => {
+  const fx = fixture(); routes(fx);
+  const { runChild } = await import("../lib/child.mjs");
+  const body = "**must:** off by one\n\n```suggestion\nconst a = 1;\n```";
+  const raw = join(fx.root, "compose.out");
+  writeFileSync(raw, "```json\n" + JSON.stringify({ body: "Changes a.", comments: [{ id: "c1", body }] }) + "\n```\n");
+  const compose = async (o) => {
+    const old = process.env.PR_REVIEW_FAKE;
+    process.env.PR_REVIEW_FAKE = raw;
+    try { return await runChild({ ...o, retries: 0 }); } finally { process.env.PR_REVIEW_FAKE = old; }
+  };
+  const { r } = await go(fx, happy({ compose }));
+  assert.equal(r.exit, 0, r.summary);
+  assert.ok(posts(fx)[0].threads[0].body.startsWith(body + "\n\n<!-- pr-review"));
+});
