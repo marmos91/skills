@@ -23,5 +23,7 @@
     "max_prs_per_run": 10,
     "max_review_rounds": 3,
     "max_replies_per_thread": 2
-  }
+  },
+  // PR hygiene check (title, body, linked issue, changelog). Repo level may set it too.
+  "hygiene": { "enabled": true }
 }

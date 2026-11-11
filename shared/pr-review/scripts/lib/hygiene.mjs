@@ -20,13 +20,13 @@ const f = (severity, title, c, fix) => ({ lens: "hygiene", severity, title, case
 export function hygieneChecks({ title, body, commits, baseSubjects, changedPaths, hasChangelog, guidanceText, closingIssues }) {
   const out = [];
   const conv = usesConventional(baseSubjects);
-  if (conv && !CONVENTIONAL.test(title)) out.push(f("should", "PR title does not follow the commit style", `The base branch uses Conventional Commits. The title is "${title}".`, 'Rename it, for example "feat(scope): short summary".'));
+  if (conv && !CONVENTIONAL.test(title)) out.push(f("should", "PR title does not follow the commit style", "The PR title does not follow Conventional Commits, which the base branch uses.", 'Rename it, for example "feat(scope): short summary".'));
   if (!body.trim()) out.push(f("should", "PR body is empty", "The PR has no description, so a reviewer cannot see the intent.", "Say what changes and why."));
   if (LINK_ISSUE.test(guidanceText) && closingIssues.length === 0) out.push(f("should", "No linked issue", "The repo guidance asks for a linked issue. The PR closes none.", 'Add "Closes #<n>" to the body.'));
   const code = changedPaths.some((p) => !EFFORT_AUTO_DEFAULTS.low_paths.some((g) => globMatch(g, p)));
   if (hasChangelog && code && !changedPaths.includes("CHANGELOG.md")) out.push(f("nit", "CHANGELOG.md not updated", "The repo has a CHANGELOG.md and the PR changes code, but not the changelog.", "Add an entry."));
-  const bad = conv ? commits.filter((s) => !CONVENTIONAL.test(s) && !/^Merge /.test(s)) : [];
-  if (bad.length) out.push(f("nit", "Commit subjects do not follow the commit style", `These subjects do not match Conventional Commits: ${bad.slice(0, 5).map((s) => `"${s}"`).join(", ")}.`, "Reword them, or squash on merge."));
+  const bad = conv ? commits.filter((c) => !CONVENTIONAL.test(c.subject) && !/^Merge /.test(c.subject)) : [];
+  if (bad.length) out.push(f("nit", "Commit subjects do not follow the commit style", `${bad.length} commit subject(s) do not follow Conventional Commits. Commits: ${bad.slice(0, 5).map((c) => c.sha.slice(0, 7)).join(", ")}.`, "Reword them, or squash on merge."));
   return out;
 }
 
@@ -51,7 +51,7 @@ export async function hygiene(frame, config, effort) {
   let baseSubjects = [];
   try { baseSubjects = git(frame.worktree, ["log", "-50", "--format=%s", base]).split("\n").filter(Boolean); } catch {}
   const findings = hygieneChecks({
-    title: un(pr.title), body: un(pr.body), commits: (pr.commits ?? []).map((c) => un(c.subject)), baseSubjects,
+    title: un(pr.title), body: un(pr.body), commits: (pr.commits ?? []).map((c) => ({ sha: String(c.sha), subject: un(c.subject) })), baseSubjects,
     changedPaths: frame.changedPaths, hasChangelog: gitOk(frame.worktree, ["cat-file", "-e", `${base}:CHANGELOG.md`]),
     guidanceText: readAll(join(frame.ctxDir, "guidance")), closingIssues: pr.closingIssues ?? [],
   });
@@ -69,7 +69,7 @@ export async function hygiene(frame, config, effort) {
       findings.push(...r.findings.map((x) => ({ ...x, ask_author: true })));
     } catch (e) {
       if (!(e instanceof ChildFailed)) throw e;
-      warnings.push(`hygiene child failed: ${e.message}`);
+      warnings.push("hygiene child failed") // e.message may hold model or PR text;
     }
   }
   return { findings, warnings };
