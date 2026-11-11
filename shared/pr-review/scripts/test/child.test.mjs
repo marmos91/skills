@@ -226,3 +226,17 @@ test("a claude seat that hits its max_turns fails at once, without retries", asy
   await assert.rejects(runChild(base({ ...claudeSeat, max_turns: 3 }, { retries: 2 })), (e) => e instanceof ChildFailed && /max_turns \(3\)/.test(e.message));
   assert.equal(readFileSync(count, "utf8").trim().split("\n").length, 1);
 });
+
+test("salvageJson: a finding quoted in the prose does not win over the final output", async () => {
+  const final = { findings: [{ lens: "correctness", severity: "must", file: "a.js", line: 3, title: "t", case: "c", fix: "f" }] };
+  const text = `I checked it, a finding looks like {"lens":"x","severity":"must"} in this format.\n${JSON.stringify(final)}`;
+  assert.deepEqual(salvageJson(text), final, "no schema: the largest top-level value");
+  const { validate } = await import("../lib/schema.mjs");
+  assert.deepEqual(salvageJson(text, (v) => !validate("round1", v).length), final);
+  // with a schema, a later valid value wins even when an earlier one is larger
+  assert.deepEqual(salvageJson(`{"findings": "not a list, but a longer value"} then {"findings": []}`, (v) => !validate("round1", v).length), { findings: [] });
+  // the runChild path: one attempt, no retry
+  writeFileSync(join(dir, "prose.json"), text);
+  process.env.PR_REVIEW_FAKE = join(dir, "prose.json");
+  try { assert.deepEqual(await runChild(base(claudeSeat, { schema: "round1" })), final); } finally { delete process.env.PR_REVIEW_FAKE; }
+});

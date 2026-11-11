@@ -42,8 +42,11 @@ export class ChildFailed extends Error {
   constructor(msg) { super(msg); this.name = "ChildFailed"; }
 }
 
-export function salvageJson(text) {
+// Every top-level JSON value in the text: a model may quote a finding in its prose before the real output.
+// With ok (the stage schema), the last value that passes wins; else, or when none passes, the largest one.
+export function salvageJson(text, ok) {
   const s = String(text).replace(/```[a-zA-Z]*\n?/g, "");
+  const found = [];
   for (let i = 0; i < s.length; i++) {
     if (s[i] !== "{" && s[i] !== "[") continue;
     let depth = 0, inStr = false, esc = false;
@@ -59,12 +62,14 @@ export function salvageJson(text) {
       else if (c === "{" || c === "[") depth++;
       else if (c === "}" || c === "]") {
         if (--depth === 0) {
-          try { return JSON.parse(s.slice(i, j + 1)); } catch { break; }
+          try { found.push({ v: JSON.parse(s.slice(i, j + 1)), size: j + 1 - i }); i = j; } catch {}
+          break;
         }
       }
     }
   }
-  return null;
+  if (ok) for (const x of found.toReversed()) if (ok(x.v)) return x.v;
+  return found.reduce((a, b) => (b.size > a.size ? b : a), { v: null, size: -1 }).v;
 }
 
 let routerProbe;
@@ -126,7 +131,7 @@ export async function runChild({ seat, tools = "read", promptFile, outFile, work
     if (stopping) throw new ChildFailed("engine is stopping on a signal"); // a killed child is not retried
     try {
       await runOnce(script, [model, seat.thinking, tools, promptFile, outFile], env, cwd, timeoutMs);
-      const value = salvageJson(await readFile(outFile, "utf8"));
+      const value = salvageJson(await readFile(outFile, "utf8"), schema && ((v) => validate(schema, v).length === 0));
       if (value === null) throw new Error("no JSON in output");
       const errs = schema ? validate(schema, value) : [];
       if (errs.length) throw new Error(`invalid ${schema}: ${errs.join("; ")}`);
