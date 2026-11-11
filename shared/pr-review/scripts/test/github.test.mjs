@@ -37,20 +37,19 @@ test("threads maps comments and author type", async () => {
   const [t] = await gh.threads("o/r", 5);
   assert.equal(t.id, "T1");
   assert.equal(t.viewerCanResolve, true);
+  const out = (await gh.threads("o/r", 5))[1];
+  assert.deepEqual([out.id, out.isOutdated, out.line, out.originalLine], ["T2", true, null, 4]);
+  assert.equal(t.isOutdated, false);
   assert.deepEqual(t.comments.map((c) => [c.id, c.author, c.authorType]), [[111, "alice", "User"], [112, "ci-bot", "Bot"]]);
 });
 
-test("threads paginates", async () => {
-  const mk = (id, next) => ({ stdout: { data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: !!next, endCursor: next }, nodes: [{ id, isResolved: false, viewerCanResolve: false, path: "p", line: 1, comments: { nodes: [] } }] } } } } } });
-  // The stub keys on operation only, so a self-advancing sh wrapper serves page 1 then 2.
-  const d = stubDir({ "graphql Threads": mk("A", "c1") });
-  const w = join(d, "gh");
-  const second = join(d, "second.json");
-  writeFileSync(second, JSON.stringify({ ...JSON.parse(readFileSync(join(d, "routes.json"), "utf8")), "graphql Threads": mk("B", null) }));
-  writeFileSync(w, `#!/bin/sh\nif [ -f "${d}/seen" ]; then cp "${second}" "${d}/routes.json"; fi\ntouch "${d}/seen"\nexec node "${stubJs}" "$@"\n`);
-  chmodSync(w, 0o755);
-  const old = process.env.GH_BIN; process.env.GH_BIN = w;
-  try { assert.deepEqual((await gh.threads("o/r", 5)).map((t) => t.id), ["A", "B"]); } finally { process.env.GH_BIN = old; }
+const thr = (id, next) => ({ stdout: { data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: !!next, endCursor: next }, nodes: [{ id, isResolved: false, viewerCanResolve: false, path: "p", line: 1, comments: { nodes: [] } }] } } } } } });
+const calls = (d) => readFileSync(join(d, "calls.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+
+test("threads paginates and sends the cursor", async () => {
+  const d = stubDir({ "graphql Threads": thr("A", "c1"), "graphql Threads cursor=c1": thr("B", null) });
+  assert.deepEqual((await gh.threads("o/r", 5)).map((t) => t.id), ["A", "B"]);
+  assert.deepEqual(calls(d).map((c) => c.variables.cursor), [null, "c1"]);
 });
 
 test("pendingReview", async () => {
@@ -66,6 +65,24 @@ test("findMarker: viewer's comments and review comments only", async () => {
   assert.equal(await gh.findMarker("o/r", 5, "key=k2"), true);
   assert.equal(await gh.findMarker("o/r", 5, "key=other"), false);
   assert.equal(await gh.findMarker("o/r", 5, "key=zzz"), false);
+});
+
+const mc = (body, prev) => ({ stdout: { data: { viewer: { login: "marmos91" }, repository: { pullRequest: { comments: { pageInfo: { hasPreviousPage: !!prev, startCursor: prev }, nodes: body ? [{ body, author: { login: "marmos91" } }] : [] } } } } } });
+
+test("findMarker pages back through comments", async () => {
+  const d = stubDir({ "graphql MarkerComments": mc("old", "cc1"), "graphql MarkerComments cc=cc1": mc("key=deep -->", null) });
+  assert.equal(await gh.findMarker("o/r", 5, "key=deep"), true);
+  assert.deepEqual(calls(d).filter((c) => c.key === "graphql MarkerComments").map((c) => c.variables.cc), [null, "cc1"]);
+  stubDir({ "graphql MarkerComments": mc("old", "cc1"), "graphql MarkerComments cc=cc1": mc("older", null) });
+  assert.equal(await gh.findMarker("o/r", 5, "key=deep"), false);
+});
+
+test("postReview needs commitOID and passes multi-line fields", async () => {
+  const d = stubDir();
+  await assert.rejects(gh.postReview("o/r", 5, { event: "COMMENT", body: "b" }), /commitOID/);
+  assert.deepEqual(muts(d), []);
+  await gh.postReview("o/r", 5, { commitOID: "abc123", event: "COMMENT", body: "b", threads: [{ path: "a", line: 5, startLine: 2, body: "m" }] });
+  assert.deepEqual(muts(d)[0].input.variables.input.threads[0], { path: "a", line: 5, side: "RIGHT", startLine: 2, startSide: "RIGHT", body: "m" });
 });
 
 test("postReview sends exactly one mutation with commitOID", async () => {
@@ -118,6 +135,14 @@ test("checks: green, red, pending, none", async () => {
   assert.deepEqual(await gh.checks("o/r", 8, "abc123"), { state: "none", since: null, items: [] });
 });
 
+test("checks: stale head, queued-only since, real failures throw", async () => {
+  stubDir();
+  assert.deepEqual(await gh.checks("o/r", 11, "abc123"), { state: "pending", since: null, items: [], stale: true });
+  const q = await gh.checks("o/r", 10, "abc123");
+  assert.equal(q.state, "pending"); assert.equal(q.since, "2026-11-01T10:08:00Z");
+  await assert.rejects(gh.checks("o/r", 9, "abc123"), (e) => e instanceof gh.GhError && /401/.test(e.message));
+});
+
 test("failedLog keeps the last lines", async () => {
   stubDir();
   assert.equal(await gh.failedLog("o/r", 200, 2), "line3\nline4");
@@ -126,6 +151,8 @@ test("failedLog keeps the last lines", async () => {
 test("errors: GhError with redacted token; unknown argv fails", async () => {
   stubDir({ "api user": { stderr: "bad token ghp_ABC123def456", exit: 4 } });
   await assert.rejects(gh.viewer(), (e) => e instanceof gh.GhError && e.code === 4 && !/ghp_ABC/.test(e.message + e.stderr) && /redacted/.test(e.stderr));
+  stubDir({ "api user": { stderr: "github_pat_11AAAA_xyz", exit: 1 } });
+  await assert.rejects(gh.viewer(), (e) => !/github_pat_/.test(e.stderr));
   stubDir({});
   await assert.rejects(gh.pr("o/r", 99), (e) => e instanceof gh.GhError && /no route/.test(e.stderr));
 });

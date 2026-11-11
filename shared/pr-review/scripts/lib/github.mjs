@@ -4,7 +4,7 @@ export class GhError extends Error {
   constructor(msg, { code, stderr } = {}) { super(msg); this.name = "GhError"; this.code = code; this.stderr = stderr; }
 }
 
-const redact = (s) => String(s).replace(/gh[pousr]_\w+/g, "[redacted]");
+const redact = (s) => String(s).replace(/(?:gh[pousr]_|github_pat_)\w+/g, "[redacted]");
 
 function run(args, { input, okCodes = [0] } = {}) {
   return new Promise((resolve, reject) => {
@@ -53,7 +53,7 @@ const THREADS = `query Threads($owner: String!, $name: String!, $n: Int!, $curso
   repository(owner: $owner, name: $name) { pullRequest(number: $n) {
     reviewThreads(first: 100, after: $cursor) {
       pageInfo { hasNextPage endCursor }
-      nodes { id isResolved viewerCanResolve path line
+      nodes { id isResolved isOutdated viewerCanResolve path line originalLine
         comments(first: 100) { nodes { databaseId author { login __typename } body createdAt } } }
     } } } }`;
 
@@ -64,7 +64,7 @@ export async function threads(repo, n) {
     const rt = (await gql(THREADS, { owner, name, n, cursor })).repository.pullRequest.reviewThreads;
     for (const t of rt.nodes) {
       out.push({
-        id: t.id, isResolved: t.isResolved, viewerCanResolve: t.viewerCanResolve, path: t.path, line: t.line,
+        id: t.id, isResolved: t.isResolved, isOutdated: t.isOutdated, viewerCanResolve: t.viewerCanResolve, path: t.path, line: t.line, originalLine: t.originalLine,
         comments: t.comments.nodes.map((c) => ({ id: c.databaseId, author: c.author?.login ?? null, authorType: c.author?.__typename ?? null, body: c.body, createdAt: c.createdAt })),
       });
     }
@@ -83,34 +83,53 @@ export async function pendingReview(repo, n) {
   return node ? { id: node.id } : null;
 }
 
-const MARKERS = `query Markers($owner: String!, $name: String!, $n: Int!) {
+const MARKER_COMMENTS = `query MarkerComments($owner: String!, $name: String!, $n: Int!, $cc: String) {
   viewer { login }
   repository(owner: $owner, name: $name) { pullRequest(number: $n) {
-    comments(last: 100) { nodes { body author { login } } }
-    reviews(last: 50) { nodes { body author { login } comments(first: 100) { nodes { body author { login } } } } }
+    comments(last: 100, before: $cc) { pageInfo { hasPreviousPage startCursor } nodes { body author { login } } }
+  } } }`;
+const MARKER_REVIEWS = `query MarkerReviews($owner: String!, $name: String!, $n: Int!, $rc: String) {
+  viewer { login }
+  repository(owner: $owner, name: $name) { pullRequest(number: $n) {
+    reviews(last: 50, before: $rc) { pageInfo { hasPreviousPage startCursor }
+      nodes { body author { login } comments(first: 100) { nodes { body author { login } } } } }
   } } }`;
 
+// Walks the viewer's history back until the marker is found or it ends: a missed marker means a duplicate post.
 export async function findMarker(repo, n, key) {
   const [owner, name] = split(repo);
-  const d = await gql(MARKERS, { owner, name, n });
-  const me = d.viewer.login, p = d.repository.pullRequest;
-  const bodies = [...p.comments.nodes, ...p.reviews.nodes, ...p.reviews.nodes.flatMap((r) => r.comments.nodes)];
-  return bodies.some((c) => c.author?.login === me && String(c.body ?? "").includes(key));
+  const has = (me, xs) => xs.some((c) => c.author?.login === me && String(c.body ?? "").includes(key));
+  for (const [q, v, field] of [[MARKER_COMMENTS, "cc", "comments"], [MARKER_REVIEWS, "rc", "reviews"]]) {
+    let cursor = null;
+    for (;;) {
+      const d = await gql(q, { owner, name, n, [v]: cursor });
+      const me = d.viewer.login, conn = d.repository.pullRequest[field];
+      const bodies = field === "reviews" ? [...conn.nodes, ...conn.nodes.flatMap((r) => r.comments.nodes)] : conn.nodes;
+      if (has(me, bodies)) return true;
+      if (!conn.pageInfo.hasPreviousPage) break;
+      cursor = conn.pageInfo.startCursor;
+    }
+  }
+  return false;
 }
 
 const POST = `mutation PostReview($input: AddPullRequestReviewInput!) {
   addPullRequestReview(input: $input) { pullRequestReview { url } } }`;
 
 export async function postReview(repo, n, { commitOID, event, body, threads: ths = [] }) {
+  if (!commitOID) throw new GhError("postReview: commitOID is required");
   const { id } = await pr(repo, n);
   const input = {
     pullRequestId: id, commitOID, event, body,
-    threads: ths.map(({ path, line, side = "RIGHT", body: b }) => ({ path, line, side, body: b })),
+    threads: ths.map(({ path, line, side = "RIGHT", startLine, startSide, body: b }) => ({
+      path, line, side, ...(startLine != null && { startLine, startSide: startSide ?? side }), body: b,
+    })),
   };
   const d = await gql(POST, { input });
   return { url: d.addPullRequestReview.pullRequestReview.url };
 }
 
+// GitHub has no replies to replies: pass the id of the thread's first comment.
 export async function reply(repo, n, commentId, body) {
   return json(["api", "-X", "POST", `repos/${repo}/pulls/${n}/comments/${commentId}/replies`, "--input", "-"], { input: JSON.stringify({ body }) });
 }
@@ -121,6 +140,7 @@ export async function resolve(threadId) {
   await gql(RESOLVE, { id: threadId });
 }
 
+// On public repos every user gets "read", so only "write"/"admin" mean collaborator.
 export async function permission(repo, login) {
   try {
     return (await json(["api", `repos/${repo}/collaborators/${login}/permission`])).permission;
@@ -145,22 +165,21 @@ export async function searchPRs(repo, who) {
 
 const RED = new Set(["fail", "cancel"]), OK = new Set(["pass", "skipping"]);
 
-// sha is accepted for the engine's API; `gh pr checks` always reads the current head.
-// gh exits 1 (failed checks), 8 (pending) or 1 with "no checks reported"; stdout still holds JSON except in the last case.
-export async function checks(repo, n, _sha) {
-  let rows;
-  try {
-    const { stdout } = await run(["pr", "checks", String(n), "-R", repo, "--json", "name,state,link,bucket,startedAt"], { okCodes: [0, 1, 8] });
-    rows = stdout.trim() ? JSON.parse(stdout) : [];
-  } catch (e) {
-    if (e instanceof GhError && /no checks reported/i.test(e.stderr ?? "")) rows = [];
-    else throw e;
-  }
+// gh exits 1 (failed checks) or 8 (pending) with JSON on stdout; exit 1 with empty stdout is "none"
+// only when gh says "no checks reported", else it is a real failure (auth, rate limit, network).
+export async function checks(repo, n, sha) {
+  const head = await json(["pr", "view", String(n), "-R", repo, "--json", "headRefOid,updatedAt"]);
+  if (head.headRefOid !== sha) return { state: "pending", since: null, items: [], stale: true }; // head moved: CI of the pinned sha is unknown
+  const { stdout, stderr, code } = await run(["pr", "checks", String(n), "-R", repo, "--json", "name,state,link,bucket,startedAt"], { okCodes: [0, 1, 8] });
+  let rows = [];
+  if (stdout.trim()) rows = JSON.parse(stdout);
+  else if (code === 1 && !/no checks reported/i.test(stderr)) throw new GhError(`gh pr checks exited 1: ${redact(stderr.trim())}`, { code, stderr: redact(stderr.trim()) });
   const items = rows.map((r) => ({ name: r.name, state: r.bucket, url: r.link, runId: /\/actions\/runs\/(\d+)/.exec(r.link ?? "")?.[1] ?? null }));
   const pend = rows.filter((r) => !RED.has(r.bucket) && !OK.has(r.bucket));
   const state = !rows.length ? "none" : rows.some((r) => RED.has(r.bucket)) ? "red" : pend.length ? "pending" : "green";
   const starts = pend.map((r) => r.startedAt).filter((t) => t && !t.startsWith("0001")).sort();
-  return { state, since: state === "pending" && starts.length ? starts[0] : null, items };
+  // Queued-only checks have no start time: fall back to the PR's updatedAt.
+  return { state, since: state === "pending" ? starts[0] ?? head.updatedAt ?? null : null, items };
 }
 
 export async function failedLog(repo, runId, lines = 80) {
