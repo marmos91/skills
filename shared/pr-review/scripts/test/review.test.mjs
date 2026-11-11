@@ -1,4 +1,5 @@
 import test from "node:test";
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync, existsSync, readdirSync, rmSync } from "node:fs";
 import { execFileSync, spawn } from "node:child_process";
@@ -670,4 +671,22 @@ test("answer-only rerun: 'post' goes out as one small COMMENT follow-up, never t
   const third = await go(fx, answers);
   assert.equal(third.r.exit, 0);
   assert.equal(posts(fx).length, 2);
+});
+
+test("answer-only rerun: a finding already posted inline at this head is not posted again", async () => {
+  const fx = fixture(); routes(fx);
+  const answers = split({
+    merge: [C("c1", { found: [S0] }), C("c2", { severity: "must", line: 3, title: "Must one" })], "v~1": [keep("c1")], "v~2": [drop("c1"), keep("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c2", body: "**must:** one" }] },
+  });
+  await go(fx, answers, { mode: "loop", effort: "medium" });
+  const [q] = openQuestions(fx.state);
+  answer(fx.state, q.id, "post");
+  // a later run already posted this finding inline at the same head
+  const key = createHash("sha1").update(`inline\0${fx.head}\0${q.fingerprint}`).digest("hex");
+  routes(fx, { reviewComments: [{ body: `x\n\n<!-- pr-review run=r sha=${fx.head} key=${key} fp=${q.fingerprint} -->`, user: { login: ME } }] });
+  const again = await go(fx, answers);
+  assert.equal(again.r.exit, 0, again.r.summary);
+  assert.equal(posts(fx).length, 1, "no follow-up for a finding already on GitHub");
+  assert.ok(JSON.parse(readFileSync(join(fx.state, "questions", `${q.id}.json`), "utf8")).appliedAt);
 });

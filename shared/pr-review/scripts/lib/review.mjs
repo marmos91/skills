@@ -432,8 +432,12 @@ function heldText(repoState, n, runId, fp) {
  */
 async function followUp(o, head, pst, answered) {
   const { repo, n, gh, repoState } = o;
-  const items = [];
+  const items = [], already = [];
+  // one fetch: an answered finding already posted inline at this head (an earlier follow-up that crashed
+  // before appliedAnswer, or a later full run) is not posted again
+  const seen = await gh.markerKeys(repo, n);
   for (const q of answered.filter((x) => x.answer !== "drop")) {
+    if (seen.has(sha1(`inline\0${head}\0${q.fingerprint}`))) { already.push(q.fingerprint); continue; }
     const f = q.finding;
     const text = f.secret ? heldText(repoState, n, pst.lastRunId, q.fingerprint)
       : `**${f.severity}:** ${f.title}\n\n${f.case}${f.fix ? `\n\n${f.fix}` : ""}${q.answer === "ask-author" ? "\n\nCan you confirm this case?" : ""}`;
@@ -449,12 +453,17 @@ async function followUp(o, head, pst, answered) {
     const p = place(items.map(({ q, text }) => ({ file: q.finding.file, line: q.finding.line, body: `${text}\n\n${marker(runId, head, sha1(`inline\0${head}\0${q.fingerprint}`), q.fingerprint)}` })), hunks, `https://github.com/${repo}/blob/${head}`);
     const body = [`Follow-up on the review of ${head}: points settled by the maintainer.`, p.body.length ? p.body.map((l) => `- ${l}`).join("\n") : "", marker(runId, head, key)].filter(Boolean).join("\n\n");
     if (!scanOutbound(body).ok) return { exit: 4, skipped: true, summary: "follow-up blocked by the secret scan" };
-    if (!(await gh.markerKeys(repo, n)).has(key)) {
+    if (!seen.has(key)) {
       if (await gh.pendingReview(repo, n)) return { exit: 0, skipped: true, summary: "skipped: you have a pending review on this PR; submit or delete it, then run again" };
       url = (await gh.postReview(repo, n, { commitOID: head, event: "COMMENT", body, threads: p.inline })).url;
     }
     const st = prState(repoState, n);
     st.settled = [...new Set([...st.settled, ...fps])];
+    savePrState(repoState, n, st);
+  }
+  if (already.length) {
+    const st = prState(repoState, n);
+    st.settled = [...new Set([...st.settled, ...already])];
     savePrState(repoState, n, st);
   }
   for (const q of answered) appliedAnswer(repoState, q.id);
