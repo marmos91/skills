@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import * as github from "./github.mjs";
-import { runChild as realRunChild, ChildFailed, stopping } from "./child.mjs";
+import { runChild as realRunChild, ChildFailed, SeatDropped, stopping } from "./child.mjs";
 import { LENSES, applyEffort, loadConfig, pickEffort, plannedChildren, seatId, seatsForLens, userConfigPath, withLimits } from "./config.mjs";
 import { frame as realFrame, git, readTree, HeadMoved, DiffTooLarge } from "./frame.mjs";
 import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.mjs";
@@ -76,14 +76,22 @@ export async function review(opts) {
 
 // One child: a marker means its output is reused, never paid for twice (spec 8).
 // lens: the one lens of a round-1 child, for a lens-level max_turns.
+// A council seat (round 1, vote) that drops is recorded in run.json and gives null; the judge cannot drop.
 async function child(ctx, stage, key, { seat, prompt, schema, tools = "read", lens }) {
+  const council = stage === "round1" || stage === "round2";
+  if (council && ctx.dropped(seat)) return null;
   const dir = join(ctx.runDir, stage), outFile = join(dir, `${key}.json`);
   if (done(ctx.runDir, stage, key)) return readJson(outFile);
   mkdirSync(dir, { recursive: true });
   const promptFile = join(dir, `${key}.prompt`);
   const limited = withLimits(ctx.config, seat, lens, stage);
   writeFileSync(promptFile, prompt(limited));
-  const v = await ctx.runChild({ seat: limited, tools, promptFile, outFile, worktree: ctx.frame.worktree, ctxDir: ctx.frame.ctxDir, schema, routerUp: ctx.routerUp });
+  let v;
+  try { v = await ctx.runChild({ seat: limited, tools, promptFile, outFile, worktree: ctx.frame.worktree, ctxDir: ctx.frame.ctxDir, schema, routerUp: ctx.routerUp }); } catch (e) {
+    if (!(e instanceof SeatDropped) || !council) throw e;
+    ctx.drop(seat, e.reason, stage);
+    return null;
+  }
   save(outFile, v);
   markDone(ctx.runDir, stage, key);
   return v;
@@ -189,14 +197,31 @@ async function once(o, restart) {
   if (o.until === "frame") return finish("frame");
 
   // Round 1 (spec 6.2) and the hygiene check (6.3.1) run side by side.
-  const ctx = { runDir, frame: f, runChild: o.runChild, routerUp: o.routerUp, config };
+  // Dropped seats (turn limit, timeout) stay dropped for the rest of the run, also on resume.
+  run.dropped ??= [];
+  const isDropped = (s) => run.dropped.some((d) => d.seat === (typeof s === "string" ? s : seatId(s)));
+  const drop = (s, reason, stage) => {
+    if (isDropped(s)) return;
+    run.dropped.push({ seat: seatId(s), reason, stage });
+    save(runFile, run);
+    log(`seat ${seatId(s)} dropped in ${stage} (${reason})`);
+  };
+  // Each lens needs 2 seats that remain, as the config loader asks of a lens.
+  const enoughSeats = () => {
+    for (const l of run.lenses) {
+      const left = [...new Set(seatsForLens(config, l).map(seatId))].filter((id) => !isDropped(id));
+      if (left.length < 2) throw new ChildFailed(`fewer than 2 seats left for lens ${l} (dropped: ${run.dropped.map((d) => `${d.seat} (${d.reason})`).join(", ")})`);
+    }
+  };
+  const ctx = { runDir, frame: f, runChild: o.runChild, routerUp: o.routerUp, config, dropped: isDropped, drop };
   const tools = f.trusted ? "shell" : "read";
   const jobs = round1Jobs(config, run.lenses);
   const hygFile = join(runDir, "hygiene-result.json");
   const [outs, hyg] = await settled([
-    settled(jobs.map((j) => child(ctx, "round1", j.key, { seat: j.seat, tools, schema: "round1", lens: j.lenses.length === 1 ? j.lenses[0] : undefined, prompt: (s) => round1Prompt(f, j.lenses, s.max_turns) }).then((v) => ({ ...j, v })))),
+    settled(jobs.map((j) => child(ctx, "round1", j.key, { seat: j.seat, tools, schema: "round1", lens: j.lenses.length === 1 ? j.lenses[0] : undefined, prompt: (s) => round1Prompt(f, j.lenses, s.max_turns) }).then((v) => ({ ...j, v })))).then((all) => all.filter((x) => x.v && !isDropped(x.seat))),
     existsSync(hygFile) ? readJson(hygFile) : o.hygiene(f, config, run.effort, { routerUp: o.routerUp }).then((h) => { save(hygFile, h); return h; }),
   ]);
+  enoughSeats();
   markDone(runDir, "round1");
   const bySeat = {}, earlier = new Map();
   for (const { seat, lenses, v } of outs) {
@@ -226,7 +251,7 @@ async function once(o, restart) {
   const ours = threads.filter((t) => t.comments[0]?.author === me && t.line != null).map((t) => ({ t, key: MARKER_FP.exec(t.comments[0].body ?? "")?.[1] }));
   const resolvedThread = (c) => ours.some(({ t, key }) => t.path === c.file && t.line === c.line && key && (known.has(key) || key === c.fp));
   const all = raw.filter((c) => run.lenses.includes(c.lens)).map((c) => {
-    const seats = [...new Set(seatsForLens(config, c.lens).map(seatId))];
+    const seats = [...new Set(seatsForLens(config, c.lens).map(seatId))].filter((id) => !isDropped(id));
     return { ...c, found: [...new Set(c.found)].filter((s) => seats.includes(s)), seats, fp: fingerprint(c) };
   });
   const reversed = all.filter((c) => c.reverses), linked = all.filter((c) => !c.reverses && resolvedThread(c));
@@ -242,13 +267,16 @@ async function once(o, restart) {
   const ballots = await settled(voters.map((seat, i) => {
     const id = seatId(seat), mine = clusters.filter((c) => c.seats.includes(id) && !c.found.includes(id));
     if (!mine.length) return { id, votes: [] };
-    return child(ctx, "round2", `v~${i}`, { seat, tools, schema: "vote", prompt: (s) => votePrompt(f, mine.map(view), s.max_turns) }).then((votes) => ({ id, votes }));
+    return child(ctx, "round2", `v~${i}`, { seat, tools, schema: "vote", prompt: (s) => votePrompt(f, mine.map(view), s.max_turns) }).then((votes) => ({ id, votes: votes ?? [] }));
   }));
+  enoughSeats();
   markDone(runDir, "round2");
   if (o.until === "round2") return finish("round2");
 
   const votesOf = (c) => ballots.flatMap((b) => b.votes.filter((v) => v.id === c.id).map((v) => ({ ...v, seat: b.id })));
-  const tallied = clusters.map((c) => ({ c, votes: votesOf(c), status: tally({ cluster: c, votes: votesOf(c) }) }));
+  // The tally runs over the seats that remain: a seat dropped in the vote no longer counts, not even its own find.
+  const live = (c) => ({ ...c, seats: c.seats.filter((id) => !isDropped(id)), found: c.found.filter((id) => !isDropped(id)) });
+  const tallied = clusters.map((c) => ({ c, votes: votesOf(c), status: tally({ cluster: live(c), votes: votesOf(c) }) }));
   save(join(runDir, "tally.json"), tallied.map(({ c, status }) => ({ id: c.id, fp: c.fp, status })));
   markDone(runDir, "tally");
   if (o.until === "tally") return finish("tally");
@@ -340,7 +368,7 @@ async function once(o, restart) {
   let ci = ciOf(f);
   const v = () => verdict({
     agreed: [...agreed, ...hygItems], earlierMustOpen: earlierAll.filter((e) => e.severity === "must" && !fixed.includes(e)).length,
-    openQuestions: open.length, splits: 0, failedLenses: run.missing?.length ?? 0, ci: ci.state, mode, trustedAuthor: f.trusted, unanimousZero, ownPr: f.ownPr,
+    openQuestions: open.length, splits: 0, failedLenses: run.missing?.length ?? 0, droppedSeats: run.dropped.length, ci: ci.state, mode, trustedAuthor: f.trusted, unanimousZero, ownPr: f.ownPr,
   });
   const bodyOf = (outside, key) => [
     composed.body.trim(),
@@ -348,6 +376,7 @@ async function once(o, restart) {
     open.length ? `${open.length} ${open.length === 1 ? "point is" : "points are"} still open with the reviewer.` : "",
     leftOut ? `${leftOut} ${leftOut === 1 ? "finding was" : "findings were"} left out by the effort limit.` : "",
     run.missing?.length ? `Lenses not run: ${run.missing.join(", ")}.` : "",
+    ...run.dropped.map((d) => `Seat ${safeText(d.seat.slice(d.seat.indexOf(":") + 1))} was dropped (${d.reason}).`),
     ci.line ?? "", marker(runId, f.headSha, key),
   ].filter(Boolean).join("\n\n");
   const hunks = parseHunks(readFileSync(join(f.ctxDir, "diff.patch"), "utf8"));

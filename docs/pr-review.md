@@ -191,7 +191,7 @@ text (`scripts/lib/verdict.mjs`). The first row that matches wins.
 |---|---|
 | Your own PR | `COMMENT` (GitHub does not allow more) |
 | 1 or more agreed `must`, or an earlier `must` of yours still open | `REQUEST_CHANGES` |
-| An open question, a split, a failed lens, any agreed finding, or red or pending CI | `COMMENT` |
+| An open question, a split, a failed lens, a dropped seat, any agreed finding, or red or pending CI | `COMMENT` |
 | Loop run, and the author is not trusted or not every seat found zero | `COMMENT`, and an "approve?" question for you |
 | None of the above | `APPROVE` |
 
@@ -391,6 +391,15 @@ State root: `${XDG_STATE_HOME:-~/.local/state}/pr-review/<owner>__<repo>/`.
   child, or a round-1 seat that sets `error` (for example because it could
   not read the context), is never read as "no findings": it is a failed
   child.
+- **Dropped seats.** A council seat whose child reaches its `max_turns` or
+  its timeout, in round 1 or the vote, is not retried. It drops out of that
+  stage and every later stage of the run, and `run.json` records it under
+  `dropped` (a resumed run keeps it out). The tally runs over the seats
+  that remain, and agreed still needs 2 keeps. The summary says "Seat
+  `<model>` was dropped (turn limit)." or "(timeout)", and the review never
+  approves, in the loop too. When a lens has fewer than 2 seats left, the
+  run stops with exit `4`. The judge (merge, compose) cannot drop: its turn
+  limit or timeout fails the run.
 
 ## Configuration
 

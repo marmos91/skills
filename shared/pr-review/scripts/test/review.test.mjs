@@ -856,3 +856,66 @@ test("per-stage thinking reaches the children: cubbit seats vote with thinking o
   assert.equal(th("v~1"), "off");
   assert.equal(th("merge"), "medium", "the judge is a claude seat");
 });
+
+// --- dropped seats (turn limit or timeout): the council shrinks, the run goes on, APPROVE is blocked
+const dropOf = (reason) => async (o) => { const { SeatDropped } = await import("../lib/child.mjs"); throw new SeatDropped(o.seat, reason); };
+const runJson = (r) => JSON.parse(readFileSync(join(r.runDir, "run.json"), "utf8"));
+
+test("a seat that hits its turn limit in round 1 is dropped: the rest of the council posts, the summary names it", async () => {
+  const fx = fixture(); routes(fx);
+  const { r, run } = await go(fx, happy({ "all~2": dropOf("turn limit") }));
+  assert.equal(r.exit, 0, r.summary);
+  const p = posts(fx)[0];
+  assert.equal(p.event, "REQUEST_CHANGES");
+  assert.deepEqual(p.threads.map((t) => t.line), [2]);
+  assert.match(p.body, /Seat cubbit\/mimir-pro was dropped \(turn limit\)\./);
+  assert.deepEqual(runJson(r).dropped, [{ seat: S2, reason: "turn limit", stage: "round1" }]);
+  assert.ok(!run.calls.some((c) => c.k === "v~2"), "a dropped seat does not vote");
+});
+
+test("a dropped seat blocks APPROVE, interactive and loop", async () => {
+  for (const mode of ["interactive", "loop"]) {
+    const fx = fixture(); routes(fx);
+    const { r } = await go(fx, { all: { findings: [] }, "all~1": dropOf("timeout"), compose: { body: "Fine.", comments: [] } }, { mode, effort: "medium" });
+    assert.equal(r.exit, 0, r.summary);
+    const p = posts(fx)[0];
+    assert.equal(p.event, "COMMENT", mode);
+    assert.equal(r.queueApprove, false, mode);
+    assert.match(p.body, /Seat cubbit\/mimir was dropped \(timeout\)\./);
+  }
+});
+
+test("a seat dropped in the vote leaves the tally to the seats that remain: found + keep of 2 seats is agreed", async () => {
+  const fx = fixture(); routes(fx);
+  const { r } = await go(fx, split({ "v~2": dropOf("timeout") }));
+  assert.equal(r.exit, 0, r.summary);
+  const p = posts(fx)[0];
+  assert.deepEqual(p.threads.map((t) => t.line), [2]);
+  assert.equal(p.event, "REQUEST_CHANGES");
+  assert.deepEqual(runJson(r).dropped, [{ seat: S2, reason: "timeout", stage: "round2" }]);
+});
+
+test("fewer than 2 seats left: exit 4, nothing posted", async () => {
+  const fx = fixture(); routes(fx);
+  const { r } = await go(fx, happy({ "all~1": dropOf("timeout"), "all~2": dropOf("turn limit") }));
+  assert.equal(r.exit, 4);
+  assert.match(r.summary, /fewer than 2 seats/);
+  assert.equal(posts(fx).length, 0);
+});
+
+test("the judge cannot be dropped: a merge at its turn limit fails the run", async () => {
+  const fx = fixture(); routes(fx);
+  const { r } = await go(fx, happy({ merge: dropOf("turn limit") }));
+  assert.equal(r.exit, 4);
+  assert.equal(posts(fx).length, 0);
+});
+
+test("resume: a dropped seat stays dropped and is not run again", async () => {
+  const fx = fixture(); routes(fx);
+  const first = await go(fx, happy({ "all~2": dropOf("turn limit"), compose: new ChildFailed("judge down") }));
+  assert.equal(first.r.exit, 4);
+  const { r, run } = await go(fx, happy());
+  assert.equal(r.exit, 0, r.summary);
+  assert.ok(!run.calls.some((c) => c.k === "all~2"));
+  assert.match(posts(fx)[0].body, /Seat cubbit\/mimir-pro was dropped \(turn limit\)\./);
+});

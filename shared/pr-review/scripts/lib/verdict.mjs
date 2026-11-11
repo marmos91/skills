@@ -11,6 +11,7 @@ export function verdict(i) {
   if (i.openQuestions > 0) reasons.push("open questions");
   if (i.splits > 0) reasons.push("splits");
   if (i.failedLenses > 0) reasons.push("failed lenses");
+  if (i.droppedSeats > 0) reasons.push("dropped seats");
   if (i.agreed.length > 0) reasons.push("agreed findings");
   // only green or none (no checks configured) may approve; unknown or missing blocks
   if (i.ci !== "green" && i.ci !== "none") reasons.push(`ci ${i.ci ?? "unknown"}`);

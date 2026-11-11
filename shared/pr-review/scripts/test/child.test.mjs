@@ -249,3 +249,19 @@ test("an auto seat routed to claude gets --effort low for off or minimal (claude
     assert.equal(a[a.indexOf("--effort") + 1], "low", thinking);
   }
 });
+
+test("timeout and turn limit drop the seat at once (SeatDropped, no retry); other failures still retry", async () => {
+  const { SeatDropped } = await import("../lib/child.mjs");
+  const count = join(dir, "drop.count");
+  writeFileSync(count, "");
+  stub("claude", `echo x >>"${count}"; printf 'Error: Reached max turns (3)'; exit 1`);
+  await assert.rejects(runChild(base({ ...claudeSeat, max_turns: 3 }, { retries: 2 })), (e) => e instanceof SeatDropped && e.reason === "turn limit");
+  writeFileSync(count, "");
+  stub("claude", `echo x >>"${count}"; sleep 30`);
+  await assert.rejects(runChild(base(claudeSeat, { retries: 2, timeoutMs: 300 })), (e) => e instanceof SeatDropped && e.reason === "timeout" && /timed out after 300ms/.test(e.message));
+  assert.equal(readFileSync(count, "utf8").trim().split("\n").length, 1);
+  writeFileSync(count, "");
+  stub("claude", `echo x >>"${count}"; exit 3`);
+  await assert.rejects(runChild(base(claudeSeat, { retries: 2 })), (e) => e instanceof ChildFailed && !(e instanceof SeatDropped));
+  assert.equal(readFileSync(count, "utf8").trim().split("\n").length, 3);
+});

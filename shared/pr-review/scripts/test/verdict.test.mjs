@@ -77,3 +77,12 @@ test("unknown or missing ci blocks APPROVE", () => {
     assert.ok(r.reasons.includes(`ci ${ci ?? "unknown"}`));
   }
 });
+
+test("a dropped seat blocks APPROVE but not REQUEST_CHANGES", () => {
+  const base = { agreed: [], earlierMustOpen: 0, openQuestions: 0, splits: 0, failedLenses: 0, ci: "green", mode: "loop", trustedAuthor: true, unanimousZero: true, ownPr: false };
+  assert.equal(verdict({ ...base, mode: "interactive" }).event, "APPROVE");
+  const v = verdict({ ...base, droppedSeats: 1 });
+  assert.deepEqual([v.event, v.queueApprove], ["COMMENT", false]);
+  assert.ok(v.reasons.includes("dropped seats"));
+  assert.equal(verdict({ ...base, droppedSeats: 1, agreed: [{ severity: "must" }] }).event, "REQUEST_CHANGES");
+});

@@ -42,6 +42,11 @@ export class ChildFailed extends Error {
   constructor(msg) { super(msg); this.name = "ChildFailed"; }
 }
 
+/** A seat at its turn limit or timeout: not retried; a review leaves it out of the rest of the run. */
+export class SeatDropped extends ChildFailed {
+  constructor(seat, reason, detail = "") { super(`${seat.harness}:${seat.model} dropped (${reason})${detail ? `: ${detail}` : ""}`); this.name = "SeatDropped"; this.seat = seat; this.reason = reason; }
+}
+
 // Every top-level JSON value in the text: a model may quote a finding in its prose before the real output.
 // With ok (the stage schema), the last value that passes wins; else, or when none passes, the largest one.
 export function salvageJson(text, ok) {
@@ -96,7 +101,7 @@ function runOnce(script, args, env, cwd, timeoutMs) {
       clearTimeout(t);
       untrack(p.pid);
       try { process.kill(-p.pid, "SIGKILL"); } catch {} // reap stragglers
-      if (timedOut) reject(new Error(`timed out after ${timeoutMs}ms`));
+      if (timedOut) reject(Object.assign(new Error(`timed out after ${timeoutMs}ms`), { timedOut: true }));
       else if (code !== 0) reject(new Error(`exit ${code}: ${err.trim().slice(-500)}`));
       else resolve();
     });
@@ -140,9 +145,10 @@ export async function runChild({ seat, tools = "read", promptFile, outFile, work
       return value;
     } catch (e) {
       last = e;
-      // claude prints this and exits 1 at --max-turns: a retry hits the same limit, so fail at once.
+      // A retry hits the same limit: the seat drops at once. claude prints this and exits 1 at --max-turns.
+      if (e.timedOut) throw new SeatDropped(seat, "timeout", e.message);
       const text = `${e.message}\n${await readFile(outFile, "utf8").catch(() => "")}`;
-      if (/Reached max turns|error_max_turns/.test(text)) throw new ChildFailed(`${harness}:${seat.model} hit its max_turns (${seat.max_turns}); not retried`);
+      if (/Reached max turns|error_max_turns/.test(text)) throw new SeatDropped(seat, "turn limit", `max_turns (${seat.max_turns})`);
     }
   }
   throw new ChildFailed(`${fake ? "fake" : harness}:${seat.model} failed after ${retries + 1} attempts: ${last.message}`);
