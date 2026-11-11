@@ -7,6 +7,8 @@ agent targets:
 - `claude/` — skills for Claude Code (`~/.claude/skills/`)
 - `shared/` — skills whose content works for both agents verbatim (installed to both)
 
+Docs: [docs/README.md](docs/README.md) — install, quick start, how jev and the fix pipeline work.
+
 ## Install
 
 ```sh

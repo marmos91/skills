@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 500" width="820" height="500" role="img" aria-labelledby="t">
+  <title id="t">How the skills relate: repo-audit, repo-audit-fix, jev, refute-root-cause</title>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#57606a"/>
+    </marker>
+    <marker id="arr-jev" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8250df"/>
+    </marker>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 12px; fill: #1f2328; }
+      .h { font-size: 14px; font-weight: 600; }
+      .c { text-anchor: middle; }
+      .skill { fill: #f6f8fa; stroke: #57606a; stroke-width: 1.5; }
+      .doc { fill: #ffffff; stroke: #57606a; stroke-width: 1.5; stroke-dasharray: 4 3; }
+      .jev { fill: #f3eefe; stroke: #8250df; stroke-width: 2; }
+      .edge { stroke: #57606a; stroke-width: 1.5; fill: none; }
+      .jedge { stroke: #8250df; stroke-width: 1.5; fill: none; }
+    </style>
+  </defs>
+  <rect width="820" height="500" rx="8" fill="#ffffff"/>
+
+  <!-- legend -->
+  <rect x="20" y="14" width="16" height="12" rx="2" class="skill"/>
+  <text x="42" y="24">skill or system</text>
+  <rect x="150" y="14" width="16" height="12" rx="2" class="jev"/>
+  <text x="172" y="24">jev</text>
+  <rect x="220" y="14" width="16" height="12" rx="2" class="doc"/>
+  <text x="242" y="24">file or GitHub artifact</text>
+
+  <!-- top: issues -->
+  <rect x="400" y="44" width="170" height="44" rx="6" class="doc"/>
+  <text x="485" y="64" class="h c">GitHub issues</text>
+  <text x="485" y="80" class="c">optional, one per epic</text>
+  <path d="M270 140 V66 H398" class="edge" marker-end="url(#arr)"/>
+  <text x="334" y="59" class="c">audit.sh issues</text>
+  <path d="M570 66 H705 V138" class="edge" marker-end="url(#arr)"/>
+  <text x="640" y="59" class="c">Fixes #N</text>
+
+  <!-- main row -->
+  <rect x="20" y="150" width="120" height="70" rx="6" class="skill"/>
+  <text x="80" y="181" class="h c">Repository</text>
+  <text x="80" y="199" class="c">BASE_REF</text>
+
+  <rect x="180" y="140" width="180" height="90" rx="6" class="skill"/>
+  <text x="270" y="166" class="h c">repo-audit</text>
+  <text x="270" y="186" class="c">recon, find, verify,</text>
+  <text x="270" y="202" class="c">roadmap, report</text>
+  <text x="270" y="218" class="c">(read-only)</text>
+
+  <rect x="400" y="150" width="170" height="70" rx="6" class="doc"/>
+  <text x="485" y="180" class="h c">epics.json</text>
+  <text x="485" y="199" class="h c">findings.json</text>
+
+  <rect x="610" y="140" width="190" height="90" rx="6" class="skill"/>
+  <text x="705" y="166" class="h c">repo-audit-fix</text>
+  <text x="705" y="186" class="c">one pipeline per epic:</text>
+  <text x="705" y="202" class="c">plan, implement, gate</text>
+
+  <line x1="140" y1="185" x2="178" y2="185" class="edge" marker-end="url(#arr)"/>
+  <line x1="360" y1="185" x2="398" y2="185" class="edge" marker-end="url(#arr)"/>
+  <line x1="570" y1="185" x2="608" y2="185" class="edge" marker-end="url(#arr)"/>
+
+  <!-- PRs -->
+  <rect x="610" y="300" width="190" height="56" rx="6" class="doc"/>
+  <text x="705" y="323" class="h c">Pull requests</text>
+  <text x="705" y="341" class="c">one per epic; you merge</text>
+  <line x1="760" y1="230" x2="760" y2="298" class="edge" marker-end="url(#arr)"/>
+
+  <!-- jev -->
+  <rect x="340" y="300" width="200" height="70" rx="6" class="jev"/>
+  <text x="440" y="324" class="h c">jev</text>
+  <text x="440" y="343" class="c">yes/no oracle: exit 0 / 1 / 2</text>
+  <text x="440" y="359" class="c">also a CLI for any script</text>
+  <path d="M610 215 H590 V335 H542" class="jedge" marker-end="url(#arr-jev)"/>
+  <text x="440" y="292" class="c" style="fill:#8250df">plan coverage check, per finding</text>
+
+  <!-- SystemOne -->
+  <rect x="40" y="300" width="200" height="70" rx="6" class="skill"/>
+  <text x="140" y="328" class="h c">Mimir SystemOne</text>
+  <text x="140" y="347" class="c">external API</text>
+  <line x1="338" y1="335" x2="242" y2="335" class="jedge" marker-end="url(#arr-jev)"/>
+  <text x="290" y="327" class="c">POST</text>
+
+  <!-- refute-root-cause -->
+  <rect x="40" y="410" width="400" height="66" rx="6" class="skill"/>
+  <text x="240" y="433" class="h c">refute-root-cause (pi only, stands alone)</text>
+  <text x="240" y="452" class="c">3 refuter agents + 1 alternatives agent</text>
+  <text x="240" y="468" class="c">try to kill a claimed root cause before a fix</text>
+
+  <text x="470" y="433">repo-audit, repo-audit-fix and review-lens.sh</text>
+  <text x="470" y="450">run headless pi -p children on Mimir models.</text>
+  <text x="470" y="467">Both run under pi or Claude Code.</text>
+</svg>

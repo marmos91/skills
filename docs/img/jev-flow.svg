@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 680" width="780" height="680" role="img" aria-labelledby="t">
+  <title id="t">One jev call: input, request, SystemOne, validate, decide, exit code</title>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#57606a"/>
+    </marker>
+    <marker id="arr-fail" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#cf222e"/>
+    </marker>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 12px; fill: #1f2328; }
+      .h { font-size: 14px; font-weight: 600; }
+      .c { text-anchor: middle; }
+      .jev { fill: #f3eefe; stroke: #8250df; stroke-width: 2; }
+      .ext { fill: #f6f8fa; stroke: #57606a; stroke-width: 1.5; }
+      .ok { fill: #effaf1; stroke: #1a7f37; stroke-width: 1.5; }
+      .no { fill: #f6f8fa; stroke: #57606a; stroke-width: 1.5; }
+      .fail { fill: #fff5f5; stroke: #cf222e; stroke-width: 1.5; }
+      .edge { stroke: #57606a; stroke-width: 1.5; fill: none; }
+      .fedge { stroke: #cf222e; stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+    </style>
+  </defs>
+  <rect width="780" height="680" rx="8" fill="#ffffff"/>
+
+  <!-- legend -->
+  <rect x="20" y="14" width="16" height="12" rx="2" class="jev"/>
+  <text x="42" y="24">jev CLI step</text>
+  <rect x="140" y="14" width="16" height="12" rx="2" class="ext"/>
+  <text x="162" y="24">external API</text>
+  <line x1="262" y1="20" x2="300" y2="20" class="fedge"/>
+  <text x="306" y="24">no-answer path (exit 2)</text>
+
+  <!-- 1 input -->
+  <rect x="60" y="56" width="360" height="64" rx="6" class="jev"/>
+  <text x="240" y="78" class="h c">Input</text>
+  <text x="240" y="96" class="c">jev ask QUESTION -t TEXT   (no -t: TEXT from stdin)</text>
+  <text x="240" y="112" class="c">jev doubt CLAIM</text>
+
+  <!-- 2 build -->
+  <rect x="60" y="150" width="360" height="76" rx="6" class="jev"/>
+  <text x="240" y="172" class="h c">Build request</text>
+  <text x="240" y="191" class="c">state.text = TEXT (doubt: the CLAIM)</text>
+  <text x="240" y="207" class="c">criteria.true.text = QUESTION (doubt: fixed</text>
+  <text x="240" y="221" class="c">question "This claim is doubtful or likely false.")</text>
+
+  <!-- 3 SystemOne -->
+  <rect x="60" y="256" width="360" height="76" rx="6" class="ext"/>
+  <text x="240" y="278" class="h c">POST {base-url}/systemone</text>
+  <text x="240" y="297" class="c">Bearer key from ~/.config/mimir/api-key</text>
+  <text x="240" y="313" class="c">timeout 30 s; redirects refused</text>
+
+  <!-- 4 validate -->
+  <rect x="60" y="362" width="360" height="76" rx="6" class="jev"/>
+  <text x="240" y="384" class="h c">Validate response</text>
+  <text x="240" y="403" class="c">answers.q.probabilities.yes, .no and confidence</text>
+  <text x="240" y="419" class="c">must be numbers in [0, 1]</text>
+
+  <!-- 5 decide -->
+  <rect x="60" y="468" width="360" height="90" rx="6" class="jev"/>
+  <text x="240" y="490" class="h c">Decide</text>
+  <text x="240" y="509" class="c">confidence &lt; MIN (--confidence, default 0) → unsure</text>
+  <text x="240" y="525" class="c">else P(yes) ≥ 0.5 → yes (ask) / doubted (doubt)</text>
+  <text x="240" y="541" class="c">else → no (ask) / trusted (doubt)</text>
+
+  <!-- main flow arrows -->
+  <line x1="240" y1="120" x2="240" y2="148" class="edge" marker-end="url(#arr)"/>
+  <line x1="240" y1="226" x2="240" y2="254" class="edge" marker-end="url(#arr)"/>
+  <line x1="240" y1="332" x2="240" y2="360" class="edge" marker-end="url(#arr)"/>
+  <line x1="240" y1="438" x2="240" y2="466" class="edge" marker-end="url(#arr)"/>
+
+  <!-- exits 0 / 1 -->
+  <line x1="145" y1="558" x2="145" y2="598" class="edge" marker-end="url(#arr)"/>
+  <text x="153" y="583">P(yes) ≥ 0.5</text>
+  <line x1="335" y1="558" x2="335" y2="598" class="edge" marker-end="url(#arr)"/>
+  <text x="343" y="583">P(yes) &lt; 0.5</text>
+  <rect x="60" y="600" width="170" height="50" rx="6" class="ok"/>
+  <text x="145" y="621" class="h c">exit 0</text>
+  <text x="145" y="639" class="c">yes / doubted</text>
+  <rect x="250" y="600" width="170" height="50" rx="6" class="no"/>
+  <text x="335" y="621" class="h c">exit 1</text>
+  <text x="335" y="639" class="c">no / trusted</text>
+
+  <!-- exit 2 -->
+  <rect x="500" y="150" width="260" height="500" rx="6" class="fail"/>
+  <text x="630" y="172" class="h c">exit 2: no answer</text>
+  <text x="515" y="194">missing credentials, empty text,</text>
+  <text x="515" y="210">usage error</text>
+  <text x="515" y="300">HTTP error, timeout, unreachable,</text>
+  <text x="515" y="316">30x redirect</text>
+  <text x="515" y="406">malformed response, value</text>
+  <text x="515" y="422">outside [0, 1]</text>
+  <text x="515" y="519">verdict "unsure"</text>
+  <text x="515" y="535">(confidence below MIN)</text>
+  <text x="515" y="612">Any uncaught crash also exits 2.</text>
+  <text x="515" y="630">Never read exit 2 as "no".</text>
+
+  <line x1="420" y1="188" x2="498" y2="188" class="fedge" marker-end="url(#arr-fail)"/>
+  <line x1="420" y1="294" x2="498" y2="294" class="fedge" marker-end="url(#arr-fail)"/>
+  <line x1="420" y1="400" x2="498" y2="400" class="fedge" marker-end="url(#arr-fail)"/>
+  <line x1="420" y1="513" x2="498" y2="513" class="fedge" marker-end="url(#arr-fail)"/>
+</svg>
