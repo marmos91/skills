@@ -96,11 +96,28 @@ test("racers on a stale lock: exactly one wins (dead pid, or a legacy lock with 
       const s = tmp();
       seed(s);
       const outs = (await Promise.all(Array.from({ length: 8 }, () => output(child(RACER, s))))).map((r) => r.out.trim());
-      assert.equal(outs.filter((o) => o === "WIN").length, 1, `${name}: ${outs.join(",")}`);
+      const wins = outs.filter((o) => o === "WIN").length;
+      // deadMutex: a racer may strand the mutex (R19), so none may win; never two.
+      assert.ok(name === "deadMutex" ? wins <= 1 : wins === 1, `${name}: ${outs.join(",")}`);
       assert.ok(outs.every((o) => o === "WIN" || o === "Locked"), `${name}: ${outs.join(",")}`);
-      assert.deepEqual(readdirSync(s), [], name); // winner released on exit; no temp, stale or mutex dirs left
+      acquireLock(s)(); // the next run sweeps any leftovers of dead racers
+      assert.deepEqual(readdirSync(s), [], name);
     }
   }
+});
+
+test("200 acquire/release cycles across 4 processes: no errors, no empty lock left", async () => {
+  const s = tmp();
+  const cycler = `import { acquireLock } from ${JSON.stringify(stateUrl)};
+    let n = 0, errs = [];
+    while (n < 50) {
+      try { const rel = acquireLock(process.argv[1]); n++; rel(); }
+      catch (e) { if (e.name !== "Locked") { errs.push(e.code || e.message); break; } }
+    }
+    console.log(errs.length ? "ERR " + errs.join(",") : "OK " + n);`;
+  const outs = (await Promise.all(Array.from({ length: 4 }, () => output(child(cycler, s))))).map((r) => r.out.trim());
+  assert.deepEqual(outs, ["OK 50", "OK 50", "OK 50", "OK 50"]);
+  assert.deepEqual(readdirSync(s), []);
 });
 
 test("a young lock with no pid file is held; dead temp and stale leftovers are swept", () => {

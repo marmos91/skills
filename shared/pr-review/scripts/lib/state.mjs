@@ -32,7 +32,10 @@ const releaseAll = () => { for (const d of held) release(d); };
 function release(dir) {
   held.delete(dir);
   try { if (Number(readFileSync(join(dir, "pid"), "utf8")) !== process.pid) return; } catch { return; }
-  rmSync(dir, { recursive: true, force: true });
+  // Rename first: removing in place leaves an empty dir for a moment, and a racer's claim can land on it.
+  const gone = `${dir}.stale.${process.pid}.${rand()}`;
+  try { renameSync(dir, gone); } catch { return; }
+  rmSync(gone, { recursive: true, force: true });
 }
 
 let installed = false;
@@ -73,8 +76,10 @@ function moveAside(dir, deadRaw) {
   return false;
 }
 
-// Best effort: temp and moved-aside dirs whose named pid is dead.
+// Best effort: temp and moved-aside dirs whose named pid is dead, and a takeover mutex whose holder died.
 function sweep(repoState) {
+  const mutex = join(repoState, "lock.takeover"), m = rawPid(mutex);
+  if (m && !alive(Number(m))) moveAside(mutex, m);
   try {
     for (const f of readdirSync(repoState)) {
       const pid = Number(/^lock(?:\.takeover)?\.(?:tmp|stale)\.(\d+)\./.exec(f)?.[1]);
