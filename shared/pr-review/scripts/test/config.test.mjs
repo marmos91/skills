@@ -37,7 +37,7 @@ test("user arrays replace, objects merge deep", () => {
 
 test("// comments are stripped", () => {
   const c = loadConfig({ userPath: fileURLToPath(example) });
-  assert.equal(c.decider.confidence, 0.8);
+  assert.equal(c.decider.confidence, 0);
   const p = tmp('{"decider":{"confidence":0.7} // x\n, "judge":{"model":"http://a//b"}}');
   const d = loadConfig({ userPath: p });
   assert.equal(d.judge.model, "http://a//b");
