@@ -65,7 +65,7 @@ test("status shows a stale lock, open questions, an unfinished run and the inter
   writeFileSync(join(fx.state, "lock", "pid"), dead);
   const run = join(fx.state, "pr", "7", "runs", "abc123-1");
   mkdirSync(join(run, "round1"), { recursive: true });
-  writeFileSync(join(run, "run.json"), JSON.stringify({ effort: "low", lenses: ["correctness"], missing: [] }));
+  writeFileSync(join(run, "run.json"), JSON.stringify({ effort: "low", lenses: ["correctness"], missing: [], planned: 9 }));
   writeFileSync(join(run, "frame.done"), "");
   writeFileSync(join(run, "round1", "all~0.done"), "");
   writeFileSync(join(fx.state, "pr", "7", "state.json"), JSON.stringify({ reviews: 2, replies: { t1: 1, t2: 2 } }));
@@ -85,8 +85,8 @@ test("status shows a stale lock, open questions, an unfinished run and the inter
   assert.equal(pr.reviews, 2);
   assert.equal(pr.replies, 3);
   assert.equal(pr.questions, 1);
-  // low effort: 2 seats in round 1 + 2 votes + 2 judge calls.
-  assert.deepEqual(pr.runs, [{ sha: "abc123", stage: "round1", children: { done: 1, total: 6 } }]);
+  // the planned count saved in run.json (the run's own merged config), not one computed from the user config
+  assert.deepEqual(pr.runs, [{ sha: "abc123", stage: "round1", children: { done: 1, total: 9 } }]);
 });
 
 test("doctor: a seat whose probe fails is named and the exit is 1", async (t) => {

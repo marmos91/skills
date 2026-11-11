@@ -1,7 +1,7 @@
 // Review pipeline (spec 6): frame -> round1 -> merge -> round2 -> tally -> decide -> compose -> post.
 // Every child output and stage gets a marker (spec 8), so a rerun continues where the last run stopped.
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
 import * as github from "./github.mjs";
@@ -10,7 +10,7 @@ import { LENSES, applyEffort, loadConfig, pickEffort, plannedChildren, seatId, s
 import { frame as realFrame, git, HeadMoved, DiffTooLarge } from "./frame.mjs";
 import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.mjs";
 import { tally } from "./tally.mjs";
-import { allowedSeverities, filterNew, fingerprint } from "./convergence.mjs";
+import { filterNew, fingerprint } from "./convergence.mjs";
 import { parseHunks, place } from "./hunks.mjs";
 import { verdict } from "./verdict.mjs";
 import { redact, scanOutbound } from "./secrets.mjs";
@@ -46,7 +46,7 @@ const config0 = (o, maxDiffLines) => {
 /**
  * Review one PR. -> { exit: 0|3|4, summary, runDir?, url?, event?, questions?, planned? }
  * Options: repo, n, mode ("interactive"|"loop"), effort, dryRun, until, restart, lenses, maxDiffLines, configPath, repoDir;
- * injectable gh, runChild, decide, frame, hygiene, queue(note), log(line); lock=false when the caller holds it.
+ * injectable gh, runChild, decide, frame, hygiene, log(line); lock=false when the caller holds it.
  */
 export async function review(opts) {
   const { repo, n, mode = "interactive", lock = true } = opts;
@@ -55,7 +55,6 @@ export async function review(opts) {
   const repoState = stateRoot(repo);
   const o = {
     gh: github, runChild: realRunChild, decide: realDecide, stopping: () => stopping, frame: realFrame, hygiene: realHygiene, log: () => {},
-    queue: (note) => { mkdirSync(repoState, { recursive: true }); appendFileSync(join(repoState, "queue.jsonl"), JSON.stringify(note) + "\n"); },
     ...opts, mode, repoState,
   };
   // Reentrant: the loop calls review() while it holds the repo lock.
@@ -181,11 +180,12 @@ async function once(o, restart) {
     if (effort === "auto") effort = pickEffort(f.changedPaths, config);
     const lenses = LENSES.filter((l) => config.lenses[l].enabled && (!o.lenses || o.lenses.includes(l)));
     // A lens the user runs but this run skips (--lens, or off in the repo config) counts as failed: no APPROVE.
-    save(runFile, { effort, lenses, missing: LENSES.filter((l) => userConfig.lenses[l].enabled && !lenses.includes(l)) });
+    // planned: the count for this run's merged config, which status shows.
+    save(runFile, { effort, lenses, missing: LENSES.filter((l) => userConfig.lenses[l].enabled && !lenses.includes(l)), planned: plannedChildren(applyEffort(config, effort), lenses) });
   }
   const run = readJson(runFile);
   config = applyEffort(config, run.effort);
-  const planned = plannedChildren(config, run.lenses);
+  const planned = run.planned ?? plannedChildren(config, run.lenses);
   log(`effort ${run.effort}: ${planned} children planned; seats ${config.seats.map(seatId).join(", ")}; judge ${seatId(config.judge)}`);
 
   const finish = (stage, extra = {}) => { markDone(runDir, FINAL_STAGE); return { exit: 0, runDir, planned, summary: `stopped after ${stage}`, ...extra }; };
@@ -355,11 +355,12 @@ async function once(o, restart) {
   const hunks = parseHunks(readFileSync(join(f.ctxDir, "diff.patch"), "utf8"));
   const permalink = `https://github.com/${repo}/blob/${f.headSha}`;
 
+  const warnings = (hyg.warnings ?? []).map((w) => `warning: ${w}`);
   if (o.dryRun) {
     const p = place(items.map((x) => ({ file: x.file, line: x.line, body: x.body })), hunks, permalink);
     const file = join(runDir, "review.md");
     writeFileSync(file, [`event: ${v().event}`, bodyOf(p.body, "dry-run"), ...p.inline.map((x) => `---\n${x.path}:${x.line}\n${x.body}`)].join("\n\n") + "\n");
-    return finish("compose (dry run)", { dryRun: true, file, ...v(), summary: `dry run: review written to ${file}; ${planned} children planned` });
+    return finish("compose (dry run)", { dryRun: true, file, ...v(), summary: [`dry run: review written to ${file}; ${planned} children planned`, ...warnings].join("\n") });
   }
 
   // Post (spec 6.10). CI may have changed since frame: read it again; a failed read is unknown and blocks APPROVE.
@@ -413,7 +414,6 @@ async function once(o, restart) {
   // Step 6: GitHub is the source of truth; a marker hit means an earlier, interrupted run posted.
   if (!seen.has(key)) {
     if (await gh.pendingReview(repo, n)) {
-      o.queue({ kind: "review", reason: "pending-review", pr: n, sha: f.headSha });
       return { exit: 0, runDir, planned, skipped: true, summary: "skipped: you have a pending review on this PR; submit or delete it, then run again" };
     }
     url = (await gh.postReview(repo, n, { commitOID: f.headSha, event, body, threads: p.inline })).url;
@@ -453,8 +453,12 @@ async function once(o, restart) {
   markDone(runDir, FINAL_STAGE);
   for (const id of applied) appliedAnswer(repoState, id);
   return {
-    exit: 0, runDir, planned, url, event, queueApprove, reasons, questions: questionFiles(),
-    summary: `${url ? `posted ${event}: ${url}` : "already posted (marker found on GitHub)"}; ${clean.length} inline finding(s)${open.length ? `; ${open.length} question(s) queued` : ""}`,
+    // Interactive: a comment held by the secret scan is an open question, so exit 3. The rerun takes the answer-only path.
+    exit: open.length && mode === "interactive" ? 3 : 0, runDir, planned, url, event, queueApprove, reasons, questions: questionFiles(),
+    summary: [
+      `${url ? `posted ${event}: ${url}` : "already posted (marker found on GitHub)"}; ${clean.length} inline finding(s)${open.length ? `; ${open.length} question(s) queued` : ""}`,
+      ...warnings,
+    ].join("\n"),
   };
 }
 

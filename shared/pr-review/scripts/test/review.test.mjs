@@ -111,9 +111,8 @@ const happy = (over = {}) => ({
 async function go(fx, answers, over = {}) {
   const run = fakeRun(answers);
   const decide = over.decide ?? (async () => ({ decision: "unsure", raw: null }));
-  const queued = [];
-  const r = await review({ repo: REPO, n: N, repoDir: fx.repoDir, runChild: run, decide, routerUp: true, queue: (x) => queued.push(x), ...over });
-  return { r, run, queued };
+  const r = await review({ repo: REPO, n: N, repoDir: fx.repoDir, runChild: run, decide, routerUp: true, ...over });
+  return { r, run };
 }
 
 test("happy path posts one review with inline comments and the marker", async () => {
@@ -235,7 +234,12 @@ test("secret in a finding -> that post blocked, question queued", async () => {
   const fx = fixture(); routes(fx);
   const token = "ghp_" + "A".repeat(36);
   const { r } = await go(fx, happy({ compose: { body: "Summary.", comments: [{ id: "c1", body: `**must:** token ${token} leaks` }] } }));
-  assert.equal(r.exit, 0, r.summary);
+  assert.equal(r.exit, 3, "interactive: the held comment is an open question");
+  assert.equal(r.questions.length, 1);
+  // a rerun before the answer posts nothing more
+  const before = await go(fx, happy());
+  assert.equal(before.r.exit, 0, before.r.summary);
+  assert.equal(posts(fx).length, 1);
   const p = posts(fx);
   assert.equal(p[0].threads.length, 0);
   assert.ok(!JSON.stringify(mutations(fx)).includes(token));
@@ -256,13 +260,13 @@ test("secret in a finding -> that post blocked, question queued", async () => {
   assert.ok(!JSON.stringify(mutations(fx)).includes(token));
 });
 
-test("own pending review not owned by the run -> skip and queue a note", async () => {
+test("own pending review not owned by the run -> skip", async () => {
   const fx = fixture(); routes(fx, { pending: { id: "PRR_1" } });
-  const { r, queued } = await go(fx, happy());
+  const { r } = await go(fx, happy());
   assert.equal(r.exit, 0);
   assert.equal(r.skipped, true);
   assert.equal(posts(fx).length, 0);
-  assert.deepEqual(queued.map((q) => q.reason), ["pending-review"]);
+  assert.equal(existsSync(join(fx.state, "queue.jsonl")), false, "nothing reads a note file");
   assert.equal(existsSync(join(r.runDir, "post.done")), false, "the run stays open for a later post");
 });
 
@@ -621,7 +625,7 @@ test("answer-only rerun, repro a: a held must answered drop -> nothing posted, n
   const fx = fixture(); routes(fx);
   const token = "ghp_" + "C".repeat(36);
   const { r } = await go(fx, happy({ compose: { body: "Summary.", comments: [{ id: "c1", body: `**must:** ${token}` }] } }));
-  assert.equal(r.exit, 0, r.summary);
+  assert.equal(r.exit, 3, r.summary);
   const q = openQuestions(fx.state);
   assert.equal(q.length, 1);
   answer(fx.state, q[0].id, "drop");
@@ -790,4 +794,13 @@ test("a diff above the cap is a clean exit 1 with a hint; --max-diff-lines raise
   const ok = await go(fx, happy(), { maxDiffLines: 1000 });
   assert.equal(ok.r.exit, 0, ok.r.summary);
   assert.equal(posts(fx).length, 1);
+});
+
+test("hygiene warnings are in the run summary; run.json keeps the planned child count", async () => {
+  const fx = fixture(); routes(fx);
+  const { r } = await go(fx, happy(), { hygiene: async () => ({ findings: [], warnings: ["hygiene child failed"] }) });
+  assert.equal(r.exit, 0, r.summary);
+  assert.match(r.summary, /warning: hygiene child failed/);
+  assert.equal(JSON.parse(readFileSync(join(r.runDir, "run.json"), "utf8")).planned, r.planned);
+  assert.ok(r.planned > 0);
 });

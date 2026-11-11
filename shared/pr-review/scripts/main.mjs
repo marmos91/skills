@@ -83,8 +83,6 @@ function status(repo) {
   const questions = openQuestions(rs).map((q) => ({ id: q.id, pr: q.pr, file: join(rs, "questions", `${q.id}.md`) }));
   const todo = existsSync(join(rs, "todo.md")) ? readFileSync(join(rs, "todo.md"), "utf8") : "";
   const t = readJson(join(rs, "tick.json"));
-  let cfg = null;
-  try { cfg = loadConfig({ userPath: USER_CONFIG }); } catch {}
   const prs = ls(join(rs, "pr")).filter((n) => /^\d+$/.test(n)).map(Number).sort((a, b) => a - b).map((n) => {
     let st;
     try { st = prState(rs, n); } catch (e) { return { pr: n, error: `state.json unreadable: ${e.message}` }; }
@@ -92,10 +90,7 @@ function status(repo) {
     const runs = ls(runsDir).filter((d) => !done(join(runsDir, d), FINAL_STAGE)).map((d) => {
       const dir = join(runsDir, d), run = readJson(join(dir, "run.json"));
       const childDone = ls(dir).reduce((k, s) => k + ls(join(dir, s)).filter((f) => f.endsWith(".done")).length, 0);
-      // shortcut: total uses the user config, not the repo config the run loaded; store it in run.json if they drift.
-      let total = null;
-      try { if (cfg && run) total = plannedChildren(applyEffort(cfg, run.effort), run.lenses); } catch {}
-      return { sha: d.slice(0, d.lastIndexOf("-")), stage: STAGES.find((s) => !done(dir, s)), children: { done: childDone, total } };
+      return { sha: d.slice(0, d.lastIndexOf("-")), stage: STAGES.find((s) => !done(dir, s)), children: { done: childDone, total: run?.planned ?? null } };
     });
     const replies = Object.values(st.replies ?? {}).reduce((a, b) => a + (Number(b) || 0), 0);
     return { pr: n, reviews: st.reviews, replies, lastReviewedSha: st.lastReviewedSha, questions: questions.filter((q) => q.pr === n).length, runs };
