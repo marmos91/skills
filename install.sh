@@ -40,16 +40,9 @@ unlink() { # unlink <dest-dir>
     done
 }
 
-for l in "$BIN_DIR"/jev; do
-    [ -L "$l" ] || continue
-    case "$(readlink "$l")" in
-        "$REPO"/*) rm "$l"; echo "  removed bin/$(basename "$l")" ;;
-    esac
-done
-
 if [ "${1:-}" = "--rm" ]; then
-    echo "Removing $REPO symlinks from agent skill dirs:"
-    unlink "$PI_DIR"; unlink "$CLAUDE_DIR"
+    echo "Removing $REPO symlinks from agent skill dirs and $BIN_DIR:"
+    unlink "$PI_DIR"; unlink "$CLAUDE_DIR"; unlink "$BIN_DIR"
     exit 0
 fi
 
@@ -65,13 +58,7 @@ echo "  pi: $PI_DIR";      install_group "$REPO/pi" "$PI_DIR"
 echo "  claude: $CLAUDE_DIR"; install_group "$REPO/claude" "$CLAUDE_DIR"
 echo "  shared -> both";     install_group "$REPO/shared" "$PI_DIR"; install_group "$REPO/shared" "$CLAUDE_DIR"
 
-# bin tools: link every executable skill script onto PATH (jev)
-mkdir -p "$BIN_DIR"
-for d in "$REPO/shared"/*/; do
-    d="${d%/}"
-    [ -d "$d/bin" ] && for b in "$d"/bin/*; do link "$b" "$BIN_DIR"; done
-    # skills that are name-matched single scripts (shared/<name>/<name>.py + jev shim)
-    [ -x "$d/jev" ] && link "$d/jev" "$BIN_DIR"
-done
+echo "  tools: $BIN_DIR"; mkdir -p "$BIN_DIR"
+for b in "$REPO"/shared/*/bin/*; do [ -e "$b" ] && link "$b" "$BIN_DIR"; done
 
 echo "Done. (Uninstall: ./install.sh --rm)"
