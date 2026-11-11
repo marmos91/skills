@@ -142,7 +142,9 @@ replaces the user level for one run.
   can stay commented.
 - Objects merge deep. Arrays (`seats`, `lenses.*.seats`) replace.
 - The repo level may set only: `lenses.*.enabled`, `loop.authors_ignore`,
-  `loop.max_prs_per_run`, `review.guidance` (extra guidance file paths). The
+  `loop.max_prs_per_run`, `review.guidance` (extra guidance file paths),
+  `hygiene.enabled`, and additions to `effort_auto.high_paths` (appended to
+  the user list, never replacing it). The
   user level owns `seats`, `judge`, `decider` and `round1`. The loader
   rejects other keys at the repo level.
 
