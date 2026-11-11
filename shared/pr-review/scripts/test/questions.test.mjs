@@ -84,3 +84,10 @@ test("snippet fence outgrows backtick runs; secrets are redacted", () => {
   assert.ok(!md.includes(key));
   assert.ok(!readFileSync(join(r, "questions", `${id}.json`), "utf8").includes(key));
 });
+
+test("secrets in sides and failure are redacted in json and md", () => {
+  const r = tmp();
+  const key = "AKIA" + "ABCDEFGHIJKLMNOP";
+  const id = queueQuestion(r, q({ sides: { keep: `k ${key}`, drop: `d ${key}` }, failure: `f ${key}` }));
+  for (const ext of ["json", "md"]) assert.ok(!readFileSync(join(r, "questions", `${id}.${ext}`), "utf8").includes(key), ext);
+});

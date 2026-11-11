@@ -3,7 +3,8 @@ import { accessSync, constants, realpathSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { redact } from "./secrets.mjs";
-import { ENV_OK } from "./child.mjs";
+import { ENV_OK } from "./env.mjs";
+import { track, untrack } from "./child.mjs";
 
 const QUESTION = "This finding describes a real defect that this PR introduces.";
 const UNSURE = { decision: "unsure", raw: null };
@@ -39,6 +40,7 @@ export function decide(cluster, votes, codeHunk, config, { env = process.env, ti
     let out = "", settled = false;
     const p = spawn(bin, args, { env, detached: true, stdio: ["pipe", "pipe", "ignore"] });
     const end = (r) => { if (!settled) { settled = true; clearTimeout(timer); resolve(r); } };
+    track(p.pid);
     const killGroup = () => { try { process.kill(-p.pid, "SIGKILL"); } catch {} };
     const timer = setTimeout(() => { killGroup(); end(UNSURE); }, timeoutMs);
     p.stdout.on("data", (d) => (out += d));
@@ -47,6 +49,7 @@ export function decide(cluster, votes, codeHunk, config, { env = process.env, ti
     p.on("close", (code) => {
       let raw = null;
       try { raw = JSON.parse(out); } catch { /* raw stays null */ }
+      untrack(p.pid);
       killGroup(); // reap stragglers
       // R22: older jev builds exit 1 on network errors, so settle only when the verdict agrees with the exit code.
       const yes = code === 0 && ["yes", "doubted"].includes(raw?.verdict);

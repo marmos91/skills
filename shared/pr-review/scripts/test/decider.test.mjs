@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync, existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decide } from "../lib/decider.mjs";
@@ -106,4 +107,12 @@ test("R22: exit 1 without JSON or with a mismatching verdict is unsure", async (
   assert.equal((await run("0", '{"verdict":"no"}')).decision, "unsure");
   assert.equal((await run("1", '{"verdict":"trusted"}')).decision, "rejected");
   assert.equal((await run("0", '{"verdict":"doubted"}')).decision, "agreed");
+});
+
+test("importing decider installs no signal listeners; HOME reaches jev", async () => {
+  const code = `const b=[process.listenerCount("SIGINT"),process.listenerCount("SIGTERM")];await import(${JSON.stringify(new URL("../lib/decider.mjs", import.meta.url).href)});console.log(JSON.stringify(b)===JSON.stringify([process.listenerCount("SIGINT"),process.listenerCount("SIGTERM")]))`;
+  const r = spawnSync(process.execPath, ["-e", code], { encoding: "utf8" });
+  assert.equal(r.stdout.trim(), "true", r.stderr);
+  const { ENV_OK } = await import("../lib/env.mjs");
+  assert.ok(ENV_OK.test("HOME"));
 });

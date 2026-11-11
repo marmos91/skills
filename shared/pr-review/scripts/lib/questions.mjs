@@ -49,7 +49,10 @@ ${OPTIONS.map((o) => `- ${o}`).join("\n")}
 export function queueQuestion(repoState, q) {
   const id = `${q.pr}-${q.fingerprint.slice(0, 8)}`;
   if (existsSync(jsonFile(repoState, id))) return id;
-  q = { ...q, snippet: redact(q.snippet), finding: JSON.parse(redact(JSON.stringify(q.finding))) };
+  const r = (x) => (typeof x === "string" ? redact(x) : x);
+  const finding = Object.fromEntries(Object.entries(q.finding).map(([k, v]) => [k, r(v)]));
+  const sides = { keep: r(q.sides.keep), drop: r(q.sides.drop) };
+  q = { ...q, snippet: r(q.snippet), failure: r(q.failure), finding, sides };
   const rec = {
     id, pr: q.pr, sha: q.sha, fingerprint: q.fingerprint, finding: q.finding, sides: q.sides,
     options: [...OPTIONS], createdAt: new Date().toISOString(), askedAt: null, answer: null, answeredAt: null,

@@ -6,22 +6,32 @@ import { resolveHarness } from "./config.mjs";
 import { validate } from "./schema.mjs";
 
 const HARNESS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "harness");
-export const ENV_OK = /^(PATH|HOME|USER|LOGNAME|SHELL|LANG|LC_.*|TMPDIR|TERM|XDG_.*|ANTHROPIC_BASE_URL|ANTHROPIC_CUSTOM_HEADERS|CLAUDE_CODE_OAUTH_TOKEN|CLAUDE_CONFIG_DIR|CLAUDE_CODE_MAX_CONTEXT_TOKENS|(?:HTTP|HTTPS|NO)_PROXY|(?:http|https|no)_proxy|SSL_CERT_FILE|NODE_EXTRA_CA_CERTS|SEAT_PROVIDER|SEAT_WORKTREE|PR_REVIEW_.*)$/;
+export { ENV_OK } from "./env.mjs";
+import { ENV_OK } from "./env.mjs";
 
 // Live child process groups: seats must not outlive the engine.
 const live = new Set();
 const killAll = (sig) => { for (const pid of live) try { process.kill(-pid, sig); } catch {} };
-process.on("exit", () => killAll("SIGKILL"));
-for (const [sig, n] of [["SIGINT", 2], ["SIGTERM", 15]]) {
-  process.on(sig, () => {
-    killAll("SIGTERM");
-    const start = Date.now();
-    const iv = setInterval(() => {
-      for (const pid of live) try { process.kill(-pid, 0); } catch { live.delete(pid); }
-      if (!live.size || Date.now() - start > 5000) { killAll("SIGKILL"); process.exit(128 + n); }
-    }, 100);
-  });
+let handlersInstalled = false;
+function installHandlers() {
+  if (handlersInstalled) return;
+  handlersInstalled = true;
+  process.on("exit", () => killAll("SIGKILL"));
+  for (const [sig, n] of [["SIGINT", 2], ["SIGTERM", 15]]) {
+    process.on(sig, () => {
+      killAll("SIGTERM");
+      const start = Date.now();
+      const iv = setInterval(() => {
+        for (const pid of live) try { process.kill(-pid, 0); } catch { live.delete(pid); }
+        if (!live.size || Date.now() - start > 5000) { killAll("SIGKILL"); process.exit(128 + n); }
+      }, 100);
+    });
+  }
 }
+
+/** Register a detached child's process group so an engine signal kills it. */
+export function track(pid) { installHandlers(); live.add(pid); }
+export function untrack(pid) { live.delete(pid); }
 
 export class ChildFailed extends Error {
   constructor(msg) { super(msg); this.name = "ChildFailed"; }
@@ -63,7 +73,7 @@ function probeRouter() {
 function runOnce(script, args, env, cwd, timeoutMs) {
   return new Promise((resolve, reject) => {
     const p = spawn(script, args, { cwd, env, detached: true, stdio: ["ignore", "ignore", "pipe"] });
-    live.add(p.pid);
+    track(p.pid);
     let err = "", timedOut = false;
     p.stderr.on("data", (d) => { err += d; });
     const t = setTimeout(() => {
@@ -73,7 +83,7 @@ function runOnce(script, args, env, cwd, timeoutMs) {
     p.on("error", reject);
     p.on("close", (code) => {
       clearTimeout(t);
-      live.delete(p.pid);
+      untrack(p.pid);
       try { process.kill(-p.pid, "SIGKILL"); } catch {} // reap stragglers
       if (timedOut) reject(new Error(`timed out after ${timeoutMs}ms`));
       else if (code !== 0) reject(new Error(`exit ${code}: ${err.trim().slice(-500)}`));
