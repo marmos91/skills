@@ -93,7 +93,7 @@ test("doctor: a seat whose probe fails is named and the exit is 1", async (t) =>
   const fx = fixture();
   Object.assign(process.env, { XDG_STATE_HOME: fx.env.XDG_STATE_HOME, XDG_CONFIG_HOME: fx.env.XDG_CONFIG_HOME });
   const cfg = join(fx.root, "c.json");
-  writeFileSync(cfg, JSON.stringify({ apiKey: "zz-unknown-key-value", seats: [{ harness: "claude", model: "opus", thinking: "high" }, { harness: "pi", model: "bad/model", thinking: "high" }] }));
+  writeFileSync(cfg, JSON.stringify({ apiKey: "zz-unknown-key-value", seats: [{ harness: "claude", model: "opus", thinking: "high" }, { harness: "pi", model: "bad/model", thinking: "high" }, { harness: "claude", model: "opus", thinking: "medium" }] }));
   const gh = join(fx.root, "gh");
   writeFileSync(gh, "#!/bin/sh\nexit 0\n");
   chmodSync(gh, 0o755);
@@ -114,7 +114,7 @@ test("doctor: a seat whose probe fails is named and the exit is 1", async (t) =>
   const code = await main(["doctor", "--config", cfg], { runChild, askJev, findJev: () => null });
   assert.equal(code, 1);
   const out = lines.join("\n");
-  assert.deepEqual(probed.sort(), ["claude:opus", "pi:bad/model"]); // the judge is claude:opus too: probed once
+  assert.deepEqual(probed.sort(), ["claude:opus", "pi:bad/model"]); // two opus seats and the judge: one model, probed once
   assert.match(out, /FAIL\s+seat pi:bad\/model: exit 1: no such model/);
   assert.match(out, /ok\s+seat claude:opus/);
   assert.match(out, /WARN\s+jev: not found/);

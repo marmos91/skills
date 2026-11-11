@@ -172,3 +172,17 @@ test("thinking_by_stage: seat, then lens, then the default (cubbit seats think o
     ['{"lenses":{"security":{"enabled":true,"thinking_by_stage":{"round1":"huge"}}}}', /lenses.security.thinking_by_stage.round1 must be one of/],
   ]) assert.throws(() => loadConfig({ userPath: tmp(text) }), re, text);
 });
+
+test("seat ids: harness:model, later duplicates #2, #3 in config order; an explicit id wins", () => {
+  const s = (model, thinking, id) => ({ harness: "claude", model, thinking, ...(id && { id }) });
+  const c = loadConfig({ userPath: tmp(JSON.stringify({
+    seats: [s("opus", "high"), s("sonnet", "high"), s("opus", "medium"), s("opus", "low", "fast")],
+    lenses: { security: { seats: [s("opus", "max"), s("opus", "high")] } },
+  })) });
+  assert.deepEqual(c.seats.map(seatId), ["claude:opus", "claude:sonnet", "claude:opus#2", "fast"]);
+  // a lens list is numbered on its own, so its seats name the council seats of the same model
+  assert.deepEqual(seatsForLens(c, "security").map(seatId), ["claude:opus", "claude:opus#2"]);
+  assert.equal(seatId(c.judge), "claude:opus");
+  assert.throws(() => loadConfig({ userPath: tmp(JSON.stringify({ seats: [s("a", "high", "x"), s("b", "high", "x")] })) }), /seats.*id/);
+  assert.throws(() => loadConfig({ userPath: tmp(JSON.stringify({ seats: [{ ...s("a", "high"), id: "" }, s("b", "high")] })) }), /id/);
+});

@@ -117,6 +117,7 @@ function checkStages(t, where, ok, label = "") {
 
 function checkSeat(s, where) {
   need(isObj(s), where, "an object");
+  need(s.id === undefined || (typeof s.id === "string" && s.id), `${where}.id`, "a non-empty string");
   need(HARNESSES.includes(s.harness), `${where}.harness`, "claude, pi or auto");
   need(typeof s.model === "string" && s.model, `${where}.model`, "a non-empty string");
   need(s.provider === undefined || typeof s.provider === "string", `${where}.provider`, "a string");
@@ -175,10 +176,28 @@ export function loadConfig({ userPath, repoText, cliPath } = {}) {
     if (extra) cfg.effort_auto.high_paths = [...userHigh, ...extra];
   }
   validate(cfg);
+  assignIds(cfg.seats, "seats");
+  assignIds([cfg.judge], "judge");
+  for (const [name, l] of Object.entries(cfg.lenses)) if (l.seats) assignIds(l.seats, `lenses.${name}.seats`);
   return cfg;
 }
 
-export const seatId = (s) => `${s.harness}:${s.model}`;
+// Each seat gets a unique id: its own `id`, else harness:model, with #2, #3 for later seats on the same model.
+// Two seats on one model are two independent seats (their finds and votes count apart): that is the user's choice.
+// A lens list is numbered on its own, so its seats share ids (and votes) with the council seats of the same model.
+function assignIds(list, where) {
+  const taken = new Set();
+  for (const s of list) if (s.id !== undefined) { need(!taken.has(s.id), `${where} id ${s.id}`, "unique"); taken.add(s.id); }
+  for (const s of list) {
+    if (s.id !== undefined) continue;
+    let id = `${s.harness}:${s.model}`;
+    for (let n = 2; taken.has(id); n++) id = `${s.harness}:${s.model}#${n}`;
+    taken.add((s.id = id));
+  }
+}
+
+/** A seat's identity (voters, tally, dropped seats, run.json). Seats built outside loadConfig fall back to harness:model. */
+export const seatId = (s) => s.id ?? `${s.harness}:${s.model}`;
 
 const STAGE_KEY = { round1: "round1", round2: "vote", vote: "vote", merge: "merge" };
 

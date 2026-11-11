@@ -91,6 +91,12 @@ test("plannedChildren: per-lens and lens overrides", () => {
   assert.equal(plannedChildren(o, LENSES), 5 + 5 + 2);
 });
 
+test("plannedChildren counts two seats on one model as two seats", () => {
+  const s = (model, thinking) => ({ harness: "claude", model, thinking });
+  const c = applyEffort(loadConfigWith({ seats: [s("opus", "high"), s("sonnet", "high"), s("opus", "medium")] }), "medium");
+  assert.equal(plannedChildren(c, LENSES), 3 + 3 + 2);
+});
+
 test("unknown effort in config throws", () => {
   assert.throws(() => loadConfigWith({ effort: "huge" }), /effort/);
   assert.throws(() => loadConfigWith({ loop: { effort: 3 } }), /loop.effort/);

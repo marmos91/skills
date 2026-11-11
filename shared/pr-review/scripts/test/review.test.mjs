@@ -919,3 +919,49 @@ test("resume: a dropped seat stays dropped and is not run again", async () => {
   assert.ok(!run.calls.some((c) => c.k === "all~2"));
   assert.match(posts(fx)[0].body, /Seat cubbit\/mimir-pro was dropped \(turn limit\)\./);
 });
+
+// --- two seats on one model (opus high + opus medium): two independent seats, by the user's choice
+const O1 = "claude:opus", SN = "claude:sonnet", O2 = "claude:opus#2";
+function twoOpus() {
+  mkdirSync(join(process.env.XDG_CONFIG_HOME, "pr-review"), { recursive: true });
+  const s = (model, thinking) => ({ harness: "claude", model, thinking });
+  writeFileSync(join(process.env.XDG_CONFIG_HOME, "pr-review", "config.json"), JSON.stringify({ seats: [s("opus", "high"), s("sonnet", "high"), s("opus", "medium")] }));
+}
+const abstain = (id) => ({ id, vote: "drop", counter_case: "" });
+const opusAnswers = (over = {}) => ({
+  all: { findings: [F()] },
+  merge: [C("c1", { found: [O1, O2] }), C("c2", { found: [SN], line: 3, title: "Other" })],
+  "v~0": [keep("c2")], "v~1": [abstain("c1")], "v~2": [drop("c2")], ...over,
+});
+const tallyOf = (r) => Object.fromEntries(JSON.parse(readFileSync(join(r.runDir, "tally.json"), "utf8")).map((t) => [t.id, t.status]));
+
+test("two opus seats: 3 round-1 children, 3 votes, each opus find and vote counts on its own", async () => {
+  const fx = fixture(); routes(fx); twoOpus();
+  const { r, run } = await go(fx, opusAnswers(), { until: "tally" });
+  assert.equal(r.exit, 0, r.summary);
+  assert.deepEqual(run.calls.map((c) => c.k).sort(), ["all~0", "all~1", "all~2", "merge", "v~0", "v~1", "v~2"]);
+  assert.equal(run.calls.find((c) => c.k === "v~2").seat.thinking, "medium", "v~2 is the second opus seat");
+  assert.equal(r.planned, 8);
+  assert.equal(runJson(r).planned, 8);
+  // c1: found by both opus seats = 2 keeps; c2: one opus keeps, the other drops with a case
+  assert.deepEqual(tallyOf(r), { c1: "agreed", c2: "split" });
+});
+
+test("two opus seats: dropping one does not drop the other", async () => {
+  const fx = fixture(); routes(fx); twoOpus();
+  const { r, run } = await go(fx, opusAnswers({ "all~2": dropOf("turn limit"), merge: [C("c1", { found: [SN] })], "v~0": [keep("c1")] }), { until: "tally" });
+  assert.equal(r.exit, 0, r.summary);
+  assert.deepEqual(runJson(r).dropped, [{ seat: O2, reason: "turn limit", stage: "round1" }]);
+  assert.ok(run.calls.some((c) => c.k === "v~0"), "the first opus seat still votes");
+  assert.ok(!run.calls.some((c) => c.k === "v~2"));
+  assert.deepEqual(tallyOf(r), { c1: "agreed" });
+});
+
+test("two opus seats: resume reuses finished children", async () => {
+  const fx = fixture(); routes(fx); twoOpus();
+  const first = await go(fx, opusAnswers({ "v~2": new ChildFailed("down") }), { until: "tally" });
+  assert.equal(first.r.exit, 4);
+  const { r, run } = await go(fx, opusAnswers(), { until: "tally" });
+  assert.deepEqual(run.calls.map((c) => c.k), ["v~2"]);
+  assert.deepEqual(tallyOf(r), { c1: "agreed", c2: "split" });
+});

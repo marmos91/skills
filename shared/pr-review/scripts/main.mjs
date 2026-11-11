@@ -122,7 +122,8 @@ async function doctor(v, { runChild = realRunChild, askJev = realAskJev, findJev
   const line = (lvl, msg) => { if (lvl === "FAIL") fail = true; console.log(`${lvl.padEnd(4)} ${msg}`); };
 
   const seats = new Map();
-  for (const s of [...config.seats, config.judge, ...Object.values(config.lenses).flatMap((l) => l.seats ?? [])]) if (!seats.has(seatId(s))) seats.set(seatId(s), s);
+  // One probe per distinct model, not per seat.
+  for (const s of [...config.seats, config.judge, ...Object.values(config.lenses).flatMap((l) => l.seats ?? [])]) { const m = `${s.harness}:${s.model}`; if (!seats.has(m)) seats.set(m, s); }
   const dir = mkdtempSync(join(tmpdir(), "pr-review-doctor-"));
   try {
     const results = await Promise.allSettled([...seats.values()].map((seat, i) => {
