@@ -550,6 +550,27 @@ The state records the review count and the reply count per thread, and
   and a `.done` marker per stage. GitHub is the source of truth for what was
   posted (section 6.10, step 6).
 - A rerun continues from the first stage without a marker.
+- **Resume inside a stage.** Each child (one seat and lens in round 1, one
+  vote, one judge call) writes its output to its own file and gets its own
+  `.done` marker after its output passes the stage schema. A rerun starts
+  only the children without a marker. An interrupted run therefore never
+  pays twice for finished children.
+- **Resume a review.** `pr-review review <n>` on a PR with an unfinished run
+  for the same head SHA continues that run. If the head moved, the old run
+  folder is kept for the record and a new run starts. `--restart` forces a
+  new run.
+- **Resume the loop.** `tick` writes `tick.json` (start time, the PR queue
+  of this run, the PRs done, the PR in progress). The next `tick` first
+  finishes the queue of an interrupted run, then lists new work. Posting
+  stays idempotent through the markers on GitHub (section 6.10), so a PR
+  that was halfway through its post is safe to retry.
+- **Pause.** `pr-review-loop pause` writes `paused` in the state folder;
+  `tick` exits at once while it exists; `resume` removes it. In Claude Code
+  this also works across sessions: the next `/loop` session continues from
+  the state on disk.
+- **Interrupt.** On SIGINT or SIGTERM the engine stops its children (section
+  9.1), writes no marker for unfinished work, releases the lock and exits.
+  A stale lock (dead PID) is taken over by the next run.
 - A child that exits non-zero, times out, or returns output that fails the
   stage schema is a failed stage. The engine retries it. After the retry
   limit it stops that PR and reports the failure. It never posts a review
