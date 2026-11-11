@@ -31,7 +31,8 @@ export async function reply({ repo, n, threadId, mode, frame, config, runDir, gh
   const t = (await gh.threads(repo, n)).find((x) => x.id === threadId);
   if (!t) throw new Error(`thread ${threadId} not found on ${repo}#${n}`);
   const me = await gh.viewer();
-  const last = t.comments.at(-1);
+  // Bots and ignored authors do not count: answer the newest comment by a person.
+  const last = t.comments.findLast((c) => c.authorType !== "Bot" && !config.loop.authors_ignore.includes(c.author));
   const result = (action, resolved = false) => ({ action, resolved, queued });
   const enqueue = (reason, extra = {}) => {
     const item = { kind: "reply", reason, pr: n, sha: frame.headSha, threadId, commentId: last.id, path: t.path, line: t.line ?? t.originalLine, mode, ...extra };
@@ -51,7 +52,7 @@ export async function reply({ repo, n, threadId, mode, frame, config, runDir, gh
   }
 
   // Rule 7.3: only a new human comment gets an answer; our own last comment means it was answered.
-  if (!last || last.author === me || last.authorType === "Bot" || config.loop.authors_ignore.includes(last.author)) return result("skipped");
+  if (!last || last.author === me) return result("skipped");
   // A resolved thread reopens for us only when someone answers our reply.
   const mine = t.comments.findLast((x) => x.author === me);
   if (t.isResolved && !mine) return result("skipped");
@@ -81,7 +82,7 @@ export async function reply({ repo, n, threadId, mode, frame, config, runDir, gh
     // The question is about the other party's comment, so yes = accept for our side on any PR.
     const role = frame.ownPr ? "the reviewer" : "the PR author";
     const v = await jev(CORRECT, [
-      `The other party is ${last.author}, ${role}. We are ${me}. The last comment in the thread below is by the other party.`,
+      `The other party is ${last.author}, ${role}. We are ${me}. The newest comment by a person in the thread below is by the other party.`,
       threadData(t), seatData(JSON.stringify([d, c], null, 2)),
     ].join("\n"));
     position = v === "yes" ? "accept" : v === "no" ? "push_back" : null;

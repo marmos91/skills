@@ -90,6 +90,12 @@ test("own comment last -> skipped, no seat runs", async () => {
   assert.equal(run.calls.length + gh.calls.reply.length, 0);
 });
 
+test("a bot comment after a person's comment: the person still gets an answer", async () => {
+  const t = thread([human(111, "bob"), { ...human(112, "ci-bot"), authorType: "Bot" }]);
+  const { out, gh } = await go({ t, answers: { draft: pos("ask"), challenge: pos("ask"), compose: pos("ask", "Which caller?") } });
+  assert.equal(out.action, "replied");
+});
+
 test("bot comment or authors_ignore -> skipped", async () => {
   const bot = thread([{ ...human(112, "ci-bot"), authorType: "Bot" }]);
   assert.equal((await go({ t: bot, answers: {} })).out.action, "skipped");
