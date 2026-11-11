@@ -209,6 +209,7 @@ export function replyPrompt(frame, thread, role, draft) {
     ...(role === "compose" ? ["## Writing rules", read("writing.md"), ""] : []),
     "## Task",
     ...REPLY_TASK[role],
+    ...(frame.ownPr && role !== "compose" ? ["- This is the PR author's own code. Do not accept by default: accept only when the code proves the commenter right. When the draft accepts, look first for the reason the commenter is wrong."] : []),
     "- No thanks, no praise, no \"You're right\" without a fact.",
     "",
     "## Output",
