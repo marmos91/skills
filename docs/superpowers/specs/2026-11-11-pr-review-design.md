@@ -65,10 +65,15 @@ Anti-goals (the skills fail if these happen, even if they work):
   `pr-review-loop` is a `SKILL.md` plus a small wrapper that finds the engine
   with `realpath`. The `SKILL.md` files stay thin: they parse arguments, run
   the engine, react to its exit code, and show the result.
-- The engine starts each council seat as a headless CLI child: `claude -p` or
-  `pi -p`. Reason: `cubbit/*` models do not work from a Claude Code subagent
-  unless the session runs through `it-router`, and pi cannot run Opus or
-  Fable. A CLI child works in all cases.
+- The engine starts each council seat as a headless CLI child. In Claude
+  Code every seat, Mimir included, runs as `claude -p --model <model>`: the
+  child inherits the session's `ANTHROPIC_BASE_URL`, and a session started
+  with `claude-mimir` routes `cubbit/*` through `it-router` to Mimir. `pi -p`
+  is only a fallback: inside pi, or when `it-router` does not answer. pi
+  cannot run Opus or Fable, so those seats always use `claude -p`.
+- `"harness": "auto"` (the default for `cubbit/*` seats) picks `claude` when
+  `it-router` answers on its health URL, else `pi`. `doctor` prints the route
+  of each seat.
 - Each harness has an adapter, `scripts/harness/claude.sh` and
   `scripts/harness/pi.sh`, with one contract:
   `run <model> <thinking> <tools> <prompt-file> <out-file>`. A new harness is a
@@ -146,8 +151,8 @@ replaces the user level for one run.
   // Default council. Each seat runs every lens that has no override.
   "seats": [
     { "harness": "claude", "model": "opus",             "thinking": "high" },
-    { "harness": "pi",     "model": "cubbit/mimir-pro", "thinking": "high" },
-    { "harness": "pi",     "model": "cubbit/mimir",     "thinking": "high" }
+    { "harness": "auto",   "model": "cubbit/mimir-pro", "thinking": "high" },
+    { "harness": "auto",   "model": "cubbit/mimir",     "thinking": "high" }
   ],
   // Round 1 shape: "per-seat" = 1 child per seat runs all its lenses
   // (about 10 children per PR); "per-lens" = 1 child per seat and lens
