@@ -68,49 +68,8 @@ fi
 log()  { echo "fix: $*" >&2; }
 die()  { echo "fix: FATAL: $*" >&2; exit 1; }
 
-# jev_verdict <question> <text-file> -> prints yes | no | unsure.
-# unsure = jev off/missing, below JEV_CONFIDENCE, or no answer (exit 2);
-# callers keep their old behaviour on unsure, so jev only ever adds signal.
-# The first outage (exit 2 with an error on stderr) writes $STATE/jev-down and
-# turns jev off for the rest of the run, so a hung API costs one timeout.
-jev_verdict() {
-    if [ "$JEV" = off ] || [ -e "$STATE/jev-down" ] || ! command -v jev >/dev/null 2>&1; then
-        echo unsure; return 0
-    fi
-    _jrc=0
-    _jerr="$(jev ask "$1" --confidence "$JEV_CONFIDENCE" <"$2" 2>&1 >/dev/null)" || _jrc=$?
-    case "$_jrc" in
-        0) echo yes ;;
-        1) echo no ;;
-        *) if [ -n "$_jerr" ]; then
-               echo "$_jerr" >"$STATE/jev-down"
-               log "jev unavailable, off for the rest of this run: $_jerr"
-           fi
-           echo unsure ;;
-    esac
-}
-
-# plan_coverage_gaps <epic> -> one "<id>: <title>" line per finding jev is
-# confident the plan neither fixes nor explicitly skips. Each id is flagged at
-# most once per epic (jev-flagged), so a wrong "no" costs one revise round,
-# never an endless loop.
-plan_coverage_gaps() {
-    _dir="$(epic_dir "$1")"
-    touch "$_dir/jev-flagged"
-    node -e '
-const e=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
-for (const f of e.findings) console.log([f.id, f.title, f.what].map(x=>String(x||"").replace(/[\t\n]/g," ")).join("\t"));' "$_dir/epic.json" |
-    while IFS="$(printf '\t')" read -r _id _title _what; do
-        grep -qxF "$_id" "$_dir/jev-flagged" && continue
-        # wording picked by bench/jev: the old "...or states explicitly why that
-        # finding is skipped" read 6 of 7 explicit skips as gaps
-        _v="$(jev_verdict "The plan has a step that fixes this problem: $_title ($_what); or it marks finding $_id as SKIP and says why." "$_dir/plan.md")"
-        if [ "$_v" = no ]; then
-            echo "$_id" >>"$_dir/jev-flagged"
-            echo "$_id: $_title"
-        fi
-    done
-}
+# jev_verdict, plan_coverage_gaps, jev_flag: the jev plan-coverage gate
+. "$LIB/jev-gate.sh"
 
 # run_pi <provider> <model> <thinking> <tools> <prompt-file> <out-file> [cwd]
 run_pi() {
@@ -297,6 +256,7 @@ stage_planreview() {
         # second opinion on the reviewer's coverage check: a dropped finding is a defect
         # only with a round left to act on it: on the last round a wrong "no"
         # would turn an approved plan into "plan review loop exhausted"
+        _gaps=""
         if [ "$_verdict" != revise ] && [ "$_rounds" -lt "$PLAN_ROUNDS" ]; then
             _gaps="$(plan_coverage_gaps "$_ep")"
             if [ -n "$_gaps" ]; then
@@ -334,6 +294,9 @@ fs.writeFileSync(f, JSON.stringify(r));' "$_dir/plan-review.tmp"
         run_read "$PLAN_PROVIDER" "$PLAN_MODEL" "$PLAN_THINKING" "$_dir/plan-prompt-r$_rounds.txt" "$_dir/plan.tmp" "$(epic_worktree "$_ep")"
         [ -s "$_dir/plan.tmp" ] || die "plan revision child empty for $_ep"
         mv "$_dir/plan.tmp" "$_dir/plan.md"
+        # only now is the revise round a gap caused on disk; a crash before
+        # this line re-asks jev on resume instead of skipping the finding
+        jev_flag "$_ep" "$_gaps"
     done
     rm -f "$_dir/preview-prompt.txt" "$_dir/plan-review.tmp.err"
 }
