@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import * as github from "./github.mjs";
-import { runChild as realRunChild } from "./child.mjs";
+import { runChild as realRunChild, ChildFailed, stopping } from "./child.mjs";
 import { askJev } from "./decider.mjs";
 import { budgetLeft } from "./convergence.mjs";
 import { prData, replyPrompt, seatData } from "./prompts.mjs";
@@ -21,12 +21,18 @@ const isSkip = (b) => b.replace(/[`\p{P}\s]/gu, "").toUpperCase() === "SKIP";
 
 /**
  * Answer the newest human comment of one review thread.
- * Extra inputs: frame (from frame()), config, runDir; injectable gh, runChild, jev, queue; routerUp (R1).
+ * Extra inputs: frame (from frame()), config, runDir; injectable gh, runChild, jev, queue, stopping; routerUp (R1).
  * queue(item) gets { kind: "reply", reason, pr, sha, threadId, commentId, path, line, mode, positions?, hits? }.
  * -> { action: "replied"|"queued"|"skipped", resolved, queued: [items] }
  */
-export async function reply({ repo, n, threadId, mode, frame, config, runDir, gh = github, runChild = realRunChild, jev, queue = () => {}, routerUp }) {
-  jev ??= async (q, text) => (await askJev(q, text, config)).answer;
+export async function reply({ repo, n, threadId, mode, frame, config, runDir, gh = github, runChild = realRunChild, jev, queue = () => {}, routerUp, stopping: isStopping = () => stopping }) {
+  const ask = jev ?? (async (q, text) => (await askJev(q, text, config)).answer);
+  // A signal killed jev: its "unsure" is not an answer, so nothing is queued; the next run asks again.
+  jev = async (q, text) => {
+    const a = await ask(q, text);
+    if (isStopping()) throw new ChildFailed("engine is stopping on a signal");
+    return a;
+  };
   const queued = [];
   const t = (await gh.threads(repo, n)).find((x) => x.id === threadId);
   if (!t) throw new Error(`thread ${threadId} not found on ${repo}#${n}`);

@@ -347,3 +347,15 @@ test("crash during bookkeeping: finishing twice keeps one todo line", async () =
   assert.equal(out.action, "replied");
   assert.equal(readFileSync(file, "utf8"), line);
 });
+
+test("a signal during jev queues nothing: its unsure is not an answer", async () => {
+  const t = thread([human(111, ME, "**must:** leak"), human(112)]);
+  let stop = false;
+  const jev = async () => { stop = true; return "unsure"; };
+  await assert.rejects(go({ t, jev, stopping: () => stop, answers: { draft: pos("push_back"), challenge: pos("accept") } }), /stopping/);
+  // and on the repeat check after compose
+  const t2 = thread([human(111, ME, "**must:** leak"), human(113, "bob", "x"), human(114, ME, "y"), human(115)]);
+  stop = false;
+  const r = go({ t: t2, jev, stopping: () => stop, answers: { draft: pos("push_back"), challenge: pos("push_back"), compose: pos("push_back", "Same as before.") } });
+  await assert.rejects(r, /stopping/);
+});
