@@ -41,7 +41,7 @@ test("high: per-lens, cap high; a configured 'medium' seat stays medium", () => 
   base.seats[0].thinking = "xhigh";
   const c = applyEffort(base, "high");
   assert.equal(c.round1, "per-lens");
-  assert.deepEqual(c.seats.map((s) => s.thinking), ["high", "medium", "high"]);
+  assert.deepEqual(c.seats.map((s) => s.thinking), ["high", "medium", "medium"]);
   assert.equal(c.post.maxFindings, 20);
 });
 

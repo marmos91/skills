@@ -27,15 +27,15 @@ export const EFFORT_AUTO_DEFAULTS = {
   ],
 };
 
-const seat = (harness, model) => ({ harness, model, thinking: "high" });
+const seat = (harness, model, thinking) => ({ harness, model, thinking, max_turns: 40, timeout_minutes: 15 });
 
 export const DEFAULTS = {
   effort: "medium",
   effort_auto: EFFORT_AUTO_DEFAULTS,
-  seats: [seat("claude", "opus"), seat("auto", "cubbit/mimir-pro"), seat("auto", "cubbit/mimir")],
+  seats: [seat("claude", "opus", "high"), seat("auto", "cubbit/mimir", "medium"), seat("auto", "cubbit/mimir-pro", "medium")],
   round1: "per-seat",
   lenses: Object.fromEntries(LENSES.map((l) => [l, { enabled: true }])),
-  judge: seat("claude", "opus"),
+  judge: { harness: "claude", model: "opus", thinking: "high" },
   decider: { kind: "auto", confidence: 0 },
   loop: { authors_ignore: [], max_prs_per_run: 10, max_review_rounds: 3, max_replies_per_thread: 2, effort: "auto", ci_wait_minutes: 30 },
   // max_turns and timeout_minutes: defaults for every child; a seat or a lens may set its own.

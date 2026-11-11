@@ -25,7 +25,7 @@ writeFileSync(hygOut, '{"findings": []}');
 process.env.PR_REVIEW_FAKE = hygOut;
 
 const REPO = "o/r", N = 5, ME = "marmos91";
-const S0 = "claude:opus", S1 = "auto:cubbit/mimir-pro", S2 = "auto:cubbit/mimir";
+const S0 = "claude:opus", S1 = "auto:cubbit/mimir", S2 = "auto:cubbit/mimir-pro";
 
 const git = (cwd, ...args) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 const commit = (dir, files, msg) => {
@@ -826,7 +826,7 @@ test("hygiene warnings are in the run summary; run.json keeps the planned child 
 test("round-1 children carry the lens max_turns; other children the global one", async () => {
   const fx = fixture(); routes(fx);
   mkdirSync(join(process.env.XDG_CONFIG_HOME, "pr-review"), { recursive: true });
-  writeFileSync(join(process.env.XDG_CONFIG_HOME, "pr-review", "config.json"), JSON.stringify({ review: { max_turns: 25 }, lenses: { security: { enabled: true, max_turns: 12 } } }));
+  writeFileSync(join(process.env.XDG_CONFIG_HOME, "pr-review", "config.json"), JSON.stringify({ seats: [S0, S1, S2].map((id) => ({ harness: id.split(":")[0], model: id.split(":")[1], thinking: "high" })), review: { max_turns: 25 }, lenses: { security: { enabled: true, max_turns: 12 } } }));
   const { r, run } = await go(fx, { all: { findings: [] }, security: { findings: [] }, correctness: { findings: [] }, adversarial: { findings: [] }, simplification: { findings: [] }, architecture: { findings: [] }, compose: { body: "Fine.", comments: [] } }, { effort: "high" });
   assert.equal(r.exit, 0, r.summary);
   const turns = (k) => run.calls.filter((c) => c.k.startsWith(k)).map((c) => c.seat.max_turns);

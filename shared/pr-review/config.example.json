@@ -1,9 +1,9 @@
 {
   // Default council. Each seat runs every lens that has no override.
   "seats": [
-    { "harness": "claude", "model": "opus",             "thinking": "high" },
-    { "harness": "auto",   "model": "cubbit/mimir-pro", "thinking": "high" },
-    { "harness": "auto",   "model": "cubbit/mimir",     "thinking": "high" }
+    { "harness": "claude", "model": "opus",             "thinking": "high",   "max_turns": 40, "timeout_minutes": 15 },
+    { "harness": "auto",   "model": "cubbit/mimir",     "thinking": "medium", "max_turns": 40, "timeout_minutes": 15 },
+    { "harness": "auto",   "model": "cubbit/mimir-pro", "thinking": "medium", "max_turns": 40, "timeout_minutes": 15 }
   ],
   // "per-seat" = 1 child per seat runs all its lenses; "per-lens" = 1 child per seat and lens.
   // The effort level overrides this: low and medium run per-seat, high and max per-lens.

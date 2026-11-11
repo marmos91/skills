@@ -412,9 +412,9 @@ decider and `round1` belong to you.
 {
   // Default council. Each seat runs every lens that has no override.
   "seats": [
-    { "harness": "claude", "model": "opus",             "thinking": "high" },
-    { "harness": "auto",   "model": "cubbit/mimir-pro", "thinking": "high" },
-    { "harness": "auto",   "model": "cubbit/mimir",     "thinking": "high" }
+    { "harness": "claude", "model": "opus",             "thinking": "high",   "max_turns": 40, "timeout_minutes": 15 },
+    { "harness": "auto",   "model": "cubbit/mimir",     "thinking": "medium", "max_turns": 40, "timeout_minutes": 15 },
+    { "harness": "auto",   "model": "cubbit/mimir-pro", "thinking": "medium", "max_turns": 40, "timeout_minutes": 15 }
   ],
   "round1": "per-seat",
   // Per-lens override: this lens uses only these seats, in its own children.
