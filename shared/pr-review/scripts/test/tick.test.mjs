@@ -141,9 +141,12 @@ test("review budget used up -> no review, one question queued", async () => {
   const rs = fresh();
   withBaseline(rs);
   savePrState(rs, 1, { ...prState(rs, 1), reviews: 3, lastReviewedSha: "old" });
-  const { out, f } = await go({ gh: fakeGh({ rows: [row(1, ["reviewed-by"])] }) });
+  // an open must of ours with the plain label the engine posts is listed in the question
+  const must = { id: "T9", isResolved: false, path: "a.js", line: 1, comments: [{ id: 99, author: ME, body: "must: Port 0 is accepted" }] };
+  const { out, f } = await go({ gh: fakeGh({ rows: [row(1, ["reviewed-by"])], threads: { 1: [must] } }) });
   assert.equal(f.reviews.length, 0);
   assert.equal(out.questions, 1);
+  assert.match(JSON.stringify(openQuestions(rs)), /discussion_r99/);
   savePrState(rs, 1, { ...prState(rs, 1), cache: {} });
   const again = await go({ gh: fakeGh({ rows: [row(1, ["reviewed-by"])] }), f });
   assert.equal(again.out.questions, 1, "still one question");

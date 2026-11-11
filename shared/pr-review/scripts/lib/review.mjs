@@ -243,7 +243,7 @@ async function once(o, restart) {
     ? await child(ctx, "merge", "merge", { seat: config.judge, schema: "merge", prompt: (s) => mergePrompt(f, bySeat, pst.agreed ?? [], s.max_turns) })
     : [];
   const threads = readJson(join(f.ctxDir, "threads.json"));
-  // Spec 6.4: a cluster repeats a thread of ours on the same line whose finding was agreed or settled before.
+  // Spec 6.4: a cluster repeats a thread of ours on the same line whose finding was agreed before (follow-up posts included).
   // An outdated thread has no current line (originalLine is the old file), so it never matches.
   // shortcut: other reviewers' threads never drop a cluster; "a reviewer gave evidence against it" needs a judge call.
   const me = await gh.viewer();
@@ -537,6 +537,8 @@ async function followUp(o, head, pst, answered) {
     }
     const st = prState(repoState, n);
     st.settled = [...new Set([...st.settled, ...fps])];
+    // posted findings join agreed too, so a reworded repeat on the same line still links (same lens)
+    st.agreed = [...(st.agreed ?? []), ...items.map(({ q }) => ({ id: q.fingerprint, lens: q.finding.lens, severity: q.finding.severity, file: q.finding.file, line: q.finding.line, title: q.finding.title }))];
     savePrState(repoState, n, st);
   }
   if (already.length) {

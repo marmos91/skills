@@ -675,6 +675,9 @@ test("answer-only rerun: 'post' goes out as one small COMMENT follow-up, never t
   assert.equal(p[1].event, "COMMENT");
   assert.match(p[1].body, new RegExp(`^Follow-up on the review of ${fx.head}: points settled by the maintainer\\.\\n\\n<!-- pr-review `));
   assert.deepEqual(p[1].threads.map((t) => [t.line, t.body.split("\n")[0]]), [[2, "**must:** Off by one"]]);
+  // the posted finding joins agreed with its lens, so a reworded repeat on that line still links
+  const ag = prState(fx.state, N).agreed.find((a) => a.id === q.fingerprint);
+  assert.equal(ag?.lens, "correctness");
   // crash before appliedAnswer: the marker is on GitHub, so the rerun posts nothing
   const qf = join(fx.state, "questions", `${q.id}.json`);
   const rec = JSON.parse(readFileSync(qf, "utf8")); delete rec.appliedAt; writeFileSync(qf, JSON.stringify(rec));

@@ -5,13 +5,12 @@ import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import * as github from "./github.mjs";
 import { COLLABORATOR, reply as realReply } from "./reply.mjs";
-import { frame as realFrame } from "./frame.mjs";
+import { frame as realFrame, SEVERITY } from "./frame.mjs";
 import { loadConfig, pickEffort, lowerEffort, userConfigPath } from "./config.mjs";
 import { budgetLeft } from "./convergence.mjs";
 import { FINAL_STAGE, acquireLock, Locked, markDone, prState, savePrState, runDir, stateRoot, writeAtomic } from "./state.mjs";
 import { appliedAnswer, openQuestions, pendingAnswers, queueQuestion, questionWarnings } from "./questions.mjs";
 
-const MUST = /^\s*\*\*must:\*\*/;
 const sha1 = (s) => createHash("sha1").update(s).digest("hex");
 // A corrupt journal or baseline file counts as missing, so one bad write cannot stop every later tick.
 const readJson = (f) => { try { return JSON.parse(readFileSync(f, "utf8")); } catch { return null; } };
@@ -201,7 +200,7 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
       if (doReview && !requested && !force && !budgetLeft(s, config).review) {
         doReview = false;
         queued = true;
-        const musts = threads.filter((t) => !t.isResolved && t.comments[0]?.author === me && MUST.test(t.comments[0].body ?? "")).map((t) => commentUrl(repo, n, t.comments[0].id));
+        const musts = threads.filter((t) => !t.isResolved && t.comments[0]?.author === me && SEVERITY.exec(t.comments[0].body ?? "")?.[1] === "must").map((t) => commentUrl(repo, n, t.comments[0].id));
         queueQuestion(rs, {
           pr: n, sha: p.headSha, fingerprint: sha1(`budget:${n}`), file: "(whole PR)", line: 0, snippet: "",
           finding: { kind: "budget", title: "Review budget used", case: `The loop made ${s.reviews} automatic reviews (loop.max_review_rounds ${config.loop.max_review_rounds}) and stops until a new review request. Open must items: ${musts.length ? musts.join(", ") : "none"}.` },
