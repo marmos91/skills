@@ -113,6 +113,19 @@ export async function findMarker(repo, n, key) {
   return false;
 }
 
+// Every marker key in the viewer's reviews, review comments and PR comments, fully paged (REST --paginate),
+// so one post phase checks all its keys in memory and no window of "last 100" can miss one.
+export async function markerKeys(repo, n) {
+  const me = await viewer(), keys = new Set();
+  for (const path of [`repos/${repo}/pulls/${n}/reviews`, `repos/${repo}/pulls/${n}/comments`, `repos/${repo}/issues/${n}/comments`]) {
+    for (const r of (await json(["api", "--paginate", "--slurp", path])).flat()) {
+      if (r?.user?.login !== me) continue;
+      for (const m of String(r.body ?? "").matchAll(/<!-- pr-review [^>]*?\bkey=([0-9a-f]{40})/g)) keys.add(m[1]);
+    }
+  }
+  return keys;
+}
+
 const POST = `mutation PostReview($input: AddPullRequestReviewInput!) {
   addPullRequestReview(input: $input) { pullRequestReview { url } } }`;
 

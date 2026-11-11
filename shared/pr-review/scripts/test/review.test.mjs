@@ -54,22 +54,21 @@ function fixture() {
 }
 
 const threadsRoute = (nodes = []) => ({ stdout: { data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } } } } } });
-const markerRoute = (field, nodes = []) => ({ stdout: { data: { viewer: { login: ME }, repository: { pullRequest: { [field]: { pageInfo: { hasPreviousPage: false, startCursor: null }, nodes } } } } } });
 
-function routes(fx, { head = fx.head, body = "Changes a.", threads = [], pending = null, postExit = 0, reviews = [] } = {}) {
+function routes(fx, { head = fx.head, body = "Changes a.", threads = [], pending = null, postExit = 0, reviews = [], reviewComments = [] } = {}) {
   const r = {
     "api user": { stdout: { login: ME } },
     "pr view 5 -R o/r --json id,headRefOid,baseRefName,author,isDraft,body,title,closingIssuesReferences": {
       stdout: { id: "PR_1", headRefOid: head, baseRefName: "main", author: { login: "alice" }, isDraft: false, body, title: "feat: change a", closingIssuesReferences: [] },
     },
     "api repos/o/r/pulls/5": { stdout: { author_association: "CONTRIBUTOR" } },
-    "api --paginate --slurp repos/o/r/pulls/5/reviews": { stdout: [[]] },
+    // markerKeys reads these three lists (REST, fully paged); frame reads reviews and issue comments too.
+    "api --paginate --slurp repos/o/r/pulls/5/reviews": { stdout: [reviews] },
+    "api --paginate --slurp repos/o/r/pulls/5/comments": { stdout: [reviewComments] },
     "api --paginate --slurp repos/o/r/issues/5/comments": { stdout: [[]] },
     "graphql Threads": threadsRoute(threads),
     "pr view 5 -R o/r --json headRefOid,updatedAt": { stdout: { headRefOid: head, updatedAt: "2026-11-11T00:00:00Z" } },
     "pr checks 5 -R o/r --json name,state,link,bucket,startedAt": { stderr: "no checks reported on the 'feat' branch", exit: 1 },
-    "graphql MarkerComments": markerRoute("comments"),
-    "graphql MarkerReviews": markerRoute("reviews", reviews),
     "graphql PendingReview": { stdout: { data: { repository: { pullRequest: { reviews: { nodes: pending ? [pending] : [] } } } } } },
     "graphql PostReview": postExit ? { stderr: "boom", exit: postExit } : { stdout: { data: { addPullRequestReview: { pullRequestReview: { url: "https://github.com/o/r/pull/5#pullrequestreview-1" } } } } },
     "api -X POST repos/o/r/pulls/5/comments/11/replies --input -": { stdout: {} },
@@ -126,7 +125,7 @@ test("happy path posts one review with inline comments and the marker", async ()
   assert.match(p[0].body, /^Changes a\. One must item\.\n\n<!-- pr-review run=\S+ sha=[0-9a-f]{40} key=[0-9a-f]{40} -->$/);
   assert.equal(p[0].threads.length, 1);
   assert.deepEqual([p[0].threads[0].path, p[0].threads[0].line, p[0].threads[0].side], ["a.js", 2, "RIGHT"]);
-  assert.match(p[0].threads[0].body, /^\*\*must:\*\* off by one\n\n<!-- pr-review run=.* key=[0-9a-f]{40} -->$/);
+  assert.match(p[0].threads[0].body, new RegExp(`^\\*\\*must:\\*\\* off by one\n\n<!-- pr-review run=.* key=[0-9a-f]{40} fp=${fingerprint(F())} -->$`));
   // round 2 only for the seat that did not find c1
   assert.deepEqual(run.calls.map((c) => c.k).sort(), ["all~0", "all~1", "all~2", "compose", "merge", "v~2"]);
   const st = prState(fx.state, N);
@@ -140,7 +139,7 @@ test("rerun after a crash before markDone(post) does not post again", async () =
   const fx = fixture(); routes(fx);
   const { r } = await go(fx, happy());
   rmSync(join(r.runDir, "post.done"));
-  routes(fx, { reviews: [{ body: posts(fx)[0].body, author: { login: ME }, comments: { nodes: [] } }] });
+  routes(fx, { reviews: [{ body: posts(fx)[0].body, user: { login: ME }, state: "COMMENTED" }] });
   const again = await go(fx, happy());
   assert.equal(again.r.exit, 0);
   assert.equal(again.r.runDir, r.runDir, "same unfinished run");
@@ -155,7 +154,7 @@ test("rerun after an interrupted post: marker found on GitHub, nothing posted tw
   const sent = posts(fx);
   assert.equal(sent.length, 1, "the mutation reached GitHub");
   // GitHub applied it although the client saw an error.
-  routes(fx, { reviews: [{ body: sent[0].body, author: { login: ME }, comments: { nodes: [] } }] });
+  routes(fx, { reviews: [{ body: sent[0].body, user: { login: ME }, state: "COMMENTED" }] });
   const { r } = await go(fx, happy());
   assert.equal(r.exit, 0);
   assert.equal(posts(fx).length, 1);
@@ -483,19 +482,24 @@ test("a signal during decide saves nothing: no decide file, no question; the rer
 const thread = (id, author, body, over = {}) => ({ id, isResolved: true, isOutdated: false, viewerCanResolve: true, path: "a.js", line: 2, originalLine: 2,
   comments: { nodes: [{ databaseId: 11, author: { login: author, __typename: "User" }, body, createdAt: "x" }] }, ...over });
 
-test("thread linking: only our own thread with an agreed finding drops a cluster; others and outdated threads do not", async () => {
-  const agreedId = "a".repeat(40);
-  const mk = `<!-- pr-review run=r sha=s key=${agreedId} -->`;
+test("thread linking: only our own thread with an engine marker of an agreed finding drops a cluster", async () => {
+  // A first review posts c1; its real inline comment (engine marker with fp=) becomes the thread.
+  const fx0 = fixture(); routes(fx0);
+  await go(fx0, happy());
+  const real = posts(fx0)[0].threads[0].body;
+  assert.match(real, /key=[0-9a-f]{40} fp=[0-9a-f]{40} -->$/);
+  const state0 = prState(fx0.state, N);
   for (const [threads, kept] of [
-    [[thread("T1", "bob", "**must:** same line, other reviewer")], true],
-    [[thread("T1", ME, `**must:** ours\n\n${mk}`, { isOutdated: true, line: null })], true],
-    [[thread("T1", ME, `**must:** ours\n\n${mk}`)], false],
+    [[thread("T1", "bob", real)], true],
+    [[thread("T1", ME, real, { isOutdated: true, line: null })], true],
+    [[thread("T1", ME, real)], false],
   ]) {
     const fx = fixture(); routes(fx, { threads });
-    savePrState(fx.state, N, { ...prState(fx.state, N), agreed: [{ id: agreedId, lens: "correctness", severity: "must", file: "a.js", line: 2, title: "older words" }] });
-    const { r } = await go(fx, happy());
+    savePrState(fx.state, N, { ...prState(fx.state, N), agreed: state0.agreed });
+    // same line, other words: only the marker's fp can link it
+    const { r } = await go(fx, happy({ merge: [C("c1", { title: "Other words for it" })] }));
     const rec = JSON.parse(readFileSync(join(r.runDir, "clusters.json"), "utf8"));
-    assert.equal(rec.clusters.length === 1, kept, JSON.stringify(threads[0].comments.nodes[0].author));
+    assert.equal(rec.clusters.length === 1, kept, threads[0].comments.nodes[0].author.login);
     assert.equal(rec.linked.length === 1, !kept);
   }
 });
@@ -558,7 +562,7 @@ test("loop rerun after a crash with the marker found queues 'approve?' once", as
   const a = await go(fx, answers, { mode: "loop", effort: "medium" });
   assert.equal(a.r.queueApprove, true);
   rmSync(join(a.r.runDir, "post.done"));
-  routes(fx, { reviews: [{ body: posts(fx)[0].body, author: { login: ME }, comments: { nodes: [] } }] });
+  routes(fx, { reviews: [{ body: posts(fx)[0].body, user: { login: ME }, state: "COMMENTED" }] });
   const b = await go(fx, answers, { mode: "loop", effort: "medium" });
   assert.equal(b.r.exit, 0, b.r.summary);
   assert.equal(posts(fx).length, 1);
@@ -580,7 +584,9 @@ test("a finding whose inline marker is already on GitHub is not posted again", a
   const fx = fixture();
   const { createHash } = await import("node:crypto");
   const key = createHash("sha1").update(`inline\0${fx.head}\0${fingerprint(F())}`).digest("hex");
-  routes(fx, { reviews: [{ body: "older", author: { login: ME }, comments: { nodes: [{ body: `x <!-- pr-review run=r sha=s key=${key} -->`, author: { login: ME } }] } }] });
+  // one review comment among many (past the old 100-per-review window)
+  const many = Array.from({ length: 150 }, (_, i) => ({ body: `c${i}`, user: { login: ME } }));
+  routes(fx, { reviewComments: [...many, { body: `x <!-- pr-review run=r sha=s key=${key} fp=${fingerprint(F())} -->`, user: { login: ME } }] });
   const second = C("c2", { line: 3, title: "Second" });
   const { r } = await go(fx, happy({ merge: [C("c1"), second], "v~2": [keep("c1"), keep("c2")],
     compose: { body: "S.", comments: [{ id: "c1", body: "**must:** one" }, { id: "c2", body: "**must:** two" }] } }));
@@ -599,10 +605,69 @@ test("CLI: no number uses the current branch's PR; none is a usage error; an une
   r0["pr view --json number"] = { stdout: { number: 5 } };
   W(fx, r0);
   assert.equal((await cli(["--repo", REPO, "--until", "frame"])).code, 0);
-  delete r0["pr view --json number"]; W(fx, r0);
+  r0["pr view --json number"] = { stderr: 'no pull requests found for branch "feat"', exit: 1 }; W(fx, r0);
   const none = await cli(["--repo", REPO]);
   assert.equal(none.code, 1);
   assert.match(none.err, /current branch has no PR/);
+  r0["pr view --json number"] = { stderr: "HTTP 401: Bad credentials", exit: 1 }; W(fx, r0);
+  assert.equal((await cli(["--repo", REPO])).code, 4, "auth or network failure is not a usage error");
   W(fx, {}); // gh fails on the first call: not a usage error
   assert.equal((await cli(["5", "--repo", REPO])).code, 4);
+});
+
+test("answer-only rerun, repro a: a held must answered drop -> nothing posted, no second summary", async () => {
+  const fx = fixture(); routes(fx);
+  const token = "ghp_" + "C".repeat(36);
+  const { r } = await go(fx, happy({ compose: { body: "Summary.", comments: [{ id: "c1", body: `**must:** ${token}` }] } }));
+  assert.equal(r.exit, 0, r.summary);
+  const q = openQuestions(fx.state);
+  assert.equal(q.length, 1);
+  answer(fx.state, q[0].id, "drop");
+  const again = await go(fx, happy());
+  assert.equal(again.r.exit, 0, again.r.summary);
+  assert.equal(again.run.calls.length, 0, "no pipeline");
+  assert.equal(posts(fx).length, 1);
+  assert.ok(JSON.parse(readFileSync(join(fx.state, "questions", `${q[0].id}.json`), "utf8")).appliedAt);
+});
+
+test("answer-only rerun, repro b: loop posts with a should and a question; both answered drop -> interactive rerun posts nothing", async () => {
+  const fx = fixture(); routes(fx);
+  const answers = split({
+    merge: [C("c1", { found: [S0] }), C("c2", { severity: "should", line: 3, title: "Slow loop" })], "v~1": [keep("c1")], "v~2": [drop("c1"), keep("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c2", body: "**should:** slow" }] },
+  });
+  await go(fx, answers, { mode: "loop", effort: "medium" });
+  assert.equal(posts(fx).length, 1);
+  for (const q of openQuestions(fx.state)) answer(fx.state, q.id, "drop");
+  const again = await go(fx, answers);
+  assert.equal(again.r.exit, 0, again.r.summary);
+  assert.equal(again.run.calls.length, 0);
+  assert.deepEqual(posts(fx).map((p) => p.event), ["COMMENT"]);
+});
+
+test("answer-only rerun: 'post' goes out as one small COMMENT follow-up, never twice", async () => {
+  const fx = fixture(); routes(fx);
+  const answers = split({
+    merge: [C("c1", { found: [S0] }), C("c2", { severity: "must", line: 3, title: "Must one" })], "v~1": [keep("c1")], "v~2": [drop("c1"), keep("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c2", body: "**must:** one" }] },
+  });
+  await go(fx, answers, { mode: "loop", effort: "medium" });
+  assert.equal(posts(fx)[0].event, "REQUEST_CHANGES");
+  const [q] = openQuestions(fx.state);
+  answer(fx.state, q.id, "post");
+  const again = await go(fx, answers);
+  assert.equal(again.r.exit, 0, again.r.summary);
+  assert.equal(again.run.calls.length, 0);
+  const p = posts(fx);
+  assert.equal(p.length, 2);
+  assert.equal(p[1].event, "COMMENT");
+  assert.match(p[1].body, new RegExp(`^Follow-up on the review of ${fx.head}: points settled by the maintainer\\.\\n\\n<!-- pr-review `));
+  assert.deepEqual(p[1].threads.map((t) => [t.line, t.body.split("\n")[0]]), [[2, "**must:** Off by one"]]);
+  // crash before appliedAnswer: the marker is on GitHub, so the rerun posts nothing
+  const qf = join(fx.state, "questions", `${q.id}.json`);
+  const rec = JSON.parse(readFileSync(qf, "utf8")); delete rec.appliedAt; writeFileSync(qf, JSON.stringify(rec));
+  routes(fx, { reviews: [{ body: p[1].body, user: { login: ME }, state: "COMMENTED" }] });
+  const third = await go(fx, answers);
+  assert.equal(third.r.exit, 0);
+  assert.equal(posts(fx).length, 2);
 });

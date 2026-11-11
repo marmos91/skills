@@ -23,8 +23,12 @@ const remotes = () => {
 
 // No number: the PR of the current branch.
 function currentPr() {
-  try { return String(JSON.parse(execFileSync(process.env.GH_BIN || "gh", ["pr", "view", "--json", "number"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })).number); }
-  catch { throw new Usage("no PR number given and the current branch has no PR"); }
+  try { return String(JSON.parse(execFileSync(process.env.GH_BIN || "gh", ["pr", "view", "--json", "number"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })).number); }
+  catch (e) {
+    // Only "no PR for this branch" is the user's to fix; auth or network errors are a failed stage (4).
+    if (/no (?:pull requests|open pull requests) found/i.test(String(e.stderr))) throw new Usage("no PR number given and the current branch has no PR");
+    throw new Error(`gh pr view failed: ${String(e.stderr || e.message).trim()}`);
+  }
 }
 
 function target(arg, repoFlag) {

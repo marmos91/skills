@@ -24,13 +24,14 @@ const RANK = { must: 0, should: 1, nit: 2 };
 const sha1 = (s) => createHash("sha1").update(s).digest("hex");
 const readJson = (f) => JSON.parse(readFileSync(f, "utf8"));
 const save = (f, v) => writeAtomic(f, JSON.stringify(v, null, 2) + "\n");
-const marker = (runId, sha, key) => `<!-- pr-review run=${runId} sha=${sha} key=${key} -->`;
+// fp= on inline comments lets a later run link a thread to its finding (spec 6.4); key= is the dedupe key.
+const marker = (runId, sha, key, fp) => `<!-- pr-review run=${runId} sha=${sha} key=${key}${fp ? ` fp=${fp}` : ""} -->`;
 // Fields the seats and the judge see; engine bookkeeping stays out of prompts.
 const view = ({ seats, fp, answered, ...c }) => c;
 // GitHub text that the engine puts into a posted body: no markup, no mentions, no marker look-alikes.
 export const safeText = (s) => String(s ?? "").replace(/[<>@`]/g, "").replace(/\s+/g, " ").trim().slice(0, 80);
 const ruleIds = (hits) => [...new Set(hits.map((h) => h.split(":")[0]))].join(", ");
-const MARKER_KEY = /<!-- pr-review run=\S+ sha=\S+ key=([0-9a-f]{40}) -->/;
+const MARKER_FP = /<!-- pr-review run=\S+ sha=\S+ key=[0-9a-f]{40} fp=([0-9a-f]{40}) -->/;
 
 /** Config, flag or state problems: exit 1, not a failed stage. */
 export class SetupError extends Error { constructor(m) { super(m); this.name = "SetupError"; } }
@@ -138,7 +139,9 @@ async function once(o, restart) {
   const pst0 = prState(repoState, n);
   // Same sha, posted before: nothing new to say. Exceptions: --restart, answers that wait for a run, and the
   // posted run itself when it crashed before its bookkeeping ended (lastRunId).
-  if (!restart && pst0.lastReviewedSha === head && pst0.lastRunId !== runId && !pendingAnswers(repoState).some((q) => q.pr === n && !q.finding?.kind)) {
+  if (!restart && pst0.lastReviewedSha === head && pst0.lastRunId !== runId) {
+    const answered = pendingAnswers(repoState).filter((q) => q.pr === n && !q.finding?.kind);
+    if (answered.length) return followUp(o, head, pst0, answered);
     return { exit: 0, runDir, skipped: true, summary: `already reviewed ${head}; use --restart to review it again` };
   }
   const f = await o.frame({ repo, n, repoDir: o.repoDir ?? process.cwd(), runDir, config, gh, prState: prState(repoState, n) });
@@ -196,7 +199,7 @@ async function once(o, restart) {
   // shortcut: other reviewers' threads never drop a cluster; "a reviewer gave evidence against it" needs a judge call.
   const me = await gh.viewer();
   const known = new Set([...pst.settled, ...(pst.agreed ?? []).map((a) => a.id)]);
-  const ours = threads.filter((t) => t.comments[0]?.author === me && t.line != null).map((t) => ({ t, key: MARKER_KEY.exec(t.comments[0].body ?? "")?.[1] }));
+  const ours = threads.filter((t) => t.comments[0]?.author === me && t.line != null).map((t) => ({ t, key: MARKER_FP.exec(t.comments[0].body ?? "")?.[1] }));
   const resolvedThread = (c) => ours.some(({ t, key }) => t.path === c.file && t.line === c.line && key && (known.has(key) || key === c.fp));
   const all = raw.filter((c) => run.lenses.includes(c.lens)).map((c) => {
     const seats = [...new Set(seatsForLens(config, c.lens).map(seatId))];
@@ -340,8 +343,9 @@ async function once(o, restart) {
   // Step 6 per finding: a key per sha and finding, so a crash, a --restart or a re-frame never posts a finding twice.
   const inlineKey = (x) => sha1(`inline\0${f.headSha}\0${x.fp}`);
   const fresh = [];
-  for (const x of clean) if (!(await gh.findMarker(repo, n, inlineKey(x)))) fresh.push(x);
-  const p = place(fresh.map((x) => ({ file: x.file, line: x.line, body: `${x.body}\n\n${marker(runId, f.headSha, inlineKey(x))}` })), hunks, permalink);
+  const seen = await gh.markerKeys(repo, n); // one fetch for every check of this post phase
+  for (const x of clean) if (!seen.has(inlineKey(x))) fresh.push(x);
+  const p = place(fresh.map((x) => ({ file: x.file, line: x.line, body: `${x.body}\n\n${marker(runId, f.headSha, inlineKey(x), x.fp)}` })), hunks, permalink);
   const key = sha1(`review\0${runId}`);
   const body = bodyOf(p.body, key);
   const scan = scanOutbound(body);
@@ -364,7 +368,7 @@ async function once(o, restart) {
   const { event, queueApprove, reasons } = v();
   let url = null;
   // Step 6: GitHub is the source of truth; a marker hit means an earlier, interrupted run posted.
-  if (!(await gh.findMarker(repo, n, key))) {
+  if (!seen.has(key)) {
     if (await gh.pendingReview(repo, n)) {
       o.queue({ kind: "review", reason: "pending-review", pr: n, sha: f.headSha });
       return { exit: 0, runDir, planned, skipped: true, summary: "skipped: you have a pending review on this PR; submit or delete it, then run again" };
@@ -398,7 +402,7 @@ async function once(o, restart) {
     const k = sha1(`fixed\0${e.threadId}`);
     const msg = `Fixed in \`${f.headSha}\`.\n\n${marker(runId, f.headSha, k)}`;
     if (!scanOutbound(msg).ok) continue;
-    if (!(await gh.findMarker(repo, n, k))) await gh.reply(repo, n, e.commentId, msg);
+    if (!seen.has(k)) await gh.reply(repo, n, e.commentId, msg);
     if (threads.find((t) => t.id === e.threadId)?.viewerCanResolve) await gh.resolve(e.threadId);
     st.resolved = [...(st.resolved ?? []), e.threadId];
     savePrState(repoState, n, st);
@@ -408,5 +412,54 @@ async function once(o, restart) {
   return {
     exit: 0, runDir, planned, url, event, queueApprove, reasons, questions: questionFiles(),
     summary: `${url ? `posted ${event}: ${url}` : "already posted (marker found on GitHub)"}; ${clean.length} inline finding(s)${open.length ? `; ${open.length} question(s) queued` : ""}`,
+  };
+}
+
+// The text of a comment that an earlier run composed and the secret scan held back, redacted; null when gone.
+function heldText(repoState, n, runId, fp) {
+  const dir = join(repoState, "pr", String(n), "runs", runId ?? "");
+  try {
+    const c = readJson(join(dir, "clusters.json")).clusters.find((x) => x.fp === fp);
+    const body = readJson(join(dir, "compose", "compose.json")).comments.find((x) => x.id === c?.id)?.body;
+    return body ? redact(body) : null;
+  } catch { return null; }
+}
+
+/**
+ * Answers at a sha that was already reviewed: no pipeline and no new summary (spec 6.7, fix round 2).
+ * "drop" only closes the question. "post" / "ask-author" go out as inline comments in one small COMMENT review,
+ * whose key comes from the answered fingerprints, so a rerun never posts it twice.
+ */
+async function followUp(o, head, pst, answered) {
+  const { repo, n, gh, repoState } = o;
+  const items = [];
+  for (const q of answered.filter((x) => x.answer !== "drop")) {
+    const f = q.finding;
+    const text = f.secret ? heldText(repoState, n, pst.lastRunId, q.fingerprint)
+      : `**${f.severity}:** ${f.title}\n\n${f.case}${f.fix ? `\n\n${f.fix}` : ""}${q.answer === "ask-author" ? "\n\nCan you confirm this case?" : ""}`;
+    if (text && scanOutbound(text).ok) items.push({ q, text });
+  }
+  let url = null;
+  if (items.length) {
+    const fps = items.map((x) => x.q.fingerprint).sort();
+    const key = sha1(`followup\0${head}\0${fps.join(",")}`);
+    const runId = pst.lastRunId ?? "followup";
+    const diff = join(repoState, "pr", String(n), "runs", runId, "ctx", "diff.patch");
+    const hunks = parseHunks(existsSync(diff) ? readFileSync(diff, "utf8") : "");
+    const p = place(items.map(({ q, text }) => ({ file: q.finding.file, line: q.finding.line, body: `${text}\n\n${marker(runId, head, sha1(`inline\0${head}\0${q.fingerprint}`), q.fingerprint)}` })), hunks, `https://github.com/${repo}/blob/${head}`);
+    const body = [`Follow-up on the review of ${head}: points settled by the maintainer.`, p.body.length ? p.body.map((l) => `- ${l}`).join("\n") : "", marker(runId, head, key)].filter(Boolean).join("\n\n");
+    if (!scanOutbound(body).ok) return { exit: 4, skipped: true, summary: "follow-up blocked by the secret scan" };
+    if (!(await gh.markerKeys(repo, n)).has(key)) {
+      if (await gh.pendingReview(repo, n)) return { exit: 0, skipped: true, summary: "skipped: you have a pending review on this PR; submit or delete it, then run again" };
+      url = (await gh.postReview(repo, n, { commitOID: head, event: "COMMENT", body, threads: p.inline })).url;
+    }
+    const st = prState(repoState, n);
+    st.settled = [...new Set([...st.settled, ...fps])];
+    savePrState(repoState, n, st);
+  }
+  for (const q of answered) appliedAnswer(repoState, q.id);
+  return {
+    exit: 0, skipped: !items.length, url, event: items.length ? "COMMENT" : undefined, queueApprove: false, reasons: [],
+    summary: items.length ? `follow-up posted with ${items.length} answered finding(s)${url ? `: ${url}` : " (marker found on GitHub)"}` : `answers applied at ${head}; nothing to post`,
   };
 }
