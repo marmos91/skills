@@ -304,6 +304,23 @@ user can add a lens in `~/.config/pr-review/lenses/<name>.md`.
 | architecture | Module boundaries, coupling, data flow, fit with the existing patterns, scale. DX of the API and UX of the user-facing behavior. | `feature-dev:code-architect`, pstack `architect`, pstack `principle-boundary-discipline`, `principle-experience-first` |
 | security | Input validation at trust boundaries, authn and authz, secrets, injection, data exposure, unsafe defaults, dependency risk. | Claude Code `/security-review`, `security-guidance` plugin, `ponytail-review` (risk) |
 
+### 6.3.1 PR hygiene check
+
+A cheap check next to the lenses, not a council lens. It runs at every
+effort level except when `hygiene.enabled` is false.
+
+- **In code** (no model): the title follows the commit style that the base
+  branch uses (Conventional Commits when 60% or more of the last 50 base
+  commits follow it); the PR body is not empty; a linked issue exists when
+  the repo guidance asks for one; `CHANGELOG.md` changed when the repo has
+  one and the PR changes code; commit subjects follow the same style.
+- **1 child** (the judge model, thinking `low`): "Does the PR description
+  match what the diff does? Are docs missing for a changed public
+  interface?" This is skipped at effort `low`.
+- Findings are `should` or `nit`, never `must`. They go into the review
+  summary as one short list. A model finding is phrased as a question to the
+  author, because it comes from one seat.
+
 ### 6.4 Merge
 
 The judge clusters findings that share a root cause. A cluster never crosses
