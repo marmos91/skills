@@ -13,6 +13,7 @@ import { askJev as realAskJev, findJev as realFindJev } from "./lib/decider.mjs"
 import { review, SetupError, STAGES } from "./lib/review.mjs";
 import { answer, markAsked, openQuestions, questionWarnings } from "./lib/questions.mjs";
 import { FINAL_STAGE, Locked, done, prState, stateRoot } from "./lib/state.mjs";
+import { remoteRepos } from "./lib/github.mjs";
 
 // The one signal path: stop the children, then exit; the lock is released on exit.
 installSignalHandlers();
@@ -22,22 +23,14 @@ const USAGE = `usage: pr-review review [<n|url>] [--repo owner/repo] [--dry-run]
        pr-review answer [<question-id> post|drop|ask-author] [--repo owner/repo]
        pr-review status [owner/repo]
        pr-review doctor [--config <file>]
-       pr-review tick [--repo owner/repo]`;
+       pr-review tick [owner/repo]`;
 
 const SKILL_DIR = realpathSync(join(dirname(fileURLToPath(import.meta.url)), ".."));
 const USER_CONFIG = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "pr-review", "config.json");
 
-const GH_URL = /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/;
-const remotes = () => {
-  let lines;
-  try { lines = execFileSync("git", ["config", "--get-regexp", "^remote\\..*\\.url$"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).split("\n"); } catch { return []; }
-  lines.sort((a, b) => b.startsWith("remote.origin.url ") - a.startsWith("remote.origin.url ")); // origin first
-  return lines.map((l) => GH_URL.exec(l.split(" ")[1] ?? "")?.[1]).filter(Boolean);
-};
-
-// --repo, else the GitHub remote of this folder (origin first).
+// --repo or the positional, else the GitHub remote of this folder (origin first). pr-review-loop uses the same rule.
 function repoOf(flag) {
-  const repo = flag ?? remotes()[0];
+  const repo = flag ?? remoteRepos()[0];
   if (!repo) throw new Usage("cannot tell the repo: pass --repo owner/repo or run in a clone of it");
   try { stateRoot(repo); } catch (e) { throw new Usage(e.message); }
   return repo;
@@ -56,12 +49,12 @@ function currentPr() {
 function target(arg, repoFlag) {
   arg ??= currentPr();
   const url = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/.exec(arg ?? "");
-  const repo = url?.[1] ?? repoFlag ?? remotes()[0];
+  const repo = url?.[1] ?? repoFlag ?? remoteRepos()[0];
   const n = url ? Number(url[2]) : Number(arg);
   if (!repo) throw new Usage("cannot tell the repo: pass a PR URL or --repo owner/repo");
   if (!Number.isInteger(n) || n <= 0) throw new Usage(`not a PR number or URL: ${arg}`);
   // The worktree and the base-branch config come from this folder, so it must be a clone of the repo.
-  if (!remotes().includes(repo)) throw new Usage(`this folder is not a clone of ${repo}; cd into one`);
+  if (!remoteRepos().includes(repo)) throw new Usage(`this folder is not a clone of ${repo}; cd into one`);
   return { repo, n };
 }
 
@@ -179,8 +172,9 @@ export async function main(argv, deps = {}) {
   }
   if (cmd === "doctor") return doctor(v, deps);
   if (cmd === "tick") {
-    const { tick } = await import("./lib/tick.mjs"); // Task 13 module
-    const r = await tick({ repo: repoOf(v.repo) });
+    if (rest.length > 1) throw new Usage(USAGE);
+    const { tick } = await import("./lib/tick.mjs");
+    const r = await tick({ repo: repoOf(rest[0] ?? v.repo) });
     return r?.exit ?? 0;
   }
   if (cmd !== "review" || rest.length > 1) throw new Usage(USAGE);

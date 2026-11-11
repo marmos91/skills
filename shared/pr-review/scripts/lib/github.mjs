@@ -1,4 +1,13 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+
+const GH_URL = /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/;
+/** owner/repo of each GitHub remote of the current folder, origin first. */
+export function remoteRepos() {
+  let lines;
+  try { lines = execFileSync("git", ["config", "--get-regexp", "^remote\\..*\\.url$"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).split("\n"); } catch { return []; }
+  lines.sort((a, b) => b.startsWith("remote.origin.url ") - a.startsWith("remote.origin.url "));
+  return lines.map((l) => GH_URL.exec(l.split(" ")[1] ?? "")?.[1]).filter(Boolean);
+}
 
 export class GhError extends Error {
   constructor(msg, { code, stderr } = {}) { super(msg); this.name = "GhError"; this.code = code; this.stderr = stderr; }

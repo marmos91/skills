@@ -148,3 +148,14 @@ test("review exits with Locked while a tick holds the lock", async () => {
     assert.match(r.stderr, new RegExp(`holds the lock \\(pid ${holder.pid}\\)`));
   } finally { holder.kill(); }
 });
+
+test("tick takes the repo as a positional, like status", () => {
+  const fx = fixture();
+  const other = join(fx.root, "state", "pr-review", "x__y");
+  mkdirSync(other, { recursive: true });
+  writeFileSync(join(other, "paused"), "");
+  const r = cli(fx, "tick", "x/y");
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /paused/);
+  assert.equal(cli(fx, "tick", "x/y", "z/w").status, 1);
+});
