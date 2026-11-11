@@ -11,7 +11,7 @@ const QUESTION = "This finding describes a real defect that this PR introduces."
 const executable = (f) => { try { accessSync(f, constants.X_OK); return true; } catch { return false; } };
 
 // Sibling `<skill dir>/../jev/bin/jev` first, else `jev` on PATH.
-function findJev(skillDir, env) {
+export function findJev(skillDir, env) {
   const sibling = join(skillDir, "..", "jev", "bin", "jev");
   if (executable(sibling)) return sibling;
   return (env.PATH || "").split(delimiter).filter(Boolean).map((d) => join(d, "jev")).find(executable) ?? null;

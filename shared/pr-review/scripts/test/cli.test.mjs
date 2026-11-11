@@ -1,0 +1,136 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { queueQuestion } from "../lib/questions.mjs";
+import { stateRoot } from "../lib/state.mjs";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const MAIN = join(here, "..", "main.mjs");
+
+// A git folder whose remote names the GitHub repo, and its own state and config roots.
+function fixture() {
+  const root = mkdtempSync(join(tmpdir(), "prr-cli-"));
+  const dir = join(root, "repo");
+  mkdirSync(dir);
+  execFileSync("git", ["init", "-q", dir]);
+  execFileSync("git", ["remote", "add", "origin", "https://github.com/O/R.git"], { cwd: dir });
+  const env = { ...process.env, XDG_STATE_HOME: join(root, "state"), XDG_CONFIG_HOME: join(root, "config") };
+  return { root, dir, env, state: join(root, "state", "pr-review", "o__r") };
+}
+const cli = (fx, ...args) => spawnSync(process.execPath, [MAIN, ...args], { cwd: fx.dir, env: fx.env, encoding: "utf8" });
+
+const QUESTION = {
+  pr: 7, sha: "abc123", fingerprint: "deadbeefcafe", file: "a.js", line: 3, snippet: "const a = 2;",
+  finding: { title: "Off by one", case: "The loop skips the last item." }, sides: { keep: "k", drop: "d" }, failure: "f",
+};
+
+test("answer: no args lists open questions as JSON; an answer closes the question", () => {
+  const fx = fixture();
+  process.env.XDG_STATE_HOME = fx.env.XDG_STATE_HOME;
+  const id = queueQuestion(stateRoot("o/r"), QUESTION);
+  let r = cli(fx, "answer");
+  assert.equal(r.status, 0, r.stderr);
+  const [q, ...more] = JSON.parse(r.stdout);
+  assert.equal(more.length, 0);
+  assert.equal(q.id, id);
+  assert.deepEqual(q.options, ["post", "drop", "ask-author"]);
+  assert.equal(q.file, join(fx.state, "questions", `${id}.md`));
+  assert.equal(q.finding.title, "Off by one");
+  assert.equal(q.snippet, undefined, "code from the PR stays in the fenced .md file");
+  r = cli(fx, "answer", id, "post");
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(JSON.parse(cli(fx, "answer").stdout), []);
+  assert.equal(cli(fx, "answer", id, "maybe").status, 1);
+});
+
+test("a command with no --repo and no git remote is a usage error", () => {
+  const fx = fixture();
+  execFileSync("git", ["remote", "remove", "origin"], { cwd: fx.dir });
+  const r = cli(fx, "status");
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /--repo/);
+});
+
+test("status shows a stale lock, open questions, an unfinished run and the interrupted tick", async () => {
+  const fx = fixture();
+  process.env.XDG_STATE_HOME = fx.env.XDG_STATE_HOME;
+  queueQuestion(stateRoot("o/r"), QUESTION);
+  // A pid that is surely dead: a process that already exited.
+  const dead = spawnSync(process.execPath, ["-e", "console.log(process.pid)"], { encoding: "utf8" }).stdout.trim();
+  mkdirSync(join(fx.state, "lock"), { recursive: true });
+  writeFileSync(join(fx.state, "lock", "pid"), dead);
+  const run = join(fx.state, "pr", "7", "runs", "abc123-1");
+  mkdirSync(join(run, "round1"), { recursive: true });
+  writeFileSync(join(run, "run.json"), JSON.stringify({ effort: "low", lenses: ["correctness"], missing: [] }));
+  writeFileSync(join(run, "frame.done"), "");
+  writeFileSync(join(run, "round1", "all~0.done"), "");
+  writeFileSync(join(fx.state, "pr", "7", "state.json"), JSON.stringify({ reviews: 2, replies: { t1: 1, t2: 2 } }));
+  writeFileSync(join(fx.state, "todo.md"), "- [ ] fix x\n- [x] done y\n");
+  writeFileSync(join(fx.state, "tick.json"), JSON.stringify({ startedAt: "2026-11-11T10:00:00Z", queue: [{ number: 7 }, { number: 8 }], done: [7], current: 8 }));
+  writeFileSync(join(fx.state, "paused"), "");
+
+  const r = cli(fx, "status", "--repo", "o/r");
+  assert.equal(r.status, 0, r.stderr);
+  const s = JSON.parse(r.stdout);
+  assert.deepEqual(s.lock, { pid: Number(dead), stale: true });
+  assert.equal(s.paused, true);
+  assert.equal(s.questions.length, 1);
+  assert.equal(s.todos, 1);
+  assert.deepEqual(s.tick, { startedAt: "2026-11-11T10:00:00Z", current: 8, left: [8] });
+  const pr = s.prs.find((p) => p.pr === 7);
+  assert.equal(pr.reviews, 2);
+  assert.equal(pr.replies, 3);
+  assert.equal(pr.questions, 1);
+  // low effort: 2 seats in round 1 + 2 votes + 2 judge calls.
+  assert.deepEqual(pr.runs, [{ sha: "abc123", stage: "round1", children: { done: 1, total: 6 } }]);
+});
+
+test("doctor: a seat whose probe fails is named and the exit is 1", async (t) => {
+  const fx = fixture();
+  Object.assign(process.env, { XDG_STATE_HOME: fx.env.XDG_STATE_HOME, XDG_CONFIG_HOME: fx.env.XDG_CONFIG_HOME });
+  const cfg = join(fx.root, "c.json");
+  writeFileSync(cfg, JSON.stringify({ seats: [{ harness: "claude", model: "opus", thinking: "high" }, { harness: "pi", model: "bad/model", thinking: "high" }] }));
+  const gh = join(fx.root, "gh");
+  writeFileSync(gh, "#!/bin/sh\nexit 0\n");
+  chmodSync(gh, 0o755);
+  const oldGh = process.env.GH_BIN;
+  process.env.GH_BIN = gh;
+  t.after(() => { if (oldGh === undefined) delete process.env.GH_BIN; else process.env.GH_BIN = oldGh; });
+  const { main } = await import("../main.mjs");
+  const lines = [];
+  t.mock.method(console, "log", (l) => lines.push(l));
+  const probed = [];
+  const runChild = async ({ seat, timeoutMs }) => {
+    probed.push(`${seat.harness}:${seat.model}`);
+    assert.equal(timeoutMs, 60000);
+    if (seat.model === "bad/model") throw new Error("exit 1: no such model");
+    return { ok: true };
+  };
+  const askJev = async () => ({ answer: "unsure", raw: null });
+  const code = await main(["doctor", "--config", cfg], { runChild, askJev, findJev: () => null });
+  assert.equal(code, 1);
+  const out = lines.join("\n");
+  assert.deepEqual(probed.sort(), ["claude:opus", "pi:bad/model"]); // the judge is claude:opus too: probed once
+  assert.match(out, /FAIL\s+seat pi:bad\/model: exit 1: no such model/);
+  assert.match(out, /ok\s+seat claude:opus/);
+  assert.match(out, /WARN\s+jev: not found/);
+  assert.match(out, /claude mode: --(bare|restricted)/);
+  assert.match(out, /effort low: \d+ children per PR/);
+});
+
+test("review exits with Locked while a tick holds the lock", async () => {
+  const fx = fixture();
+  const holder = spawn(process.execPath, ["--input-type=module", "-e",
+    `const { acquireLock, stateRoot } = await import(${JSON.stringify(join(here, "..", "lib", "state.mjs"))}); acquireLock(stateRoot("o/r")); console.log("held"); setTimeout(() => {}, 30000);`],
+  { env: fx.env, stdio: ["ignore", "pipe", "inherit"] });
+  try {
+    await new Promise((res) => holder.stdout.once("data", res));
+    const r = cli(fx, "review", "5", "--repo", "O/R");
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, new RegExp(`holds the lock \\(pid ${holder.pid}\\)`));
+  } finally { holder.kill(); }
+});
