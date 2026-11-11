@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, readFileSync, chmodSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, chmodSync, existsSync, realpathSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { runChild, salvageJson, ChildFailed } from "../lib/child.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "child-"));
@@ -21,22 +23,66 @@ const piSeat = { harness: "pi", model: "cubbit/mimir", thinking: "high" };
 test("child env has no GitHub or AWS secrets", async () => {
   const envFile = join(dir, "env.txt"), fixture = join(dir, "fx.json");
   writeFileSync(fixture, OK);
-  Object.assign(process.env, { PR_REVIEW_FAKE: fixture, PR_REVIEW_FAKE_ENV: envFile, GH_TOKEN: "x", GITHUB_PERSONAL_ACCESS_TOKEN: "x", AWS_SECRET_ACCESS_KEY: "x" });
+  Object.assign(process.env, { PR_REVIEW_FAKE: fixture, PR_REVIEW_FAKE_ENV: envFile, GH_TOKEN: "x", GITHUB_TOKEN: "x", FOO_SECRET: "x", AWS_ACCESS_KEY_ID: "x", GITHUB_PERSONAL_ACCESS_TOKEN: "x", AWS_SECRET_ACCESS_KEY: "x", ANTHROPIC_BASE_URL: "http://r" });
   try {
     await runChild(base(claudeSeat));
     const env = readFileSync(envFile, "utf8");
-    assert.doesNotMatch(env, /^(GH_TOKEN|GITHUB_PERSONAL_ACCESS_TOKEN|AWS_)/m);
+    assert.doesNotMatch(env, /^(GH_TOKEN|GITHUB_TOKEN|FOO_SECRET|GITHUB_PERSONAL_ACCESS_TOKEN|AWS_)/m);
+    assert.match(env, /^ANTHROPIC_BASE_URL=http:\/\/r$/m);
     assert.match(env, /^PATH=/m);
   } finally {
-    for (const k of ["PR_REVIEW_FAKE", "PR_REVIEW_FAKE_ENV", "GH_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN", "AWS_SECRET_ACCESS_KEY"]) delete process.env[k];
+    for (const k of ["PR_REVIEW_FAKE", "PR_REVIEW_FAKE_ENV", "GH_TOKEN", "GITHUB_TOKEN", "FOO_SECRET", "AWS_ACCESS_KEY_ID", "ANTHROPIC_BASE_URL", "GITHUB_PERSONAL_ACCESS_TOKEN", "AWS_SECRET_ACCESS_KEY"]) delete process.env[k];
   }
 });
 
 test("pi adapter closes stdin", async () => {
+  // stub blocks reading stdin; only returns if pi.sh redirects it from /dev/null
   stub("pi", `cat >/dev/null; printf '%s' '${OK}'`);
-  // a hang would exceed the 5 s child timeout and fail
-  const r = await runChild(base(piSeat, { routerUp: false }));
-  assert.equal(r.position, "ask");
+  const pi = join(dirname(fileURLToPath(import.meta.url)), "..", "harness", "pi.sh");
+  const p = spawn(pi, ["m", "high", "read", prompt, join(dir, "pi-out.json")], { stdio: ["pipe", "ignore", "ignore"] }); // pipe never closed
+  const code = await new Promise((res) => { const t = setTimeout(() => { p.kill("SIGKILL"); res("hung"); }, 5000); p.on("close", (c) => { clearTimeout(t); res(c); }); });
+  assert.equal(code, 0);
+});
+
+test("pi adapter attaches the prompt as a file and omits an empty provider", async () => {
+  stub("pi", `echo "$@" >"${dir}/argv"; printf '%s' '${OK}'`);
+  await runChild(base({ harness: "pi", model: "plain", thinking: "high" }));
+  const a = readFileSync(join(dir, "argv"), "utf8");
+  assert.doesNotMatch(a, /--provider|SECRET-PROMPT/);
+  assert.match(a, new RegExp(`@${prompt}`));
+});
+
+test("claude --bare keeps --strict-mcp-config when an OAuth token is set", async () => {
+  stub("claude", `echo "$@" >"${dir}/argv"; printf '%s' '${OK}'`);
+  process.env.CLAUDE_CODE_OAUTH_TOKEN = "t";
+  try { await runChild(base(claudeSeat)); } finally { delete process.env.CLAUDE_CODE_OAUTH_TOKEN; }
+  const a = readFileSync(join(dir, "argv"), "utf8");
+  assert.match(a, /--bare --strict-mcp-config/);
+  assert.doesNotMatch(a, /--restricted/);
+});
+
+test("cwd is a neutral folder; the worktree is added via --add-dir", async () => {
+  const wt = join(dir, "wt"); mkdirSync(join(wt, ".claude"), { recursive: true });
+  writeFileSync(join(wt, "CLAUDE.md"), "x"); writeFileSync(join(wt, ".claude", "settings.json"), "{}");
+  stub("claude", `pwd -P >"${dir}/cwd"; echo "$@" >"${dir}/argv"; printf '%s' '${OK}'`);
+  await runChild(base(claudeSeat, { worktree: wt }));
+  assert.notEqual(readFileSync(join(dir, "cwd"), "utf8").trim(), realpathSync(wt));
+  assert.match(readFileSync(join(dir, "argv"), "utf8"), new RegExp(`--add-dir ${wt} `));
+});
+
+test("SIGTERM to the engine kills running seats", async () => {
+  stub("claude", `echo $$ >"${dir}/live.pid"; sleep 300 & wait`);
+  const mod = join(dirname(fileURLToPath(import.meta.url)), "..", "lib", "child.mjs");
+  const script = `import {runChild} from ${JSON.stringify(mod)};
+    runChild({seat:{harness:"claude",model:"o",thinking:"high"},promptFile:${JSON.stringify(prompt)},outFile:${JSON.stringify(join(dir, "live-out.json"))},timeoutMs:60000,retries:0}).catch(()=>{});`;
+  const parent = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: "ignore" });
+  const pidFile = join(dir, "live.pid");
+  for (let i = 0; i < 100 && !existsSync(pidFile); i++) await new Promise((r) => setTimeout(r, 50));
+  const pid = Number(readFileSync(pidFile, "utf8"));
+  const closed = new Promise((r) => parent.on("close", r));
+  parent.kill("SIGTERM");
+  await closed;
+  assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
 });
 
 test("claude adapter sends the prompt on stdin", async () => {
@@ -49,6 +95,7 @@ test("claude adapter sends the prompt on stdin", async () => {
 test("tools=read gives no shell; tools=shell adds Bash/bash", async () => {
   stub("claude", `echo "$@" >"${dir}/argv"; printf '%s' '${OK}'`);
   stub("pi", `echo "$@" >"${dir}/argv"; printf '%s' '${OK}'`);
+  delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
   const argv = () => readFileSync(join(dir, "argv"), "utf8");
   await runChild(base(claudeSeat, { tools: "read" }));
   assert.match(argv(), /--tools Read,Grep,Glob\b(?!,)/);

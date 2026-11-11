@@ -4,7 +4,9 @@ set -eu
 model=$1 thinking=$2 tools=$3 prompt=$4 out=$5
 list="read,grep,find,ls"
 [ "$tools" = shell ] && list="$list,bash"
-# pi -p reads stdin when it is a pipe and hangs: always /dev/null.
+# Prompt travels as an attached file: no argv size limit, no leading-dash trouble.
+# pi -p reads stdin when piped and hangs: always </dev/null.
+[ -n "${SEAT_PROVIDER:-}" ] && set -- --provider "$SEAT_PROVIDER" || set --
 pi -p --no-session --no-context-files --no-extensions --no-skills --no-mcp \
-  --provider "${SEAT_PROVIDER:-}" --model "$model" --thinking "$thinking" --tools "$list" \
-  "$(cat "$prompt")" </dev/null >"$out"
+  "$@" --model "$model" --thinking "$thinking" --tools "$list" \
+  @"$prompt" "Do the task described in the attached file." </dev/null >"$out"
