@@ -163,6 +163,10 @@ wave-batch parallelism. Re-validate after changes with the same technique:
 `EPIC_FILTER=<one small epic> DRY_RUN=1 LENS=<stub>` is cheap and asserts
 the state machine, not the models.
 
+The jev plan-coverage gate (`scripts/lib/jev-gate.sh`) has its own test with
+a stub `jev` on PATH: `sh scripts/test/jev-gate.test.sh` (exit-code mapping,
+outage latch, once-per-finding guard, crash before the revised plan is saved).
+
 ## Relation to the audit
 
 Input contract: `epics.json` (id, epic, title, goal, findings, acceptance,
