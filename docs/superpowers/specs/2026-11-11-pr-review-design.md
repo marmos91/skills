@@ -186,6 +186,29 @@ replaces the user level for one run.
   each distinct seat, checks `gh auth status` and `jev`, and prints the
   planned child count per PR.
 
+### 5.1 Effort
+
+`--effort low|medium|high|max` (config `effort`, default `medium`; the loop
+uses `loop.effort`, default `medium`) limits token use. It sets the council
+size and depth. It never removes a lens or the agreement step.
+
+| | low | medium | high | max |
+|---|---|---|---|---|
+| seats (first N of `seats`) | 2 | 3 | 3 | all |
+| round 1 shape | per-seat | per-seat | per-lens | per-lens |
+| thinking cap | low | medium | high | none |
+| severities posted | must, should | all | all | all |
+| max findings posted | 5 | 10 | 20 | no limit |
+
+- The effort overrides `round1`. It caps each seat's `thinking`: a lower
+  configured value stays, a higher one is lowered to the cap.
+- Lens model overrides stay at every effort; their thinking is capped too.
+- Findings above the limit are dropped lowest severity first; the summary
+  says how many were left out.
+- The loop runs a delta review one level below `loop.effort` (not below
+  `low`).
+- `--dry-run` and `doctor` print the planned children and models.
+
 ## 6. `/pr-review` pipeline
 
 Input: a PR number or URL. With no input, the PR of the current branch.
