@@ -56,3 +56,68 @@ exit 1
     process.env.PATH = old;
   }
 });
+
+function withStub(script, fn) {
+  const dir = mkdtempSync(join(tmpdir(), "gl-"));
+  const stub = join(dir, "gitleaks");
+  writeFileSync(stub, `#!/bin/sh\n${script}\n`);
+  chmodSync(stub, 0o755);
+  const old = process.env.PATH;
+  process.env.PATH = `${dir}:${old}`;
+  try { return fn(); } finally { process.env.PATH = old; }
+}
+const getReport = `while [ $# -gt 0 ]; do [ "$1" = "--report-path" ] && p="$2"; shift; done`;
+
+for (const [name, script] of Object.entries({
+  "exit 2": "cat >/dev/null; exit 2",
+  "no report": "cat >/dev/null; exit 0",
+  "null report": `cat >/dev/null; ${getReport}; echo null > "$p"`,
+  "invalid report": `cat >/dev/null; ${getReport}; echo '{{' > "$p"`,
+})) {
+  test(`scanner error fails closed: ${name}`, () => {
+    withStub(script, () => {
+      const res = scanOutbound("clean text");
+      assert.equal(res.ok, false);
+      assert.deepEqual(res.hits, ["gitleaks: scanner-error"]);
+    });
+  });
+}
+
+test("scanner error fails closed: timeout", () => {
+  withStub("exec sleep 5", () => {
+    const res = scanOutbound("clean text", { timeoutMs: 200 });
+    assert.equal(res.ok, false);
+    assert.deepEqual(res.hits, ["gitleaks: scanner-error"]);
+  });
+});
+
+test("gitleaks exit 0 with empty array is ok", () => {
+  withStub(`cat >/dev/null; ${getReport}; echo '[]' > "$p"`, () => {
+    assert.deepEqual(scanOutbound("clean text"), { ok: true, hits: [] });
+  });
+});
+
+test("redact removes whole private key block, complete and truncated", () => {
+  const body = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC";
+  const full = `a\n-----BEGIN PRIVATE KEY-----\n${body}\n-----END PRIVATE KEY-----\nb`;
+  const rf = redact(full);
+  assert.ok(!rf.includes(body));
+  assert.ok(rf.startsWith("a\n[REDACTED:private-key]") && rf.endsWith("\nb"));
+  const cut = `a\n-----BEGIN RSA PRIVATE KEY-----\n${body}\nmore`;
+  const rc = redact(cut);
+  assert.ok(!rc.includes(body) && !rc.includes("more"));
+});
+
+test("tokens after underscore and case-insensitive bearer hit", () => {
+  assert.equal(scanOutbound("KEY_" + cases["aws-access-key-id"]).ok, false);
+  assert.equal(scanOutbound("TOKEN_" + cases["github-token"]).ok, false);
+  assert.equal(scanOutbound("BEARER " + "z".repeat(24)).ok, false);
+});
+
+test("deterministic, redact-then-scan clean, multiple secrets all hit", () => {
+  const text = `${cases["aws-access-key-id"]} and ${cases["github-token"]} and ${cases["slack-token"]}`;
+  const a = scanOutbound(text);
+  assert.deepEqual(scanOutbound(text), a);
+  assert.equal(a.hits.length, 3);
+  assert.deepEqual(scanOutbound(redact(text)), { ok: true, hits: [] });
+});
