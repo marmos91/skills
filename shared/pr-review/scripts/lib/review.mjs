@@ -87,7 +87,7 @@ async function child(ctx, stage, key, { seat, prompt, schema, tools = "read", le
   const limited = withLimits(ctx.config, seat, lens, stage);
   writeFileSync(promptFile, prompt(limited));
   let v;
-  try { v = await ctx.runChild({ seat: limited, tools, promptFile, outFile, worktree: ctx.frame.worktree, ctxDir: ctx.frame.ctxDir, schema, routerUp: ctx.routerUp }); } catch (e) {
+  try { v = await ctx.runChild({ seat: limited, tools, promptFile, outFile, worktree: ctx.frame.worktree, ctxDir: ctx.frame.ctxDir, schema, routerUp: ctx.routerUp, droppable: council }); } catch (e) {
     if (!(e instanceof SeatDropped) || !council) throw e;
     ctx.drop(seat, e.reason, stage);
     return null;

@@ -73,7 +73,9 @@ export function salvageJson(text, ok) {
       }
     }
   }
-  if (ok) for (const x of found.toReversed()) if (ok(x.v)) return x.v;
+  // With a schema: only the LAST value counts. Falling back to an earlier one could pick a value the
+  // seat quoted (from the PR or its own prose) and hide its real, invalid or error output; fail and retry.
+  if (ok) return found.at(-1)?.v ?? null; // the caller validates it and retries on failure
   return found.reduce((a, b) => (b.size > a.size ? b : a), { v: null, size: -1 }).v;
 }
 
@@ -110,7 +112,7 @@ function runOnce(script, args, env, cwd, timeoutMs) {
 
 // retries = extra attempts after the first.
 // The pi harness has no turn limit: there the timeout is the only bound on a long tool loop.
-export async function runChild({ seat, tools = "read", promptFile, outFile, worktree, ctxDir, schema, timeoutMs = (seat.timeout_minutes ?? 10) * 60000, retries = 2, routerUp }) {
+export async function runChild({ seat, tools = "read", promptFile, outFile, worktree, ctxDir, schema, timeoutMs = (seat.timeout_minutes ?? 10) * 60000, retries = 2, routerUp, droppable = false }) {
   const fake = process.env.PR_REVIEW_FAKE;
   let harness = seat.harness;
   if (!fake && harness === "auto") harness = resolveHarness(seat, routerUp ?? (await probeRouter()));
@@ -146,9 +148,15 @@ export async function runChild({ seat, tools = "read", promptFile, outFile, work
     } catch (e) {
       last = e;
       // A retry hits the same limit: the seat drops at once. claude prints this and exits 1 at --max-turns.
-      if (e.timedOut) throw new SeatDropped(seat, "timeout", e.message);
-      const text = `${e.message}\n${await readFile(outFile, "utf8").catch(() => "")}`;
-      if (/Reached max turns|error_max_turns/.test(text)) throw new SeatDropped(seat, "turn limit", `max_turns (${seat.max_turns})`);
+      // only council seats drop; judge, compose and reply children keep their retries
+      if (droppable && e.timedOut) throw new SeatDropped(seat, "timeout", e.message);
+      // claude -p prints only this line at --max-turns; a seat that merely quotes it in longer output is not matched
+      const out = (await readFile(outFile, "utf8").catch(() => "")).trim();
+      if (harness === "claude" && (/error_max_turns/.test(e.message) || /^Error: Reached max turns \(\d+\)$/.test(out))) {
+        // a retry hits the same limit: never retried; only council seats drop, other children fail
+        if (droppable) throw new SeatDropped(seat, "turn limit", `max_turns (${seat.max_turns})`);
+        throw new ChildFailed(`${harness}:${seat.model} hit max_turns (${seat.max_turns})`);
+      }
     }
   }
   throw new ChildFailed(`${fake ? "fake" : harness}:${seat.model} failed after ${retries + 1} attempts: ${last.message}`);

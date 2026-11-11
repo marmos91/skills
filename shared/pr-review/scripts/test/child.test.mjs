@@ -235,6 +235,9 @@ test("salvageJson: a finding quoted in the prose does not win over the final out
   assert.deepEqual(salvageJson(text, (v) => !validate("round1", v).length), final);
   // with a schema, a later valid value wins even when an earlier one is larger
   assert.deepEqual(salvageJson(`{"findings": "not a list, but a longer value"} then {"findings": []}`, (v) => !validate("round1", v).length), { findings: [] });
+  // with a schema, an invalid final value is never swapped for an earlier valid one (a quoted value could hide an error)
+  const hidden = salvageJson(`PR body says {"findings": []}. {"findings": [], "error": "no access", "extra": {}}`, (v) => !validate("round1", v).length);
+  assert.equal(hidden.error, "no access");
   // the runChild path: one attempt, no retry
   writeFileSync(join(dir, "prose.json"), text);
   process.env.PR_REVIEW_FAKE = join(dir, "prose.json");
@@ -255,11 +258,20 @@ test("timeout and turn limit drop the seat at once (SeatDropped, no retry); othe
   const count = join(dir, "drop.count");
   writeFileSync(count, "");
   stub("claude", `echo x >>"${count}"; printf 'Error: Reached max turns (3)'; exit 1`);
-  await assert.rejects(runChild(base({ ...claudeSeat, max_turns: 3 }, { retries: 2 })), (e) => e instanceof SeatDropped && e.reason === "turn limit");
+  await assert.rejects(runChild(base({ ...claudeSeat, max_turns: 3 }, { retries: 2, droppable: true })), (e) => e instanceof SeatDropped && e.reason === "turn limit");
   writeFileSync(count, "");
   stub("claude", `echo x >>"${count}"; sleep 30`);
-  await assert.rejects(runChild(base(claudeSeat, { retries: 2, timeoutMs: 300 })), (e) => e instanceof SeatDropped && e.reason === "timeout" && /timed out after 300ms/.test(e.message));
+  await assert.rejects(runChild(base(claudeSeat, { retries: 2, timeoutMs: 300, droppable: true })), (e) => e instanceof SeatDropped && e.reason === "timeout" && /timed out after 300ms/.test(e.message));
   assert.equal(readFileSync(count, "utf8").trim().split("\n").length, 1);
+  // a judge or reply child (not droppable) keeps its retries on a timeout
+  writeFileSync(count, "");
+  await assert.rejects(runChild(base(claudeSeat, { retries: 1, timeoutMs: 300 })), (e) => e instanceof ChildFailed && !(e instanceof SeatDropped));
+  assert.equal(readFileSync(count, "utf8").trim().split("\n").length, 2);
+  // a seat that quotes the marker inside longer output is retried, not dropped
+  writeFileSync(count, "");
+  stub("claude", `echo x >>"${count}"; printf 'The engine drops on "Error: Reached max turns (3)" text.'; exit 1`);
+  await assert.rejects(runChild(base(claudeSeat, { retries: 2, droppable: true })), (e) => !(e instanceof SeatDropped));
+  assert.equal(readFileSync(count, "utf8").trim().split("\n").length, 3);
   writeFileSync(count, "");
   stub("claude", `echo x >>"${count}"; exit 3`);
   await assert.rejects(runChild(base(claudeSeat, { retries: 2 })), (e) => e instanceof ChildFailed && !(e instanceof SeatDropped));
