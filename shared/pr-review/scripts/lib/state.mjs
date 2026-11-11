@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync, renameSync, rmSync, existsSync,
 import { homedir } from "node:os";
 import { randomBytes } from "node:crypto";
 import { join, dirname } from "node:path";
+import { installSignalHandlers } from "./child.mjs";
 
 // A run is finished once its last stage has a marker.
 export const FINAL_STAGE = "post";
@@ -39,19 +40,13 @@ function release(dir) {
   rmSync(gone, { recursive: true, force: true });
 }
 
-let installed = false;
-// Releases held locks on exit, SIGINT and SIGTERM. Exits on a signal only when no other handler (child.mjs) will.
-export function installSignalHandlers() {
-  if (installed) return;
-  installed = true;
-  process.on("exit", releaseAll);
-  for (const [sig, n] of [["SIGINT", 2], ["SIGTERM", 15]]) {
-    process.on(sig, function onSig() {
-      releaseAll();
-      if (process.listeners(sig).every((l) => l === onSig)) process.exit(128 + n);
-    });
-  }
+let exitHook = false;
+// Signals go through child.mjs (one path: stop children, then exit); the lock is released on "exit".
+function releaseOnExit() {
+  if (!exitHook) { exitHook = true; process.on("exit", releaseAll); }
+  installSignalHandlers();
 }
+export { installSignalHandlers };
 
 const rawPid = (dir) => { try { return readFileSync(join(dir, "pid"), "utf8"); } catch { return ""; } };
 const rand = () => randomBytes(4).toString("hex");
@@ -125,7 +120,7 @@ export function acquireLock(repoState) {
 
 function own(dir) {
   held.add(dir);
-  installSignalHandlers();
+  releaseOnExit();
   return () => release(dir);
 }
 

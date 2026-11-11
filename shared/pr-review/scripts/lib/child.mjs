@@ -12,25 +12,28 @@ import { ENV_OK } from "./env.mjs";
 // Live child process groups: seats must not outlive the engine.
 const live = new Set();
 const killAll = (sig) => { for (const pid of live) try { process.kill(-pid, sig); } catch {} };
-let handlersInstalled = false;
-function installHandlers() {
+let handlersInstalled = false, stopping = false;
+// The engine's one signal path: stop the children, then exit once; the "exit" listeners (lock release) run then.
+export function installSignalHandlers() {
   if (handlersInstalled) return;
   handlersInstalled = true;
   process.on("exit", () => killAll("SIGKILL"));
   for (const [sig, n] of [["SIGINT", 2], ["SIGTERM", 15]]) {
     process.on(sig, () => {
+      if (stopping) return;
+      stopping = true;
       killAll("SIGTERM");
       const start = Date.now();
       const iv = setInterval(() => {
         for (const pid of live) try { process.kill(-pid, 0); } catch { live.delete(pid); }
-        if (!live.size || Date.now() - start > 5000) { killAll("SIGKILL"); process.exit(128 + n); }
+        if (!live.size || Date.now() - start > 5000) { clearInterval(iv); killAll("SIGKILL"); process.exit(128 + n); }
       }, 100);
     });
   }
 }
 
 /** Register a detached child's process group so an engine signal kills it. */
-export function track(pid) { installHandlers(); live.add(pid); }
+export function track(pid) { installSignalHandlers(); live.add(pid); }
 export function untrack(pid) { live.delete(pid); }
 
 export class ChildFailed extends Error {
@@ -109,6 +112,7 @@ export async function runChild({ seat, tools = "read", promptFile, outFile, work
   }
   let last;
   for (let i = 0; i <= retries; i++) {
+    if (stopping) throw new ChildFailed("engine is stopping on a signal"); // a killed child is not retried
     try {
       await runOnce(script, [model, seat.thinking, tools, promptFile, outFile], env, cwd, timeoutMs);
       const value = salvageJson(await readFile(outFile, "utf8"));
