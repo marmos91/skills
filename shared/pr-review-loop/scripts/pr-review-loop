@@ -2,18 +2,23 @@
 # pr-review-loop [owner/repo]          one loop run (repeat it with /loop, cron or launchd)
 # pr-review-loop pause|resume [owner/repo]
 # pr-review-loop answer [<id> <option>]
+# The repo is the argument, else the GitHub remote of this folder (origin first): the same rule as the engine.
 set -e
 engine="$(dirname "$(realpath "$0")")/../../pr-review/scripts"
 case "${1:-}" in
   pause|resume)
-    cmd=$1
-    repo=${2:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}
-    dir=$(node --input-type=module -e 'const { stateRoot } = await import(process.argv[1]); console.log(stateRoot(process.argv[2]));' "$engine/lib/state.mjs" "$repo")
-    if [ "$cmd" = pause ]; then
-      mkdir -p "$dir" && : > "$dir/paused" && echo "paused: $repo"
-    else
-      rm -f "$dir/paused" && echo "resumed: $repo"
-    fi ;;
+    exec node --input-type=module -e '
+const [lib, cmd, arg] = process.argv.slice(1);
+const { remoteRepos } = await import(`${lib}/github.mjs`);
+const { stateRoot } = await import(`${lib}/state.mjs`);
+const { mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+const repo = arg || remoteRepos()[0];
+if (!repo) { console.error("pr-review-loop: cannot tell the repo: pass owner/repo or run in a clone of it"); process.exit(1); }
+let dir;
+try { dir = stateRoot(repo); } catch (e) { console.error(`pr-review-loop: ${e.message}`); process.exit(1); }
+if (cmd === "pause") { mkdirSync(dir, { recursive: true }); writeFileSync(`${dir}/paused`, ""); } else rmSync(`${dir}/paused`, { force: true });
+console.log(`${cmd}d: ${repo}`);
+' "$engine/lib" "$1" "${2:-}" ;;
   answer) shift; exec "$engine/pr-review" answer "$@" ;;
   *) exec "$engine/pr-review" tick "$@" ;;
 esac
