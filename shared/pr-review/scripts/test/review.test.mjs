@@ -846,3 +846,13 @@ test("every child gets the ctx folder next to the worktree", async () => {
   assert.ok(run.calls.length > 0);
   for (const c of run.calls) assert.equal(c.ctxDir, join(r.runDir, "ctx"), c.k);
 });
+
+test("per-stage thinking reaches the children: cubbit seats vote with thinking off", async () => {
+  const fx = fixture(); routes(fx);
+  const { r, run } = await go(fx, split());
+  assert.equal(r.exit, 3, r.summary);
+  const th = (k) => run.calls.find((c) => c.k === k).seat.thinking;
+  assert.equal(th("all~1"), "medium", "round 1: the seat's level after the effort cap");
+  assert.equal(th("v~1"), "off");
+  assert.equal(th("merge"), "medium", "the judge is a claude seat");
+});

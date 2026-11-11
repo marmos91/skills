@@ -126,11 +126,13 @@ export async function runChild({ seat, tools = "read", promptFile, outFile, work
     env.SEAT_PROVIDER = seat.provider ?? (rest.length ? prov : "");
     if (!seat.provider && rest.length) model = rest.join("/");
   }
+  // claude --effort has no off or minimal: a Mimir seat routed through claude thinks at low.
+  const thinking = harness === "claude" && ["off", "minimal"].includes(seat.thinking) ? "low" : seat.thinking;
   let last;
   for (let i = 0; i <= retries; i++) {
     if (stopping) throw new ChildFailed("engine is stopping on a signal"); // a killed child is not retried
     try {
-      await runOnce(script, [model, seat.thinking, tools, promptFile, outFile], env, cwd, timeoutMs);
+      await runOnce(script, [model, thinking, tools, promptFile, outFile], env, cwd, timeoutMs);
       const value = salvageJson(await readFile(outFile, "utf8"), schema && ((v) => validate(schema, v).length === 0));
       if (value === null) throw new Error("no JSON in output");
       const errs = schema ? validate(schema, value) : [];

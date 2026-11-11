@@ -81,7 +81,7 @@ async function child(ctx, stage, key, { seat, prompt, schema, tools = "read", le
   if (done(ctx.runDir, stage, key)) return readJson(outFile);
   mkdirSync(dir, { recursive: true });
   const promptFile = join(dir, `${key}.prompt`);
-  const limited = withLimits(ctx.config, seat, lens);
+  const limited = withLimits(ctx.config, seat, lens, stage);
   writeFileSync(promptFile, prompt(limited));
   const v = await ctx.runChild({ seat: limited, tools, promptFile, outFile, worktree: ctx.frame.worktree, ctxDir: ctx.frame.ctxDir, schema, routerUp: ctx.routerUp });
   save(outFile, v);

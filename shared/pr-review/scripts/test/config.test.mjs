@@ -139,3 +139,34 @@ test("turn and time limits: seat, then lens, then review.* (defaults 40 turns, 1
     ['{"review":{"timeout_minutes":0}}', /review.timeout_minutes must be a positive integer/],
   ]) assert.throws(() => loadConfig({ userPath: tmp(text) }), re, text);
 });
+
+test("thinking_by_stage: seat, then lens, then the default (cubbit seats think only in round 1); effort cap on top; validated", async () => {
+  const { withLimits, applyEffort } = await import("../lib/config.mjs");
+  const c0 = loadConfig({ userPath: tmp(JSON.stringify({
+    seats: [
+      { harness: "claude", model: "opus", thinking: "high" },
+      { harness: "auto", model: "cubbit/mimir-pro", thinking: "high" },
+      { harness: "pi", model: "cubbit/mimir", thinking: "high", thinking_by_stage: { vote: "low", round1: "max" } },
+    ],
+    lenses: { security: { enabled: true, thinking_by_stage: { round1: "xhigh", vote: "minimal" } } },
+  })) });
+  const c = applyEffort(c0, "medium");
+  const [opus, pro, mimir] = c.seats;
+  const t = (s, stage, lens) => withLimits(c, s, lens, stage).thinking;
+  // claude: one level everywhere
+  assert.deepEqual(["round1", "vote", "merge", "compose"].map((st) => t(opus, st)), ["medium", "medium", "medium", "medium"]);
+  // cubbit default: round1 = the capped thinking, vote and merge off
+  assert.deepEqual(["round1", "vote", "merge", "compose"].map((st) => t(pro, st)), ["medium", "off", "off", "medium"]);
+  // the seat wins, capped by the effort; then the lens; then the default
+  assert.deepEqual([t(mimir, "round1"), t(mimir, "vote"), t(mimir, "merge")], ["medium", "low", "off"]);
+  assert.equal(t(pro, "round1", "security"), "medium", "lens xhigh capped to medium");
+  assert.equal(t(pro, "vote", "security"), "minimal");
+  assert.equal(t(mimir, "vote", "security"), "low", "seat beats lens");
+  assert.equal(withLimits(c, pro).thinking, "medium", "no stage: the seat's thinking");
+  for (const [text, re] of [
+    ['{"seats":[{"harness":"claude","model":"opus","thinking":"high","thinking_by_stage":{"vote":"off"}}]}', /seats\[0\].thinking_by_stage.vote \(claude seat\) must be one of low/],
+    ['{"seats":[{"harness":"pi","model":"m","thinking":"high","thinking_by_stage":{"compose":"low"}}]}', /seats\[0\].thinking_by_stage.compose must be a stage: round1, vote or merge/],
+    ['{"seats":[{"harness":"pi","model":"m","thinking":"high","thinking_by_stage":"low"}]}', /seats\[0\].thinking_by_stage must be an object/],
+    ['{"lenses":{"security":{"enabled":true,"thinking_by_stage":{"round1":"huge"}}}}', /lenses.security.thinking_by_stage.round1 must be one of/],
+  ]) assert.throws(() => loadConfig({ userPath: tmp(text) }), re, text);
+});

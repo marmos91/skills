@@ -457,6 +457,17 @@ A commented copy is in `shared/pr-review/config.example.json`.
   probed once per run; `PR_REVIEW_ROUTER_HEALTH` sets the URL. In Claude Code,
   a session that routes `cubbit/*` through the router runs every seat as
   `claude -p`. pi cannot run Opus or Fable, so those seats always use claude.
+- `thinking_by_stage` (`{ "round1": ..., "vote": ..., "merge": ... }`) sets
+  the thinking per stage on a seat or a lens. The engine takes the seat's
+  value, then the lens's (for the round 1 children of that lens), then the
+  default. By default a `cubbit/*` seat (harness `auto` or `pi`) thinks at its
+  `thinking` in round 1 and at `off` in vote and merge: in a blind judge of
+  13 runs, Mimir at `medium` found about 3 times the real defects of `off` in
+  round 1, while thinking in vote and merge only cost time. Claude seats keep
+  one level for every stage. The effort cap applies on top, the loader checks
+  each level against the harness, and a Mimir seat routed through claude
+  gets `low` for `off` (claude has no `off`). Compose and hygiene use
+  `thinking`.
 - `max_turns` and `timeout_minutes` limit one child. A seat may set its
   own; a lens may set `max_turns` for its children; else `review.max_turns`
   (default 40) and `review.timeout_minutes` (default 10) apply. Only claude

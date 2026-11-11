@@ -26,6 +26,8 @@
     "max_review_rounds": 3,
     "max_replies_per_thread": 2
   },
+  // Per-stage thinking on a seat or a lens: "thinking_by_stage": { "round1": "medium", "vote": "off", "merge": "off" }.
+  // That is the default for cubbit/ seats; claude seats keep one level. The effort cap applies on top.
   // Limits per child: a seat may set its own "max_turns" and "timeout_minutes", a lens its own "max_turns".
   // max_turns reaches claude seats only (--max-turns); pi has no such flag, so the timeout bounds it.
   "review": { "max_turns": 40, "timeout_minutes": 10 },

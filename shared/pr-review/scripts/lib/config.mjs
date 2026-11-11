@@ -105,6 +105,16 @@ function need(ok, path, what) {
   if (!ok) throw new Error(`${path} must be ${what}`);
 }
 
+const THINKING_STAGES = ["round1", "vote", "merge"];
+function checkStages(t, where, ok, label = "") {
+  if (t === undefined) return;
+  need(isObj(t), `${where}.thinking_by_stage`, "an object");
+  for (const [k, v] of Object.entries(t)) {
+    need(THINKING_STAGES.includes(k), `${where}.thinking_by_stage.${k}`, "a stage: round1, vote or merge");
+    need(ok.includes(v), `${where}.thinking_by_stage.${k}${label}`, `one of ${ok.join("|")}`);
+  }
+}
+
 function checkSeat(s, where) {
   need(isObj(s), where, "an object");
   need(HARNESSES.includes(s.harness), `${where}.harness`, "claude, pi or auto");
@@ -112,6 +122,7 @@ function checkSeat(s, where) {
   need(s.provider === undefined || typeof s.provider === "string", `${where}.provider`, "a string");
   const ok = s.harness === "claude" ? CLAUDE_THINKING : PI_THINKING;
   need(ok.includes(s.thinking), `${where}.thinking (${s.harness} seat)`, `one of ${ok.join("|")}`);
+  checkStages(s.thinking_by_stage, where, ok, ` (${s.harness} seat)`);
   for (const k of ["max_turns", "timeout_minutes"]) need(s[k] === undefined || posInt(s[k]), `${where}.${k}`, "a positive integer");
 }
 
@@ -126,6 +137,7 @@ function validate(c) {
     need(isObj(l), `lenses.${name}`, "an object");
     need(typeof l.enabled === "boolean", `lenses.${name}.enabled`, "a boolean");
     need(l.max_turns === undefined || posInt(l.max_turns), `lenses.${name}.max_turns`, "a positive integer");
+    checkStages(l.thinking_by_stage, `lenses.${name}`, PI_THINKING); // claude children map off and minimal to low
     if (l.seats === undefined) continue;
     if (!Array.isArray(l.seats) || l.seats.length < 2) throw new Error(`lens ${name} needs 2 or more seats`);
     l.seats.forEach((s, i) => checkSeat(s, `lenses.${name}.seats[${i}]`));
@@ -168,9 +180,19 @@ export function loadConfig({ userPath, repoText, cliPath } = {}) {
 
 export const seatId = (s) => `${s.harness}:${s.model}`;
 
-/** The seat with its child limits: the seat's own, then the lens's max_turns, then review.max_turns / review.timeout_minutes. */
-export const withLimits = (config, s, lens) => ({
+const STAGE_KEY = { round1: "round1", round2: "vote", vote: "vote", merge: "merge" };
+
+/**
+ * The seat for one child. Limits: the seat's own, then the lens's max_turns, then review.max_turns / review.timeout_minutes.
+ * thinking for round1, vote (round2) and merge: seat thinking_by_stage, then lens thinking_by_stage, then the default:
+ * a cubbit seat (Mimir) thinks only in round 1, where it pays off; every other seat keeps its one level.
+ */
+export const withLimits = (config, s, lens, stage) => ({
   ...s,
+  thinking: STAGE_KEY[stage]
+    ? s.thinking_by_stage?.[STAGE_KEY[stage]] ?? config.lenses[lens]?.thinking_by_stage?.[STAGE_KEY[stage]]
+      ?? (s.harness !== "claude" && s.model.startsWith("cubbit/") && STAGE_KEY[stage] !== "round1" ? "off" : s.thinking)
+    : s.thinking,
   max_turns: s.max_turns ?? config.lenses[lens]?.max_turns ?? config.review.max_turns,
   timeout_minutes: s.timeout_minutes ?? config.review.timeout_minutes,
 });
@@ -201,11 +223,16 @@ function checkEffort(e) {
 export function applyEffort(config, effort) {
   checkEffort(effort);
   const p = PROFILES[effort];
-  const capSeat = (s) => (p.cap && RANK.indexOf(s.thinking) > RANK.indexOf(p.cap) ? { ...s, thinking: p.cap } : { ...s });
+  const cap = (t) => (p.cap && RANK.indexOf(t) > RANK.indexOf(p.cap) ? p.cap : t);
+  const capStages = (t) => t && Object.fromEntries(Object.entries(t).map(([k, v]) => [k, cap(v)]));
+  const capSeat = (s) => ({ ...s, thinking: cap(s.thinking), ...(s.thinking_by_stage && { thinking_by_stage: capStages(s.thinking_by_stage) }) });
   const c = structuredClone(config);
   c.seats = c.seats.slice(0, p.n).map(capSeat);
   c.judge = capSeat(c.judge);
-  for (const l of Object.values(c.lenses)) if (l.seats) l.seats = l.seats.map(capSeat);
+  for (const l of Object.values(c.lenses)) {
+    if (l.seats) l.seats = l.seats.map(capSeat);
+    if (l.thinking_by_stage) l.thinking_by_stage = capStages(l.thinking_by_stage);
+  }
   c.round1 = p.round1;
   c.post = structuredClone(p.post);
   return c;

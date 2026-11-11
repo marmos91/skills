@@ -240,3 +240,12 @@ test("salvageJson: a finding quoted in the prose does not win over the final out
   process.env.PR_REVIEW_FAKE = join(dir, "prose.json");
   try { assert.deepEqual(await runChild(base(claudeSeat, { schema: "round1" })), final); } finally { delete process.env.PR_REVIEW_FAKE; }
 });
+
+test("an auto seat routed to claude gets --effort low for off or minimal (claude has no off)", async () => {
+  stub("claude", `for a in "$@"; do printf '%s\\n' "$a"; done >"${dir}/argv"; printf '%s' '${OK}'`);
+  for (const thinking of ["off", "minimal"]) {
+    await runChild(base({ harness: "auto", model: "cubbit/mimir", thinking }, { routerUp: true }));
+    const a = readFileSync(join(dir, "argv"), "utf8").trim().split("\n");
+    assert.equal(a[a.indexOf("--effort") + 1], "low", thinking);
+  }
+});
