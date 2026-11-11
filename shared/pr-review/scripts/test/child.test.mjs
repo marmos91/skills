@@ -153,3 +153,15 @@ test("salvageJson strips fences and prose", () => {
   assert.deepEqual(salvageJson("x [1,2] y"), [1, 2]);
   assert.equal(salvageJson("nothing"), null);
 });
+
+test("claude adapter: read seats may use only Read, Grep, Glob; shell seats get Bash allowed too", async () => {
+  stub("claude", `echo "$@" >"${dir}/argv"; printf '%s' '${OK}'`);
+  await runChild(base(claudeSeat));
+  let a = readFileSync(join(dir, "argv"), "utf8");
+  assert.match(a, /--restricted --strict-mcp-config/);
+  assert.match(a, /--tools Read,Grep,Glob --allowedTools Read,Grep,Glob(\s|$)/);
+  assert.doesNotMatch(a, /Bash/);
+  await runChild(base(claudeSeat, { tools: "shell" }));
+  a = readFileSync(join(dir, "argv"), "utf8");
+  assert.match(a, /--tools Read,Grep,Glob,Bash --allowedTools Read,Grep,Glob,Bash(\s|$)/);
+});
