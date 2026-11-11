@@ -151,7 +151,7 @@ print(f"Plan coverage has {gaps} true-gap calls ({gaps // 3} findings x 3 reps).
 
 print("## Wordings\n")
 for cat, base_q in (("doubt", "This claim is doubtful or likely false. (current)"),
-                    ("plan", "This plan fixes finding <id> (<title>: <what>), or states explicitly why that finding is skipped. (current)")):
+                    ("plan", "This plan fixes finding <id> (<title>: <what>), or states explicitly why that finding is skipped. (old)")):
     vs = defaultdict(list)
     for r in OK:
         if r["cat"] == cat:
