@@ -234,9 +234,10 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
         if (fr.delta?.base) effort = lowerEffort(effort); // 5.1: delta review one level below
         const res = await review({ repo, n, mode: "loop", effort, repoDir, gh });
         if (res?.exit) throw new Error(`review exit ${res.exit}: ${res.summary}; retried next tick`);
-        // A skipped review (a pending review on GitHub) did not apply the answers: they stay forced.
+        // A skipped review leaves the answers to review(): a pending-review skip keeps them pending (forced again
+        // next tick), and the answer-only follow-up closes the ones it handled itself.
         if (res?.skipped) log(`#${n}: ${res.summary}`);
-        // The review ran with the answers; never force this PR again for them. review() queues approve? itself.
+        // The review ran with the answers: never force this PR again for them. review() queues approve? itself.
         else for (const id of force || []) appliedAnswer(rs, id);
       }
       return { acted: true, cache: !wait };
