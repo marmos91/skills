@@ -209,6 +209,35 @@ size and depth. It never removes a lens or the agreement step.
   `low`).
 - `--dry-run` and `doctor` print the planned children and models.
 
+**`auto`** picks the level from the risk of the diff (first match wins):
+
+1. Any changed path matches `effort_auto.high_paths` -> `high`. The default
+   patterns cover auth, crypto, security, permissions, secrets, migrations,
+   `*.sql`, `.github/workflows/**`, `Dockerfile*` and infra code.
+2. Every changed path matches `effort_auto.low_paths` -> `low`. The default
+   patterns cover `*.md`, `docs/**`, `*.txt`, lockfiles and images.
+3. Otherwise -> `medium`.
+
+`effort_auto.*` are user-level arrays of glob patterns. The repo level may
+add patterns to `high_paths` only, never to `low_paths`, so a PR cannot
+lower its own review. The default `effort` stays `medium` for a manual run;
+`loop.effort` defaults to `auto`.
+
+### 5.2 CI
+
+The engine reads the PR's checks (`statusCheckRollup`) for the head SHA.
+
+- **Context:** the frame writes `ctx/ci.json` (each check: name, state,
+  URL). For failed checks it adds the last 80 lines of each failed job log
+  (`gh run view <id> --log-failed`), with secrets redacted by the same
+  patterns as the outbound scan. The correctness and adversarial lenses get
+  this as evidence.
+- **Verdict:** red or pending CI never gives `APPROVE`. Red CI with no agreed
+  `must` gives `COMMENT`, and the summary names the failed checks.
+- **Loop:** a PR with pending checks is skipped in this tick, unless the
+  checks are pending for more than `loop.ci_wait_minutes` (default 30).
+- `review.ci: "use" | "ignore"` (default `use`) turns this off.
+
 ## 6. `/pr-review` pipeline
 
 Input: a PR number or URL. With no input, the PR of the current branch.
