@@ -31,7 +31,7 @@ const DEFAULTS = {
   round1: "per-seat",
   lenses: Object.fromEntries(LENSES.map((l) => [l, { enabled: true }])),
   judge: seat("claude", "opus"),
-  decider: { kind: "auto", confidence: 0.5 },
+  decider: { kind: "auto", confidence: 0 },
   loop: { authors_ignore: [], max_prs_per_run: 10, max_review_rounds: 3, max_replies_per_thread: 2, effort: "auto" },
   review: { guidance: [], ci: "use", max_diff_lines: 3000 },
   hygiene: { enabled: true },

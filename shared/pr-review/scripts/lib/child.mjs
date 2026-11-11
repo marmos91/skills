@@ -6,7 +6,7 @@ import { resolveHarness } from "./config.mjs";
 import { validate } from "./schema.mjs";
 
 const HARNESS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "harness");
-const ENV_OK = /^(PATH|HOME|USER|LOGNAME|SHELL|LANG|LC_.*|TMPDIR|TERM|XDG_.*|ANTHROPIC_BASE_URL|ANTHROPIC_CUSTOM_HEADERS|CLAUDE_CODE_OAUTH_TOKEN|CLAUDE_CONFIG_DIR|CLAUDE_CODE_MAX_CONTEXT_TOKENS|(?:HTTP|HTTPS|NO)_PROXY|(?:http|https|no)_proxy|SSL_CERT_FILE|NODE_EXTRA_CA_CERTS|SEAT_PROVIDER|SEAT_WORKTREE|PR_REVIEW_.*)$/;
+export const ENV_OK = /^(PATH|HOME|USER|LOGNAME|SHELL|LANG|LC_.*|TMPDIR|TERM|XDG_.*|ANTHROPIC_BASE_URL|ANTHROPIC_CUSTOM_HEADERS|CLAUDE_CODE_OAUTH_TOKEN|CLAUDE_CONFIG_DIR|CLAUDE_CODE_MAX_CONTEXT_TOKENS|(?:HTTP|HTTPS|NO)_PROXY|(?:http|https|no)_proxy|SSL_CERT_FILE|NODE_EXTRA_CA_CERTS|SEAT_PROVIDER|SEAT_WORKTREE|PR_REVIEW_.*)$/;
 
 // Live child process groups: seats must not outlive the engine.
 const live = new Set();

@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { queueQuestion, openQuestions, answer, markAsked, appliedAnswer } from "../lib/questions.mjs";
+import { queueQuestion, openQuestions, answer, markAsked, appliedAnswer, questionWarnings } from "../lib/questions.mjs";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "prr-q-"));
 const q = (o = {}) => ({
@@ -62,4 +62,25 @@ test("markAsked sets askedAt once; appliedAnswer marks applied", () => {
   const j = appliedAnswer(r, id);
   assert.ok(j.appliedAt);
   assert.equal(j.answer, "post");
+});
+
+test("bad files are skipped with warnings, never thrown", () => {
+  const r = tmp();
+  const id = queueQuestion(r, q());
+  const d = join(r, "questions");
+  writeFileSync(join(d, "1-trunc.json"), '{"id": "1-tr');
+  writeFileSync(join(d, "2-empty.json"), "{}");
+  writeFileSync(join(d, "bad name.json"), "{}");
+  assert.deepEqual(openQuestions(r).map((x) => x.id), [id]);
+  assert.equal(questionWarnings(r).length, 3);
+});
+
+test("snippet fence outgrows backtick runs; secrets are redacted", () => {
+  const r = tmp();
+  const key = "AKIA" + "ABCDEFGHIJKLMNOP";
+  const id = queueQuestion(r, q({ snippet: "a ```js\nb\n``` " + key, finding: { title: `t ${key}`, case: "c" } }));
+  const md = readFileSync(join(r, "questions", `${id}.md`), "utf8");
+  assert.match(md, /^````\n/m);
+  assert.ok(!md.includes(key));
+  assert.ok(!readFileSync(join(r, "questions", `${id}.json`), "utf8").includes(key));
 });

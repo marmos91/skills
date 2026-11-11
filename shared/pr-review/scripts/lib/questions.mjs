@@ -1,27 +1,30 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { writeAtomic } from "./state.mjs";
+import { redact } from "./secrets.mjs";
 
 export const OPTIONS = ["post", "drop", "ask-author"];
+const ID = /^[\w-]+$/;
 const dir = (repoState) => join(repoState, "questions");
 const jsonFile = (repoState, id) => join(dir(repoState), `${id}.json`);
 
 function load(repoState, id) {
-  if (!/^[\w-]+$/.test(id) || !existsSync(jsonFile(repoState, id))) throw new Error(`unknown question ${id}`);
+  if (!ID.test(id) || !existsSync(jsonFile(repoState, id))) throw new Error(`unknown question ${id}`);
   return JSON.parse(readFileSync(jsonFile(repoState, id), "utf8"));
 }
 const save = (repoState, q) => writeAtomic(jsonFile(repoState, q.id), JSON.stringify(q, null, 2) + "\n");
 
 function markdown(q, { file, line, snippet, failure }) {
   const f = q.finding;
+  const fence = "`".repeat(Math.max(3, ...[...snippet.matchAll(/`+/g)].map((m) => m[0].length + 1)));
   return `# Question ${q.id}
 
 PR #${q.pr} at ${q.sha}
 Location: ${file}:${line}
 
-\`\`\`
+${fence}
 ${snippet}
-\`\`\`
+${fence}
 
 ## Finding
 ${f.title}
@@ -46,6 +49,7 @@ ${OPTIONS.map((o) => `- ${o}`).join("\n")}
 export function queueQuestion(repoState, q) {
   const id = `${q.pr}-${q.fingerprint.slice(0, 8)}`;
   if (existsSync(jsonFile(repoState, id))) return id;
+  q = { ...q, snippet: redact(q.snippet), finding: JSON.parse(redact(JSON.stringify(q.finding))) };
   const rec = {
     id, pr: q.pr, sha: q.sha, fingerprint: q.fingerprint, finding: q.finding, sides: q.sides,
     options: [...OPTIONS], createdAt: new Date().toISOString(), askedAt: null, answer: null, answeredAt: null,
@@ -55,12 +59,23 @@ export function queueQuestion(repoState, q) {
   return id;
 }
 
-const all = (repoState) => {
+/** Bad files are skipped, never thrown; pass `warnings` to collect why. */
+const all = (repoState, warnings = []) => {
   if (!existsSync(dir(repoState))) return [];
-  return readdirSync(dir(repoState)).filter((f) => f.endsWith(".json"))
-    .map((f) => load(repoState, f.slice(0, -5)))
+  const out = [];
+  for (const f of readdirSync(dir(repoState)).filter((f) => f.endsWith(".json"))) {
+    const id = f.slice(0, -5);
+    try {
+      if (!ID.test(id)) throw new Error("bad name");
+      const q = JSON.parse(readFileSync(jsonFile(repoState, id), "utf8"));
+      if (q?.id !== id || typeof q.createdAt !== "string") throw new Error("missing id or createdAt");
+      out.push(q);
+    } catch (e) { warnings.push(`questions/${f}: ${e.message}`); }
+  }
+  return out
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
 };
+export const questionWarnings = (repoState) => { const w = []; all(repoState, w); return w; };
 
 export const openQuestions = (repoState) => all(repoState).filter((q) => q.answer === null);
 

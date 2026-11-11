@@ -3,6 +3,7 @@ import { accessSync, constants, realpathSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { redact } from "./secrets.mjs";
+import { ENV_OK } from "./child.mjs";
 
 const QUESTION = "This finding describes a real defect that this PR introduces.";
 const UNSURE = { decision: "unsure", raw: null };
@@ -17,10 +18,11 @@ function findJev(skillDir, env) {
 }
 
 function text(c, votes, hunk) {
-  const v = votes.map((x, i) => `Vote ${i + 1}: ${x.vote}\n${x.reason ?? ""}\n${x.counter_case ?? ""}`.trim());
+  const tag = (t, body) => `<${t}>\n${body}\n</${t}>`;
+  const v = votes.map((x) => tag(x.vote === "drop" ? "drop" : "keep", `${x.reason ?? ""}\n${x.counter_case ?? ""}`.trim()));
   return [
-    `Title: ${c.title}`, `Case: ${c.case}`, `Evidence: ${c.evidence ?? ""}`, `Fix: ${c.fix ?? ""}`,
-    "", ...v, "", "Code:", hunk,
+    tag("finding", `Title: ${c.title}\nCase: ${c.case}\nEvidence: ${c.evidence ?? ""}\nFix: ${c.fix ?? ""}`),
+    ...v, tag("code", hunk),
   ].join("\n");
 }
 
@@ -31,19 +33,25 @@ export function decide(cluster, votes, codeHunk, config, { env = process.env, ti
   skillDir ??= realpathSync(join(dirname(fileURLToPath(import.meta.url)), "..", ".."));
   const bin = findJev(skillDir, env);
   if (!bin) return Promise.resolve(UNSURE);
+  env = Object.fromEntries(Object.entries(env).filter(([k]) => ENV_OK.test(k)));
   const args = ["ask", QUESTION, "--json", ...(confidence > 0 ? ["--confidence", String(confidence)] : [])];
   return new Promise((resolve) => {
     let out = "", settled = false;
-    const p = spawn(bin, args, { env, stdio: ["pipe", "pipe", "ignore"] });
+    const p = spawn(bin, args, { env, detached: true, stdio: ["pipe", "pipe", "ignore"] });
     const end = (r) => { if (!settled) { settled = true; clearTimeout(timer); resolve(r); } };
-    const timer = setTimeout(() => { p.kill("SIGKILL"); end(UNSURE); }, timeoutMs);
+    const killGroup = () => { try { process.kill(-p.pid, "SIGKILL"); } catch {} };
+    const timer = setTimeout(() => { killGroup(); end(UNSURE); }, timeoutMs);
     p.stdout.on("data", (d) => (out += d));
     p.stdin.on("error", () => {});
     p.on("error", () => end(UNSURE));
     p.on("close", (code) => {
       let raw = null;
       try { raw = JSON.parse(out); } catch { /* raw stays null */ }
-      end({ decision: code === 0 ? "agreed" : code === 1 ? "rejected" : "unsure", raw });
+      killGroup(); // reap stragglers
+      // R22: older jev builds exit 1 on network errors, so settle only when the verdict agrees with the exit code.
+      const yes = code === 0 && ["yes", "doubted"].includes(raw?.verdict);
+      const no = code === 1 && ["no", "trusted"].includes(raw?.verdict);
+      end({ decision: yes ? "agreed" : no ? "rejected" : "unsure", raw });
     });
     p.stdin.end(redact(text(cluster, votes, codeHunk)));
   });
