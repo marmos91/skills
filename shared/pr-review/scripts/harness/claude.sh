@@ -1,5 +1,5 @@
 #!/bin/sh
-# run <model> <thinking> <tools: read|shell> <prompt-file> <out-file>; env SEAT_WORKTREE, SEAT_MAX_TURNS
+# run <model> <thinking> <tools: read|shell> <prompt-file> <out-file>; env SEAT_WORKTREE, SEAT_CTX, SEAT_MAX_TURNS
 set -eu
 model=$1 thinking=$2 tools=$3 prompt=$4 out=$5
 list="Read,Grep,Glob"
@@ -10,7 +10,9 @@ if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
 else
   set -- --restricted --strict-mcp-config
 fi
+# --restricted confines the file tools to the cwd (the stage folder) and these folders.
 [ -n "${SEAT_WORKTREE:-}" ] && set -- "$@" --add-dir "$SEAT_WORKTREE"
+[ -n "${SEAT_CTX:-}" ] && set -- "$@" --add-dir "$SEAT_CTX"
 [ -n "${SEAT_MAX_TURNS:-}" ] && set -- "$@" --max-turns "$SEAT_MAX_TURNS"
 # File tools stay confined to the cwd and the --add-dir folders: an allow rule for Read would reach any path.
 set -- "$@" --disallowedTools "Read(~/.ssh/**)" "Read(~/.config/**)" "Read(~/.aws/**)" "Read(~/.gnupg/**)"

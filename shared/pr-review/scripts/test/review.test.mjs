@@ -817,3 +817,11 @@ test("round-1 children carry the lens max_turns; other children the global one",
   assert.deepEqual(turns("compose"), [25]);
   assert.ok(run.calls.every((c) => c.seat.timeout_minutes === 10));
 });
+
+test("every child gets the ctx folder next to the worktree", async () => {
+  const fx = fixture(); routes(fx);
+  const { r, run } = await go(fx, happy());
+  assert.equal(r.exit, 0, r.summary);
+  assert.ok(run.calls.length > 0);
+  for (const c of run.calls) assert.equal(c.ctxDir, join(r.runDir, "ctx"), c.k);
+});

@@ -199,3 +199,22 @@ test("timeout_minutes sets the child timeout (default 10 minutes)", async (t) =>
     assert.match(msg, new RegExp(`timed out after ${ms}ms`));
   }
 });
+
+test("claude adapter: the worktree and the ctx folder are both --add-dir folders", async () => {
+  stub("claude", `for a in "$@"; do printf '%s\\n' "$a"; done >"${dir}/argv"; printf '%s' '${OK}'`);
+  const wt = join(dir, "run", "wt"), ctx = join(dir, "run", "ctx");
+  mkdirSync(wt, { recursive: true }); mkdirSync(ctx, { recursive: true });
+  await runChild(base(claudeSeat, { worktree: wt, ctxDir: ctx }));
+  const a = readFileSync(join(dir, "argv"), "utf8").trim().split("\n");
+  const added = a.flatMap((x, i) => (x === "--add-dir" ? [a[i + 1]] : []));
+  assert.deepEqual(added, [wt, ctx]);
+});
+
+test("a round-1 output with an error field fails the child after its retries", async () => {
+  const fixture = join(dir, "blind.json");
+  writeFileSync(fixture, '{"findings": [], "error": "Review not performed: sandbox blocked every read of the ctx folder"}');
+  process.env.PR_REVIEW_FAKE = fixture;
+  try {
+    await assert.rejects(runChild(base(claudeSeat, { schema: "round1", retries: 1 })), (e) => e instanceof ChildFailed && /after 2 attempts: invalid round1: error: /.test(e.message));
+  } finally { delete process.env.PR_REVIEW_FAKE; }
+});

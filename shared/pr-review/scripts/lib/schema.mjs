@@ -23,6 +23,8 @@ const stages = {
     list(v.findings, "findings", errs, finding);
     if (v.earlier !== undefined && !Array.isArray(v.earlier)) errs.push("earlier: must be an array");
     if (v.no_tracking !== undefined && typeof v.no_tracking !== "boolean") errs.push("no_tracking: must be a boolean");
+    // A seat that could not review says so: that is a failed child, never "no findings".
+    if (v.error !== undefined && v.error !== "") errs.push(`error: the seat could not review: ${String(typeof v.error === "string" ? v.error : JSON.stringify(v.error)).slice(0, 200)}`);
   },
   vote(v, errs) {
     list(v, "vote", errs, (x, p) => {

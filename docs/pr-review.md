@@ -313,7 +313,7 @@ PR head.
    `claude -p --restricted --strict-mcp-config --tools Read,Grep,Glob`
    (`--bare` instead of `--restricted` when `CLAUDE_CODE_OAUTH_TOKEN` is set).
    The file tools have no allow rule, so they read only the child's folder and
-   the `--add-dir` folders. Deny rules block `~/.ssh`, `~/.config`, `~/.aws`
+   the `--add-dir` folders: the worktree and the run's `ctx` folder. Deny rules block `~/.ssh`, `~/.config`, `~/.aws`
    and `~/.gnupg` on top.
    A pi seat runs
    `pi -p --no-session --no-context-files --no-extensions --no-skills --no-mcp --tools read,grep,find,ls < /dev/null`.
@@ -370,7 +370,9 @@ State root: `${XDG_STATE_HOME:-~/.local/state}/pr-review/<owner>__<repo>/`.
 - **Failures.** A child that exits non-zero, times out, or returns output
   that fails the schema is retried. After the retries the run stops with exit
   `4`. A review with a missing lens is never posted. An empty or crashed
-  child is never read as "no findings".
+  child, or a round-1 seat that sets `error` (for example because it could
+  not read the context), is never read as "no findings": it is a failed
+  child.
 
 ## Configuration
 

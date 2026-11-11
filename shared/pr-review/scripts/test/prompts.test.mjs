@@ -140,3 +140,9 @@ test("round 1, vote and merge carry the tool budget line", async () => {
   for (const p of [round1Prompt(f, ["correctness"]), votePrompt(f, []), mergePrompt(f, {}, [])]) assert.ok(p.includes(line));
   assert.ok(!composePrompt(f, [], "").includes(line));
 });
+
+test("round 1 asks a seat that cannot read its inputs to say so in `error`", async () => {
+  const { round1Prompt } = await import("../lib/prompts.mjs");
+  const p = round1Prompt({ headSha: "a".repeat(40), baseRef: "main", ctxDir: "/ctx", worktree: "/wt", trusted: false, reviewNumber: 1, delta: {} }, ["correctness"]);
+  assert.match(p, /cannot read .*set `error`/);
+});

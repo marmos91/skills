@@ -82,7 +82,7 @@ async function child(ctx, stage, key, { seat, prompt, schema, tools = "read", le
   mkdirSync(dir, { recursive: true });
   const promptFile = join(dir, `${key}.prompt`);
   writeFileSync(promptFile, prompt());
-  const v = await ctx.runChild({ seat: withLimits(ctx.config, seat, lens), tools, promptFile, outFile, worktree: ctx.frame.worktree, schema, routerUp: ctx.routerUp });
+  const v = await ctx.runChild({ seat: withLimits(ctx.config, seat, lens), tools, promptFile, outFile, worktree: ctx.frame.worktree, ctxDir: ctx.frame.ctxDir, schema, routerUp: ctx.routerUp });
   save(outFile, v);
   markDone(ctx.runDir, stage, key);
   return v;

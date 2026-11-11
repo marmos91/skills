@@ -87,6 +87,7 @@ export function round1Prompt(frame, lenses) {
     OUT,
     `{"findings": [${finding(sev.join("|"))}]${n > 1 ? ', "earlier": [{"thread_id": "...", "status": "fixed|open", "evidence": "..."}]' : ""}${tracking ? ', "no_tracking": false' : ""}}`,
     `Use only these lens names: ${lenses.join(", ")}. No findings is a valid result: {"findings": []}.`,
+    'If you cannot read the context files or the worktree, set `error` to the reason, for example {"findings": [], "error": "cannot read ctx/diff.patch"}. A review you could not do is never "no findings".',
   ].join("\n");
 }
 
