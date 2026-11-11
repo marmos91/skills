@@ -167,7 +167,9 @@ replaces the user level for one run.
   "decider": { "kind": "auto", "confidence": 0.8 },
   "loop": {
     "authors_ignore": ["dependabot[bot]", "renovate[bot]"],
-    "max_prs_per_run": 10
+    "max_prs_per_run": 10,
+    "max_review_rounds": 3,       // section 7.5
+    "max_replies_per_thread": 2   // section 7.5
   }
 }
 ```
@@ -423,6 +425,45 @@ new thread or comment:
 - The next run applies each answer. It checks the finding against the
   current head first. If the code moved, it drops the finding with a note.
 
+## 7.5 Convergence
+
+Reviews and threads must end. Each rule below makes the work on a PR
+smaller with each round, so it cannot go on without limit.
+
+1. **Scope shrinks.** A re-review raises new findings only on the delta
+   (section 6.9). Code that the council already reviewed gets no new findings.
+   The only exception is a new commit that changes the behavior of that code.
+2. **Severity rises.** Review 1 can raise `must`, `should` and `nit`.
+   Review 2 can raise only `must` and `should`. Review 3 and later can raise
+   only `must`.
+3. **A settled finding stays settled.** Each finding has a fingerprint (lens,
+   file, symbol, normalized title). The state records each settled
+   fingerprint: dropped by the vote, answered by Marco, or resolved. The
+   council does not raise a settled fingerprint again unless the code at
+   that place changed.
+4. **No contradiction.** A later review never asks for the opposite of an
+   earlier agreed finding. The merge step checks new findings against the
+   earlier agreed findings and drops a finding that reverses one. The drop is
+   kept in the run state.
+5. **Round budget.** `loop.max_review_rounds` (default 3) limits automatic
+   reviews per PR. After the budget, the loop stops its own reviews of that
+   PR. It queues one question for Marco with the open `must` items, and it
+   continues only on new requests from Marco or from the author.
+6. **Thread budget.** `loop.max_replies_per_thread` (default 2) limits
+   automatic replies in one thread. Before the budget ends, a reply that only
+   repeats an earlier argument is not sent. The judge checks this, and jev
+   checks it when available
+   (`jev ask "This reply adds a new argument or new evidence."`). When the
+   budget ends and the thread is still open, the loop posts no more replies.
+   It queues the thread for Marco with both positions.
+7. **Answers are monotonic.** The loop does not withdraw an `APPROVE` unless a
+   new commit adds an agreed `must`. A pushback that the reviewer answers
+   with new evidence is judged again. A pushback that the reviewer answers
+   with the same argument goes to Marco and is not repeated.
+
+The state records the review count and the reply count per thread, and
+`status` shows them.
+
 ## 8. State, lock and resume
 
 - State root: `${XDG_STATE_HOME:-~/.local/state}/pr-review/<owner>__<repo>/`.
@@ -484,3 +525,4 @@ new thread or comment:
 - Code runs (repro) only for trusted authors.
 - Round 1 shape is configurable, default 1 child per seat.
 - jev (`jev ask`) is the decider when available.
+- Reviews and threads must converge (section 7.5).
