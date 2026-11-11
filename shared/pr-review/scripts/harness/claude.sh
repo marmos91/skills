@@ -12,6 +12,9 @@ else
 fi
 [ -n "${SEAT_WORKTREE:-}" ] && set -- "$@" --add-dir "$SEAT_WORKTREE"
 [ -n "${SEAT_MAX_TURNS:-}" ] && set -- "$@" --max-turns "$SEAT_MAX_TURNS"
-# --restricted reads no settings files, so no allow rule applies: without --allowedTools every
-# compound or piped Bash command waits for an approval that never comes.
-claude -p "$@" --model "$model" --effort "$thinking" --tools "$list" --allowedTools "$list" <"$prompt" >"$out"
+# File tools stay confined to the cwd and the --add-dir folders: an allow rule for Read would reach any path.
+set -- "$@" --disallowedTools "Read(~/.ssh/**)" "Read(~/.config/**)" "Read(~/.aws/**)" "Read(~/.gnupg/**)"
+# --restricted reads no settings files, so without this every piped or compound command waits for an
+# approval that never comes. Shell seats run only for trusted authors: Bash can read any file the user can.
+[ "$tools" = shell ] && set -- "$@" --allowedTools Bash
+claude -p "$@" --model "$model" --effort "$thinking" --tools "$list" <"$prompt" >"$out"

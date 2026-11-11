@@ -154,16 +154,20 @@ test("salvageJson strips fences and prose", () => {
   assert.equal(salvageJson("nothing"), null);
 });
 
-test("claude adapter: read seats may use only Read, Grep, Glob; shell seats get Bash allowed too", async () => {
-  stub("claude", `echo "$@" >"${dir}/argv"; printf '%s' '${OK}'`);
+test("claude adapter: file tools stay confined (no allow rule, deny rules for secrets); only shell seats allow Bash", async () => {
+  stub("claude", `for a in "$@"; do printf '%s\\n' "$a"; done >"${dir}/argv"; printf '%s' '${OK}'`);
+  const deny = ["--disallowedTools", "Read(~/.ssh/**)", "Read(~/.config/**)", "Read(~/.aws/**)", "Read(~/.gnupg/**)"];
   await runChild(base(claudeSeat));
-  let a = readFileSync(join(dir, "argv"), "utf8");
-  assert.match(a, /--restricted --strict-mcp-config/);
-  assert.match(a, /--tools Read,Grep,Glob --allowedTools Read,Grep,Glob(\s|$)/);
-  assert.doesNotMatch(a, /Bash/);
+  let a = readFileSync(join(dir, "argv"), "utf8").trim().split("\n");
+  assert.deepEqual(a.slice(a.indexOf("--disallowedTools"), a.indexOf("--disallowedTools") + 5), deny);
+  assert.equal(a[a.indexOf("--tools") + 1], "Read,Grep,Glob");
+  assert.ok(!a.includes("--allowedTools"), "an allow rule for Read would reach outside the add-dir folders");
+  assert.ok(a.includes("--restricted") && a.includes("--strict-mcp-config"));
   await runChild(base(claudeSeat, { tools: "shell" }));
-  a = readFileSync(join(dir, "argv"), "utf8");
-  assert.match(a, /--tools Read,Grep,Glob,Bash --allowedTools Read,Grep,Glob,Bash(\s|$)/);
+  a = readFileSync(join(dir, "argv"), "utf8").trim().split("\n");
+  assert.equal(a[a.indexOf("--tools") + 1], "Read,Grep,Glob,Bash");
+  assert.deepEqual(a.slice(a.indexOf("--allowedTools"), a.indexOf("--allowedTools") + 2), ["--allowedTools", "Bash"]);
+  assert.ok(a.includes("--disallowedTools"));
 });
 
 test("max_turns: claude gets --max-turns; pi has no such flag", async () => {

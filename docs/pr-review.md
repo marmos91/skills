@@ -312,6 +312,9 @@ PR head.
 1. **Children are isolated.** A claude seat runs
    `claude -p --restricted --strict-mcp-config --tools Read,Grep,Glob`
    (`--bare` instead of `--restricted` when `CLAUDE_CODE_OAUTH_TOKEN` is set).
+   The file tools have no allow rule, so they read only the child's folder and
+   the `--add-dir` folders. Deny rules block `~/.ssh`, `~/.config`, `~/.aws`
+   and `~/.gnupg` on top.
    A pi seat runs
    `pi -p --no-session --no-context-files --no-extensions --no-skills --no-mcp --tools read,grep,find,ls < /dev/null`.
    The prompt goes on stdin, never on the command line.
@@ -322,7 +325,10 @@ PR head.
    association `OWNER`, `MEMBER` or `COLLABORATOR`. Then the adversarial lens
    gets a shell (`Bash` or `bash`) to run a repro in the worktree, with a
    timeout that kills the whole process group. For other authors every seat
-   is read-only, and the repro command is written into the finding.
+   is read-only, and the repro command is written into the finding. A shell
+   seat (`--allowedTools Bash`) can read any file that you can read: the
+   environment allowlist keeps tokens out of its environment, but not files
+   on disk. That is why the shell runs only for trusted authors.
 4. **Config and guidance come from the base branch.** A PR that changes
    `.pr-review.json` or `CLAUDE.md` changes only its own diff, not the review.
 5. **PR text is data.** Prompts wrap the PR text in a delimited block with a
