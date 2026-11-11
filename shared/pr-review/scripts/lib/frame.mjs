@@ -21,7 +21,8 @@ const wrapper = (nonce) => (s) => `<<<PR-DATA-${nonce}\n${PR_DATA_NOTE}\n${Strin
 
 const GUIDANCE = ["CONTRIBUTING.md", "CLAUDE.md", "AGENTS.md", "REVIEW.md", ".github/PULL_REQUEST_TEMPLATE.md", ".github/CONTRIBUTING.md"];
 const TRUSTED = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
-const SEVERITY = /^\s*\*\*(must|should|nit):\*\*/;
+// writing.md uses a plain label (must: ...); a bold one (**must:**) counts too
+const SEVERITY = /^\s*(?:\*\*)?(must|should|nit):(?:\*\*)?/;
 
 export const git = (cwd, args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
 export const gitOk = (cwd, args) => { try { git(cwd, args); return true; } catch { return false; } };

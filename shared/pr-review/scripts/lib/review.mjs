@@ -247,9 +247,12 @@ async function once(o, restart) {
   // An outdated thread has no current line (originalLine is the old file), so it never matches.
   // shortcut: other reviewers' threads never drop a cluster; "a reviewer gave evidence against it" needs a judge call.
   const me = await gh.viewer();
-  const known = new Set([...pst.settled, ...(pst.agreed ?? []).map((a) => a.id)]);
+  // The judge may reword a repeat (other fingerprint), so an agreed thread on the same line also links a cluster of
+  // the SAME lens; a cluster of another lens on that line is a different finding and is kept.
+  const agreedLens = new Map((pst.agreed ?? []).map((a) => [a.id, a.lens]));
   const ours = threads.filter((t) => t.comments[0]?.author === me && t.line != null).map((t) => ({ t, key: MARKER_FP.exec(t.comments[0].body ?? "")?.[1] }));
-  const resolvedThread = (c) => ours.some(({ t, key }) => t.path === c.file && t.line === c.line && key && (known.has(key) || key === c.fp));
+  const resolvedThread = (c) => ours.some(({ t, key }) => t.path === c.file && t.line === c.line && key &&
+    (key === c.fp || (agreedLens.has(key) && agreedLens.get(key) === c.lens)));
   const all = raw.filter((c) => run.lenses.includes(c.lens)).map((c) => {
     const seats = [...new Set(seatsForLens(config, c.lens).map(seatId))].filter((id) => !isDropped(id));
     return { ...c, found: [...new Set(c.found)].filter((s) => seats.includes(s)), seats, fp: fingerprint(c) };

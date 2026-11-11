@@ -508,6 +508,12 @@ test("thread linking: only our own thread with an engine marker of an agreed fin
     assert.equal(rec.clusters.length === 1, kept, threads[0].comments.nodes[0].author.login);
     assert.equal(rec.linked.length === 1, !kept);
   }
+  // our agreed thread on the same line does not swallow a finding of another lens
+  const fx = fixture(); routes(fx, { threads: [thread("T1", ME, real)] });
+  savePrState(fx.state, N, { ...prState(fx.state, N), agreed: state0.agreed });
+  const { r } = await go(fx, happy({ merge: [C("c1", { lens: "security", title: "Token is logged" })] }));
+  const rec = JSON.parse(readFileSync(join(r.runDir, "clusters.json"), "utf8"));
+  assert.deepEqual([rec.clusters.length, rec.linked.length], [1, 0]);
 });
 
 test("check names in the summary lose markup, mentions and marker look-alikes", async () => {
