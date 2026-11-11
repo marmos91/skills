@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { tick, replyQuestion, asksReview } from "../lib/tick.mjs";
@@ -205,10 +205,25 @@ test("loop.effort auto picks low for a docs-only PR", async () => {
   assert.equal(f.reviews[0].effort, "low");
 });
 
+// review.mjs queues the approve? question; the fake does the same.
+const approveReview = (rs) => (o) => {
+  queueQuestion(rs, { pr: o.n, sha: `sha${o.n}`, fingerprint: `approve${o.n}`.padEnd(40, "0"), file: "(whole PR)", line: 0, snippet: "",
+    finding: { kind: "approve", title: "Approve this PR?", case: "c" }, sides: { keep: "k", drop: "d" }, failure: "" });
+  return { exit: 0, event: "COMMENT", queueApprove: true };
+};
+
+test("tick does not queue approve? itself: review() does", async () => {
+  const rs = fresh();
+  withBaseline(rs);
+  const f = fakes({ reviewResult: { exit: 0, event: "COMMENT", queueApprove: true, reasons: ["x"] } });
+  await go({ gh: fakeGh({ rows: [row(1, ["review-requested"])] }), f });
+  assert.deepEqual(openQuestions(rs), []);
+});
+
 test("approve? question: queued when the verdict asks, posted when Marco answers post", async () => {
   const rs = fresh();
   withBaseline(rs);
-  const f = fakes({ reviewResult: { exit: 0, event: "COMMENT", queueApprove: true } });
+  const f = fakes({ reviewResult: approveReview(rs) });
   const gh = fakeGh({ rows: [row(1, ["review-requested"])] });
   await go({ gh, f });
   const [q] = openQuestions(rs);
@@ -224,7 +239,7 @@ test("approve? question: queued when the verdict asks, posted when Marco answers
 test("approve? answer is dropped when the head moved", async () => {
   const rs = fresh();
   withBaseline(rs);
-  const f = fakes({ reviewResult: { exit: 0, queueApprove: true } });
+  const f = fakes({ reviewResult: approveReview(rs) });
   const gh = fakeGh({ rows: [row(1, ["review-requested"])] });
   await go({ gh, f });
   answer(rs, openQuestions(rs)[0].id, "post");
@@ -414,4 +429,48 @@ test("resumed queue: its PRs are not listed again in the same tick, forced or no
   const f = fakes();
   await go({ gh: fakeGh({ rows: [row(7, ["review-requested"]), row(8, ["review-requested"])] }), f });
   assert.deepEqual(f.reviews.map((r) => r.n), [8]);
+});
+
+test("a skipped review (pending review on GitHub) leaves the forced answers pending", async () => {
+  const rs = fresh();
+  withBaseline(rs);
+  const id = answered(rs, 1, "post");
+  const f = fakes({ reviewResult: { exit: 0, skipped: true, summary: "skipped: you have a pending review" } });
+  await go({ gh: fakeGh({ rows: [row(1, ["reviewed-by"])] }), f });
+  assert.equal(f.reviews.length, 1);
+  assert.deepEqual(pendingAnswers(rs).map((q) => q.id), [id]);
+});
+
+test("a failed review (exit 1 or 4) leaves the forced answers pending", async () => {
+  for (const exit of [1, 4]) {
+    const rs = fresh();
+    withBaseline(rs);
+    const id = answered(rs, 1, "post");
+    const lines = [];
+    await go({ gh: fakeGh({ rows: [row(1, ["reviewed-by"])] }), f: fakes({ reviewResult: { exit, summary: "diff too large" } }), log: (m) => lines.push(m) });
+    assert.deepEqual(pendingAnswers(rs).map((q) => q.id), [id], `exit ${exit}`);
+    assert.ok(lines.some((l) => /diff too large/.test(l)), `exit ${exit}`);
+  }
+});
+
+test("a reply-only tick leaves no unfinished run folder", async () => {
+  const rs = fresh();
+  withBaseline(rs);
+  const threads = { 1: [{ id: "T1", path: "a.js", line: 1, comments: [human(5, "bob", "nit")] }] };
+  const { f } = await go({ gh: fakeGh({ rows: [row(1, ["author"], { author: ME })], threads }) });
+  assert.equal(f.replies.length, 1);
+  const runs = join(rs, "pr", "1", "runs");
+  const dirs = existsSync(runs) ? readdirSync(runs) : [];
+  assert.ok(dirs.every((d) => existsSync(join(runs, d, "post.done"))), "every run folder is final");
+});
+
+test("a reply-only tick keeps an unfinished review run at the same sha open", async () => {
+  const rs = fresh();
+  withBaseline(rs);
+  const dir = join(rs, "pr", "1", "runs", `sha1-${Date.now()}`);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "run.json"), "{}");
+  const threads = { 1: [{ id: "T1", path: "a.js", line: 1, comments: [human(5, "bob", "nit")] }] };
+  await go({ gh: fakeGh({ rows: [row(1, ["author"], { author: ME })], threads }) });
+  assert.equal(existsSync(join(dir, "post.done")), false);
 });

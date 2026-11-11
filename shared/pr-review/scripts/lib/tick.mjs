@@ -9,7 +9,7 @@ import { reply as realReply } from "./reply.mjs";
 import { frame as realFrame } from "./frame.mjs";
 import { loadConfig, pickEffort, lowerEffort } from "./config.mjs";
 import { budgetLeft } from "./convergence.mjs";
-import { acquireLock, Locked, prState, savePrState, runDir, stateRoot, writeAtomic } from "./state.mjs";
+import { FINAL_STAGE, acquireLock, Locked, markDone, prState, savePrState, runDir, stateRoot, writeAtomic } from "./state.mjs";
 import { appliedAnswer, openQuestions, pendingAnswers, queueQuestion, questionWarnings } from "./questions.mjs";
 
 const USER_CONFIG = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "pr-review", "config.json");
@@ -230,23 +230,18 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
         await reply({ repo, n, threadId: t.id, mode: "loop", frame: fr, config, runDir: dir, gh, queue: (item) => queueQuestion(rs, replyQuestion(item, t, me, repo)) });
         markSeen(t, c);
       }
+      // No review follows and none started here (no run.json): the folder only held replies, so it is final.
+      if (!doReview && !existsSync(join(dir, "run.json"))) markDone(dir, FINAL_STAGE);
       if (doReview) {
         const pcfg = loadCfg(fr.repoConfigText ?? null);
         let effort = pcfg.loop.effort === "auto" ? pickEffort(fr.changedPaths, pcfg) : pcfg.loop.effort;
         if (fr.delta?.base) effort = lowerEffort(effort); // 5.1: delta review one level below
         const res = await review({ repo, n, mode: "loop", effort, repoDir, gh });
-        if (res?.exit === 4) throw new Error("review failed after retries; retried next tick");
-        // The review ran with the answers; never force this PR again for them.
-        for (const id of force || []) appliedAnswer(rs, id);
-        if (res?.queueApprove) {
-          const why = Array.isArray(res.reasons) ? ` Reasons: ${res.reasons.join("; ")}.` : "";
-          queueQuestion(rs, {
-            pr: n, sha: p.headSha, fingerprint: sha1(`approve:${n}:${p.headSha}`), file: "(whole PR)", line: 0, snippet: "",
-            finding: { kind: "approve", title: "Approve this PR?", case: `The review at ${p.headSha} has no agreed finding. The loop approves only a trusted author with a unanimous zero-finding vote.${why}` },
-            sides: { keep: "post: approve the PR at this commit.", drop: "drop: keep the review as a comment." },
-            failure: "The PR waits for a human approval.",
-          });
-        }
+        if (res?.exit) throw new Error(`review exit ${res.exit}: ${res.summary}; retried next tick`);
+        // A skipped review (a pending review on GitHub) did not apply the answers: they stay forced.
+        if (res?.skipped) log(`#${n}: ${res.summary}`);
+        // The review ran with the answers; never force this PR again for them. review() queues approve? itself.
+        else for (const id of force || []) appliedAnswer(rs, id);
       }
       return { acted: true, cache: !wait };
     }
