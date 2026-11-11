@@ -68,8 +68,9 @@ export function salvageJson(text) {
 }
 
 let routerProbe;
+const ROUTER_HEALTH = () => process.env.PR_REVIEW_ROUTER_HEALTH || "http://127.0.0.1:4000/router/health";
 function probeRouter() {
-  routerProbe ??= fetch(process.env.PR_REVIEW_ROUTER_HEALTH || "http://127.0.0.1:4000/router/health", {
+  routerProbe ??= fetch(ROUTER_HEALTH(), {
     signal: AbortSignal.timeout(2000),
   }).then((r) => r.ok, () => false);
   return routerProbe;
@@ -105,6 +106,11 @@ export async function runChild({ seat, tools = "read", promptFile, outFile, work
   const script = join(HARNESS_DIR, `${fake ? "fake" : harness}.sh`);
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => ENV_OK.test(k)));
   if (worktree) env.SEAT_WORKTREE = worktree;
+  // an auto seat that resolved to claude is a router model: point claude at the router, as claude-mimir does
+  if (seat.harness === "auto" && harness === "claude") {
+    env.ANTHROPIC_BASE_URL = new URL(ROUTER_HEALTH()).origin;
+    delete env.ANTHROPIC_CUSTOM_HEADERS;
+  }
   const cwd = dirname(outFile); // neutral run folder: the PR checkout must not supply CLAUDE.md or .claude/
   let model = seat.model;
   if (harness === "pi") {

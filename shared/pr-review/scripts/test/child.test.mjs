@@ -110,11 +110,14 @@ test("tools=read gives no shell; tools=shell adds Bash/bash", async () => {
 });
 
 test("auto resolves via routerUp", async () => {
-  stub("claude", `echo claude >"${dir}/who"; printf '%s' '${OK}'`);
+  stub("claude", `echo "claude \${ANTHROPIC_BASE_URL:-none}" >"${dir}/who"; printf '%s' '${OK}'`);
   stub("pi", `echo pi >"${dir}/who"; printf '%s' '${OK}'`);
   const seat = { harness: "auto", model: "cubbit/mimir", thinking: "high" };
   await runChild(base(seat, { routerUp: true }));
-  assert.equal(readFileSync(join(dir, "who"), "utf8").trim(), "claude");
+  // the router model goes through the router, like claude-mimir
+  assert.equal(readFileSync(join(dir, "who"), "utf8").trim(), "claude http://127.0.0.1:4000");
+  await runChild(base(claudeSeat));
+  assert.equal(readFileSync(join(dir, "who"), "utf8").trim(), "claude none", "a plain claude seat keeps its own endpoint");
   await runChild(base(seat, { routerUp: false }));
   assert.equal(readFileSync(join(dir, "who"), "utf8").trim(), "pi");
 });
