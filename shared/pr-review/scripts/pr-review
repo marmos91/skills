@@ -1,2 +1,5 @@
 #!/bin/sh
-exec node "$(dirname "$0")/main.mjs" "$@"
+# Follows symlinks (install.sh links bin/pr-review into ~/.local/bin) with POSIX readlink, not realpath.
+f=$0
+while [ -L "$f" ]; do l=$(readlink "$f"); case $l in /*) f=$l ;; *) f=$(dirname "$f")/$l ;; esac; done
+exec node "$(dirname "$f")/main.mjs" "$@"

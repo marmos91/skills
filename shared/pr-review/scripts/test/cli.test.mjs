@@ -218,3 +218,13 @@ test("pause and resume take owner/repo, --repo or the remote, and reject extra a
   assert.equal(extra.status, 1);
   assert.ok(!existsSync(paused));
 });
+
+test("bin/pr-review runs the engine through a symlink, as install.sh links it", () => {
+  const link = join(here, "..", "..", "bin", "pr-review");
+  const dir = mkdtempSync(join(tmpdir(), "prbin-"));
+  const outer = join(dir, "pr-review");
+  execFileSync("ln", ["-s", link, outer]);
+  const r = spawnSync(outer, ["status", "o/r"], { env: { ...process.env, XDG_STATE_HOME: join(dir, "s") }, encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(JSON.parse(r.stdout).repo, "o/r");
+});
