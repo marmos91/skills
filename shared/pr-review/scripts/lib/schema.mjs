@@ -47,6 +47,17 @@ const stages = {
       if (!str(x?.body)) errs.push(`${p}.body: required`);
     });
   },
+  hygiene(v, errs) {
+    if (!v || typeof v !== "object") return errs.push("value: not an object");
+    list(v.findings, "findings", errs, (f, p) => {
+      if (!f || typeof f !== "object") return errs.push(`${p}: not an object`);
+      if (f.lens !== "hygiene") errs.push(`${p}.lens: must be hygiene`);
+      if (!["should", "nit"].includes(f.severity)) errs.push(`${p}.severity: must be should|nit`);
+      if (!str(f.title)) errs.push(`${p}.title: required`);
+      if (!str(f.case)) errs.push(`${p}.case: required, non-empty`);
+      if (typeof f.fix !== "string") errs.push(`${p}.fix: must be a string`);
+    });
+  },
   reply(v, errs) {
     if (!["accept", "push_back", "ask"].includes(v?.position)) errs.push("position: must be accept|push_back|ask");
     if (!str(v?.body)) errs.push("body: required");

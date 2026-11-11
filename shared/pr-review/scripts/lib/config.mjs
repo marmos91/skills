@@ -34,10 +34,11 @@ const DEFAULTS = {
   decider: { kind: "auto", confidence: 0.5 },
   loop: { authors_ignore: [], max_prs_per_run: 10, max_review_rounds: 3, max_replies_per_thread: 2, effort: "auto" },
   review: { guidance: [], ci: "use", max_diff_lines: 3000 },
+  hygiene: { enabled: true },
 };
 
 // Repo level may set only these paths; "*" matches one lens name.
-const REPO_ALLOWED = ["lenses.*.enabled", "loop.authors_ignore", "loop.max_prs_per_run", "review.guidance", "effort_auto.high_paths"];
+const REPO_ALLOWED = ["lenses.*.enabled", "loop.authors_ignore", "loop.max_prs_per_run", "review.guidance", "effort_auto.high_paths", "hygiene.enabled"];
 
 // Strip // comments outside of strings.
 export function stripComments(text) {
@@ -133,6 +134,7 @@ function validate(c) {
   for (const k of ["high_paths", "low_paths"]) need(strList(c.effort_auto[k]), `effort_auto.${k}`, "an array of strings");
   need(isObj(c.review) && strList(c.review.guidance), "review.guidance", "an array of strings");
   need(["use", "ignore"].includes(c.review.ci), "review.ci", "use or ignore");
+  need(isObj(c.hygiene) && typeof c.hygiene.enabled === "boolean", "hygiene.enabled", "a boolean");
   need(posInt(c.review.max_diff_lines), "review.max_diff_lines", "a positive integer");
 }
 

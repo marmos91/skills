@@ -216,3 +216,24 @@ export function replyPrompt(frame, thread, role, draft) {
     '{"position": "accept|push_back|ask", "body": "..."}',
   ].join("\n");
 }
+
+// diffSummary: `git diff --stat` of the PR. One child at thinking low (spec 6.3.1).
+export function hygienePrompt(frame, { diffSummary = "" } = {}) {
+  return [
+    "You check the hygiene of a pull request. You are not a code reviewer.",
+    "",
+    context(frame, `Diff summary:\n${diffSummary}`),
+    "",
+    "## Task",
+    "- Does the PR description match what the diff does? Name each claim that the diff does not support, and each change that the description does not mention.",
+    "- Does a changed public interface (CLI flag, config key, API, exported function) miss its docs? Grep the docs in the worktree before you report.",
+    "",
+    "## Lens",
+    read("lenses/hygiene.md"),
+    "",
+    "## Output",
+    OUT,
+    '{"findings": [{"lens": "hygiene", "severity": "should|nit", "title": "short title", "case": "what is wrong, with the line or file", "fix": "the smallest change, as a question to the author if you are not sure"}]}',
+    'Never use the severity "must". No findings is a valid result: {"findings": []}.',
+  ].join("\n");
+}
