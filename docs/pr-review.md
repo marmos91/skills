@@ -17,13 +17,26 @@ attribution.
 
 | Command | What it does |
 |---|---|
-| `pr-review review <n> [--repo o/r] [--effort low\|medium\|high\|max] [--dry-run] [--until stage] [--restart]` | Review one PR. `<n>` is a number or a PR URL. Without `--repo`, the repo of the current directory |
+| `pr-review review <n> [--repo o/r] [--effort low\|medium\|high\|max\|auto] [--lens a,b] [--max-diff-lines N] [--dry-run] [--until stage] [--restart]` | Review one PR. `<n>` is a number or a PR URL. Without `--repo`, the repo of the current directory |
 | `pr-review answer` | Print the open questions as JSON |
 | `pr-review answer <id> <post\|drop\|ask-author>` | Record your answer to one question |
 | `pr-review status [owner/repo]` | Questions, to-do items, review and reply counts per PR, lock holder, unfinished runs, paused flag |
-| `pr-review doctor` | Merged config, a 1-token probe per seat, `gh auth status`, jev, claude login mode, planned child count per effort level |
+| `pr-review doctor` | Merged config, a 1-token probe per seat, `gh auth status`, jev, gitleaks, claude login mode, planned child count per effort level |
+| `pr-review tick [owner/repo]` | One loop run (a tick); `pr-review-loop` calls it |
 | `pr-review-loop [owner/repo]` | One loop run (a tick) |
-| `pr-review-loop pause` / `resume` | Stop or restart every tick for the repo |
+| `pr-review-loop pause` / `resume [owner/repo]` | Stop or restart every tick for the repo |
+| `pr-review-loop answer [<id> <option>]` | Same as `pr-review answer` |
+
+Review flags:
+
+- `--effort auto` picks the level from the changed paths (see [Effort](#effort)).
+- `--lens a,b` runs only these lenses. The other lenses count as failed, so
+  the review never approves.
+- `--max-diff-lines N` raises `review.max_diff_lines` for this run.
+
+Without `owner/repo` or `--repo`, every command uses the GitHub remote of the
+current directory, `origin` first. `pr-review-loop pause` and `resume` use the
+same rule.
 
 Exit codes of the engine:
 
@@ -31,8 +44,8 @@ Exit codes of the engine:
 |---|---|
 | `0` | Done |
 | `3` | Questions wait for you. Only an interactive `review` exits `3`. The loop queues questions and continues |
-| `4` | A stage failed after its retries. Nothing was posted |
-| `1` | Usage or setup error |
+| `4` | A stage or a GitHub call failed after its retries. Check the PR before running again; part of the review may be posted. A rerun never posts the same item twice |
+| `1` | Usage or setup error, or a diff above `review.max_diff_lines` |
 
 The skills (`shared/pr-review/SKILL.md`, `shared/pr-review-loop/SKILL.md`)
 are thin. They run the engine, ask your questions on exit `3`, and show the
@@ -63,8 +76,9 @@ every seat reads:
 - A git worktree at the pinned SHA. Seats read callers and tests there. Full
   files are not copied into the prompt.
 
-A diff above `review.max_diff_lines` (default 3000) stops the run with an
-error. There is no diff splitter.
+A diff above `review.max_diff_lines` (default 3000) stops the run with exit
+`1` before any child runs. `--max-diff-lines N` reviews it anyway. There is
+no diff splitter.
 
 ### 2. Round 1: independent review
 
@@ -78,7 +92,7 @@ The effort level sets this shape (`low` and `medium` = `per-seat`, `high`
 and `max` = `per-lens`), so it overrides `round1` from your config. See
 [Effort](#effort).
 
-A lens with its own seats (for example security on Fable) always runs in its
+A lens with its own seats (for example a security panel) always runs in its
 own children.
 
 | Lens | Looks for |
@@ -184,14 +198,15 @@ text (`scripts/lib/verdict.mjs`). The first row that matches wins.
 ### 9. Post
 
 1. Take the repo lock.
-2. Check the head again. If it moved, drop this run and frame again.
+2. Read the CI state again, then check the head again. If it moved, drop
+   this run and frame again.
 3. Place each inline comment on the diff hunks of the pinned SHA. A
    suggestion goes only on an added or context line on the right side. A
    finding outside the hunks moves into the summary with a permalink.
 4. Scan every outgoing body with `gitleaks stdin` (or the same patterns when
    gitleaks is missing). A hit stops that post and queues a question.
 5. If you have a pending review on the PR that this run does not own, skip
-   the PR and queue a note.
+   the PR. Submit or delete that review, then run again.
 6. Search your recent comments for the run marker. A hit means the post
    already happened.
 7. Post with 1 `addPullRequestReview` mutation (`commitOID`, threads, event),
@@ -280,10 +295,13 @@ The engine reads the checks of the head SHA (`statusCheckRollup`).
   failed check it adds the last 80 lines of the failed job log, with secrets
   redacted. The correctness and adversarial lenses use it as evidence.
 - **Verdict**: red or pending CI never gives `APPROVE`. Red CI with no agreed
-  `must` gives `COMMENT`, and the summary names the failed checks.
+  `must` gives `COMMENT`, and the summary names the failed checks. The engine
+  reads CI again just before it posts; a stale or failed read counts as
+  unknown and blocks `APPROVE`.
 - **Loop**: a PR with pending checks waits for the next tick, unless the
   checks are pending for more than `loop.ci_wait_minutes` (default 30).
 - `review.ci: "ignore"` turns all of this off. The default is `"use"`.
+  With `"ignore"`, CI never blocks `APPROVE`.
 
 ## Hygiene
 
@@ -347,7 +365,7 @@ State root: `${XDG_STATE_HOME:-~/.local/state}/pr-review/<owner>__<repo>/`.
 | Path | Content |
 |---|---|
 | `lock/` | PID of the run that holds the repo. A lock with a dead PID is taken over. `review` and the loop share it |
-| `pr/<n>/cache.json` | Head SHA and newest comment, to skip unchanged PRs |
+| `pr/<n>/state.json` | Review and reply counts, settled fingerprints, last reviewed SHA, and the cache (`updatedAt`) used to skip unchanged PRs |
 | `pr/<n>/runs/<sha>-<ts>/` | One folder per run: a folder per stage, one output file and `.done` marker per child |
 | `questions/<id>.md`, `.json` | Open and answered questions |
 | `todo.md` | Points you accepted on your own PRs |
@@ -403,7 +421,7 @@ decider and `round1` belong to you.
   // A lens needs 2 or more seats.
   "lenses": {
     "security": { "seats": [
-      { "harness": "claude", "model": "claude-fable-5-1", "thinking": "max" },
+      { "harness": "claude", "model": "opus",             "thinking": "max" },
       { "harness": "pi",     "model": "cubbit/mimir-pro", "thinking": "high" }
     ]},
     "architecture": { "enabled": false }
@@ -448,8 +466,8 @@ A commented copy is in `shared/pr-review/config.example.json`.
 - Use different model families in the council. The point of the vote is
   that one model's blind spots do not decide the result.
 - **Per-lens models.** Put the strongest model on the lens where a miss
-  costs most. The example puts security on Fable with `thinking: "max"`, with
-  a Mimir seat as the second voter.
+  costs most. The example gives security its own panel (Opus with
+  `thinking: "max"` and a Mimir seat); a comment shows Fable as an option.
 - `decider.kind`: `auto` (jev when found), `jev` (always), `off`.
   `decider.confidence` defaults to `0`: the jev benchmark shows confidence
   does not predict correctness (AUC 0.53).
@@ -484,7 +502,7 @@ you the open questions, then runs again.
 
 ### Answer questions from the loop
 
-Run `/pr-review-loop answer`, or by hand:
+Run `/pr-review-loop answer`, `pr-review-loop answer`, or by hand:
 
 ```sh
 pr-review answer                       # list as JSON

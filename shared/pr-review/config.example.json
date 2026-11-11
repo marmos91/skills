@@ -9,15 +9,16 @@
   // The effort level overrides this: low and medium run per-seat, high and max per-lens.
   "round1": "per-seat",
   // Per-lens override. A lens with "seats" uses only those seats. A lens needs 2 or more seats.
+  // Option, a stronger security panel: "security": { "seats": [{ "harness": "claude", "model": "claude-fable-5-1", "thinking": "max" }, { "harness": "pi", "model": "cubbit/mimir-pro", "thinking": "high" }] }
   "lenses": {
     "security": { "seats": [
-      { "harness": "claude", "model": "claude-fable-5-1", "thinking": "max" },
+      { "harness": "claude", "model": "opus",             "thinking": "max" },
       { "harness": "pi",     "model": "cubbit/mimir-pro", "thinking": "high" }
     ]}
   },
   // Clusters findings and writes the final review text.
   "judge": { "harness": "claude", "model": "opus", "thinking": "high" },
-  // Settles split votes. "auto" = use jev when the jev CLI is on PATH.
+  // Settles split votes. "auto" = use jev when found: first in the sibling skill folder (../jev/bin/jev), then on PATH.
   "decider": { "kind": "auto", "confidence": 0 },
   "loop": {
     "authors_ignore": ["dependabot[bot]", "renovate[bot]"],

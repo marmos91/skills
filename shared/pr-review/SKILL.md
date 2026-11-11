@@ -13,11 +13,16 @@ and shows the result. `$SKILL_DIR` is the folder of this file. Full guide:
 
 ```sh
 sh "$SKILL_DIR/scripts/pr-review" review <n> [--repo owner/repo] \
-  [--effort low|medium|high|max] [--dry-run] [--until <stage>] [--restart]
+  [--effort low|medium|high|max|auto] [--lens a,b] [--max-diff-lines N] \
+  [--dry-run] [--until <stage>] [--restart]
 ```
 
 - `<n>` is the PR number or URL. Without `--repo`, the engine uses the repo
   of the current directory.
+- `--effort auto` picks the level from the changed paths.
+- `--lens a,b` runs only these lenses. The review then never approves.
+- `--max-diff-lines N` reviews a diff above `review.max_diff_lines` (exit
+  `1` says when a diff is too large).
 - `--dry-run` posts nothing. It prints the planned children and models, and
   writes the review to a file in the run folder.
 - `--until <stage>` stops after `frame`, `round1`, `merge`, `round2`,
@@ -33,8 +38,8 @@ sh "$SKILL_DIR/scripts/pr-review" review <n> [--repo owner/repo] \
 |---|---|---|
 | `0` | Done | Show the review URL and the summary that the engine prints |
 | `3` | Questions are open | Ask them (next section), then run the same command again |
-| `4` | A stage failed after retries | Show the error. Nothing was posted. Run again later |
-| `1` | Usage or setup error | Show the error. Suggest `pr-review doctor` |
+| `4` | A stage or a GitHub call failed after retries | Show the error. Check the PR before running again; part of the review may be posted. A rerun does not post the same item twice |
+| `1` | Usage or setup error, or the diff is too large | Show the error. Suggest `pr-review doctor`, or `--max-diff-lines N` for a large diff |
 
 Exit `3` happens only in an interactive run. The loop never stops for
 questions.
@@ -67,7 +72,7 @@ questions.
 - `pr-review status [owner/repo]`: open questions, to-do items, unfinished
   runs and the lock holder.
 - `pr-review doctor`: merged config, a probe of each seat, `gh` login, jev,
-  and the planned child count per effort level. Run it first on a new
+  gitleaks, and the planned child count per effort level. Run it first on a new
   machine.
 
 ## Rules
