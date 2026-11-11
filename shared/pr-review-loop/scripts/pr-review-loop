@@ -2,10 +2,13 @@
 # pr-review-loop [owner/repo]                          one loop run (repeat it with /loop, cron or launchd)
 # pr-review-loop pause|resume [owner/repo]
 # pr-review-loop answer [<id> <option>] [--repo owner/repo]
+# pr-review-loop status [owner/repo] | doctor
 # Every command finds the repo the same way: the argument (or --repo), else this folder's GitHub remote.
 set -e
-engine="$(dirname "$(realpath "$0")")/../../pr-review/scripts"
+# node, not realpath(1): realpath is not POSIX and is missing on older macOS and under a bare cron PATH
+engine="$(node -e 'const p=require("node:path"),f=require("node:fs");console.log(p.resolve(p.dirname(f.realpathSync(process.argv[1])),"../../pr-review/scripts"))' "$0")"
+[ -x "$engine/pr-review" ] || { echo "pr-review-loop: cannot find the pr-review engine at $engine" >&2; exit 1; }
 case "${1:-}" in
-  pause|resume|answer) exec "$engine/pr-review" "$@" ;;
+  pause|resume|answer|status|doctor) exec "$engine/pr-review" "$@" ;;
   *) exec "$engine/pr-review" tick "$@" ;;
 esac

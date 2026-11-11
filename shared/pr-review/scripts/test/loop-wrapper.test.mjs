@@ -67,3 +67,10 @@ test("the bin link runs the wrapper; pause takes --repo; answer passes --repo", 
   assert.equal(spawnSync(link, ["pause", "o/r", "EXTRA"], { env }).status, 1);
   assert.equal(JSON.parse(execFileSync(link, ["answer", "--repo", "o/r"], { env, encoding: "utf8" })).length, 0);
 });
+
+test("status and doctor pass through to the engine", () => {
+  const env = { ...process.env, XDG_STATE_HOME: mkdtempSync(join(tmpdir(), "loopst-")) };
+  const st = spawnSync(bin, ["status", "o/r"], { env, encoding: "utf8" });
+  assert.equal(st.status, 0, st.stderr);
+  assert.equal(JSON.parse(st.stdout).repo, "o/r");
+});
