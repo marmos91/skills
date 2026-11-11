@@ -49,8 +49,8 @@ export class SeatDropped extends ChildFailed {
 
 // Every top-level JSON value in the text: a model may quote a finding in its prose before the real output.
 // With ok (a schema is set) the LAST value counts, never an earlier one that passes: an earlier value may be a
-// quote that would hide the seat's real (invalid or error) output. A trailing list of plain values, such as a
-// footnote "[1]", is not an output and is skipped. Without ok: the largest value.
+// quote that would hide the seat's real (invalid or error) output. A trailing list of numbers, a citation such as
+// "[1]", is not an output and is skipped. Without ok: the largest value.
 export function salvageJson(text, ok) {
   // No fence stripping: the scan skips all but { and [, and a fence inside a JSON string (a comment body) must stay.
   const s = String(text);
@@ -78,7 +78,7 @@ export function salvageJson(text, ok) {
   }
   // With a schema: only the LAST value counts. Falling back to an earlier one could pick a value the
   // seat quoted (from the PR or its own prose) and hide its real, invalid or error output; fail and retry.
-  const footnote = (v) => Array.isArray(v) && v.length > 0 && v.every((x) => x === null || typeof x !== "object");
+  const footnote = (v) => Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === "number");
   if (ok) return found.findLast((x) => !footnote(x.v))?.v ?? null; // the caller validates it and retries on failure
   return found.reduce((a, b) => (b.size > a.size ? b : a), { v: null, size: -1 }).v;
 }

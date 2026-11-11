@@ -214,7 +214,8 @@ async function once(o, restart) {
     }
   };
   const ctx = { runDir, frame: f, runChild: o.runChild, routerUp: o.routerUp, config, dropped: isDropped, drop };
-  // a shell only for a trusted author, and only in jobs that run the adversarial lens (docs: trust rule 3)
+  // a shell only for a trusted author: in round 1 only in jobs that run the adversarial lens; votes may run a
+  // repro, because a keep with run evidence holds against a majority of drops (tally, spec R2)
   const toolsFor = (j) => (f.trusted && j.lenses.includes("adversarial") ? "shell" : "read");
   const jobs = round1Jobs(config, run.lenses);
   const hygFile = join(runDir, "hygiene-result.json");
@@ -271,7 +272,7 @@ async function once(o, restart) {
   const ballots = await settled(voters.map((seat, i) => {
     const id = seatId(seat), mine = clusters.filter((c) => c.seats.includes(id) && !c.found.includes(id));
     if (!mine.length) return { id, votes: [] };
-    return child(ctx, "round2", `v~${i}`, { seat, tools: "read", schema: "vote", prompt: (s) => votePrompt(f, mine.map(view), s.max_turns) }).then((votes) => ({ id, votes: votes ?? [] }));
+    return child(ctx, "round2", `v~${i}`, { seat, tools: f.trusted ? "shell" : "read", schema: "vote", prompt: (s) => votePrompt(f, mine.map(view), s.max_turns) }).then((votes) => ({ id, votes: votes ?? [] }));
   }));
   enoughSeats();
   markDone(runDir, "round2");

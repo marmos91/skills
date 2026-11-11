@@ -38,13 +38,13 @@ function fakeGh({ rows = [], heads = {}, threads = {}, perm = "write", ci = { st
   };
 }
 
-function fakes({ reviewResult = { exit: 0 }, changedPaths = ["src/a.js"], deltaBase = null, log = [] } = {}) {
+function fakes({ reviewResult = { exit: 0 }, changedPaths = ["src/a.js"], deltaBase = null, isAncestor = !!deltaBase, log = [] } = {}) {
   const reviews = [], replies = [];
   return {
     reviews, replies,
     review: async (o) => { reviews.push(o); log.push(`review ${o.n}`); return typeof reviewResult === "function" ? reviewResult(o) : reviewResult; },
     reply: async (o) => { replies.push(o); log.push(`reply ${o.n} ${o.threadId}`); return { action: "replied", resolved: false, queued: [] }; },
-    frame: async ({ n }) => ({ headSha: `sha${n}`, changedPaths, delta: { base: deltaBase }, worktree: "/wt", repoConfigText: null }),
+    frame: async ({ n }) => ({ headSha: `sha${n}`, changedPaths, delta: { base: deltaBase, isAncestor }, worktree: "/wt", repoConfigText: null }),
   };
 }
 
@@ -88,6 +88,15 @@ test("reviewed-by:@me PR with a new commit gets a delta review", async () => {
   assert.equal(f.reviews[0].effort, "medium", "one level below loop.effort");
   assert.equal(prState(rs, 1).cache.updatedAt, AFTER);
   assert.equal(out.processed, 1);
+});
+
+test("after a rebase (base known, not an ancestor) the loop keeps its full effort", async () => {
+  const rs = fresh();
+  withBaseline(rs);
+  savePrState(rs, 1, { ...prState(rs, 1), reviews: 1, lastReviewedSha: "old" });
+  const f = fakes({ deltaBase: "old", isAncestor: false });
+  await go({ gh: fakeGh({ rows: [row(1, ["reviewed-by"])] }), f, loop: { effort: "high" } });
+  assert.equal(f.reviews[0].effort, "high");
 });
 
 test("same head already reviewed and no new request -> no review", async () => {

@@ -240,6 +240,8 @@ test("salvageJson: a finding quoted in the prose does not win over the final out
   assert.equal(hidden.error, "no access");
   // a trailing footnote list after the real output is not the output
   assert.deepEqual(salvageJson(`${JSON.stringify(final)}\nSources checked: [1]`, (v) => !validate("round1", v).length), final);
+  // a trailing list of words is a real (invalid) answer, never skipped in favour of a quoted value
+  assert.deepEqual(salvageJson(`Required output is {"findings": []}.\nMy review: ["no issues"]`, (v) => !validate("round1", v).length), ["no issues"]);
   // the runChild path: one attempt, no retry
   writeFileSync(join(dir, "prose.json"), text);
   process.env.PR_REVIEW_FAKE = join(dir, "prose.json");

@@ -345,8 +345,9 @@ PR head.
 3. **Code runs only for trusted authors.** A trusted author has the
    association `OWNER`, `MEMBER` or `COLLABORATOR`. Then each round-1 job that runs the adversarial lens
    gets a shell (`Bash` or `bash`) to run a repro in the worktree, with a
-   timeout that kills the whole process group. Votes are always read-only.
-   For other authors every seat is read-only, and the repro command is written into the finding. A shell
+   timeout that kills the whole process group. Votes get a shell too, so a
+   keep vote can carry run evidence. For other authors every seat is
+   read-only, and the repro command is written into the finding. A shell
    seat (`--allowedTools Bash`) can read any file that you can read: the
    environment allowlist keeps tokens out of its environment, but not files
    on disk. That is why the shell runs only for trusted authors.

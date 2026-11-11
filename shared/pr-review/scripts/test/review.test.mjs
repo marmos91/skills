@@ -991,12 +991,12 @@ test("compose output with a fenced suggestion reaches the post with the fence in
   assert.ok(posts(fx)[0].threads[0].body.startsWith(body + "\n\n<!-- pr-review"));
 });
 
-test("trusted author: shell only in round-1 jobs that run the adversarial lens; votes are read-only", async () => {
+test("trusted author: shell only in round-1 jobs that run the adversarial lens; votes may run a repro", async () => {
   const fx = fixture(); routes(fx);
   const r0 = R(fx); r0["api repos/o/r/pulls/5"] = { stdout: { author_association: "OWNER" } }; W(fx, r0);
   const { run } = await go(fx, happy());
   const r1 = run.calls.filter((c) => c.k.startsWith("all~") || /~/.test(c.k) && !c.k.startsWith("v~"));
   assert.ok(r1.length > 0 && r1.every((c) => c.tools === (c.prompt.includes("adversarial") ? "shell" : "read")), JSON.stringify(r1.map((c) => [c.k, c.tools])));
   assert.ok(run.calls.some((c) => c.tools === "shell"), "the adversarial job gets a shell");
-  assert.ok(run.calls.filter((c) => c.k.startsWith("v~")).every((c) => c.tools === "read"));
+  assert.ok(run.calls.filter((c) => c.k.startsWith("v~")).every((c) => c.tools === "shell"), "votes keep run evidence (R2)");
 });

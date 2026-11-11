@@ -230,7 +230,7 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
       if (doReview) {
         const pcfg = loadCfg(fr.repoConfigText ?? null);
         let effort = pcfg.loop.effort === "auto" ? pickEffort(fr.changedPaths, pcfg) : pcfg.loop.effort;
-        if (fr.delta?.base) effort = lowerEffort(effort); // 5.1: delta review one level below
+        if (fr.delta?.isAncestor) effort = lowerEffort(effort); // 5.1: delta review one level below
         const res = await review({ repo, n, mode: "loop", effort, repoDir, gh });
         if (res?.exit) throw new Error(`review exit ${res.exit}: ${res.summary}; retried next tick`);
         // A skipped review leaves the answers to review(): a pending-review skip keeps them pending (forced again
