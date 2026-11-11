@@ -42,12 +42,16 @@ export function stripComments(text) {
   return out;
 }
 
+const UNSAFE = new Set(["__proto__", "constructor", "prototype"]);
 const isObj = (v) => v && typeof v === "object" && !Array.isArray(v);
 
 function merge(base, over) {
   if (!isObj(base) || !isObj(over)) return over;
   const out = { ...base };
-  for (const [k, v] of Object.entries(over)) out[k] = k in base ? merge(base[k], v) : v;
+  for (const [k, v] of Object.entries(over)) {
+    if (UNSAFE.has(k)) continue;
+    out[k] = Object.hasOwn(base, k) ? merge(base[k], v) : v;
+  }
   return out;
 }
 
@@ -69,25 +73,43 @@ function checkRepoKeys(obj, path = "") {
   }
 }
 
+const strList = (v) => Array.isArray(v) && v.every((x) => typeof x === "string");
+const posInt = (v) => Number.isInteger(v) && v > 0;
+
+function need(ok, path, what) {
+  if (!ok) throw new Error(`${path} must be ${what}`);
+}
+
 function checkSeat(s, where) {
-  if (!isObj(s) || !HARNESSES.includes(s.harness) || typeof s.model !== "string" || !s.model) {
-    throw new Error(`bad seat in ${where}: need harness (claude|pi|auto) and model`);
-  }
+  need(isObj(s), where, "an object");
+  need(HARNESSES.includes(s.harness), `${where}.harness`, "claude, pi or auto");
+  need(typeof s.model === "string" && s.model, `${where}.model`, "a non-empty string");
+  need(s.provider === undefined || typeof s.provider === "string", `${where}.provider`, "a string");
   const ok = s.harness === "claude" ? CLAUDE_THINKING : PI_THINKING;
-  if (!ok.includes(s.thinking)) throw new Error(`bad thinking "${s.thinking}" for ${s.harness} seat in ${where}: use ${ok.join("|")}`);
+  need(ok.includes(s.thinking), `${where}.thinking (${s.harness} seat)`, `one of ${ok.join("|")}`);
 }
 
 function validate(c) {
-  if (!["per-seat", "per-lens"].includes(c.round1)) throw new Error(`bad round1: ${c.round1}`);
-  if (!Array.isArray(c.seats) || !c.seats.length) throw new Error("seats must be a non-empty array");
+  need(["per-seat", "per-lens"].includes(c.round1), "round1", "per-seat or per-lens");
+  need(Array.isArray(c.seats) && c.seats.length > 0, "seats", "a non-empty array");
   c.seats.forEach((s, i) => checkSeat(s, `seats[${i}]`));
   checkSeat(c.judge, "judge");
+  need(isObj(c.lenses), "lenses", "an object");
   for (const [name, l] of Object.entries(c.lenses)) {
-    if (!l.seats) continue;
+    need(LENSES.includes(name), `lenses.${name}`, `a known lens (${LENSES.join(", ")})`);
+    need(isObj(l), `lenses.${name}`, "an object");
+    need(typeof l.enabled === "boolean", `lenses.${name}.enabled`, "a boolean");
+    if (l.seats === undefined) continue;
     if (!Array.isArray(l.seats) || l.seats.length < 2) throw new Error(`lens ${name} needs 2 or more seats`);
     l.seats.forEach((s, i) => checkSeat(s, `lenses.${name}.seats[${i}]`));
   }
-  if (!["auto", "jev", "off"].includes(c.decider.kind)) throw new Error(`bad decider.kind: ${c.decider.kind}`);
+  need(isObj(c.decider), "decider", "an object");
+  need(["auto", "jev", "off"].includes(c.decider.kind), "decider.kind", "auto, jev or off");
+  need(typeof c.decider.confidence === "number" && c.decider.confidence >= 0 && c.decider.confidence <= 1, "decider.confidence", "a number in [0,1]");
+  need(isObj(c.loop), "loop", "an object");
+  need(strList(c.loop.authors_ignore), "loop.authors_ignore", "an array of strings");
+  for (const k of ["max_prs_per_run", "max_review_rounds", "max_replies_per_thread"]) need(posInt(c.loop[k]), `loop.${k}`, "a positive integer");
+  need(isObj(c.review) && strList(c.review.guidance), "review.guidance", "an array of strings");
 }
 
 export function loadConfig({ userPath, repoText, cliPath } = {}) {
