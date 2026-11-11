@@ -23,8 +23,8 @@ const GUIDANCE = ["CONTRIBUTING.md", "CLAUDE.md", "AGENTS.md", "REVIEW.md", ".gi
 const TRUSTED = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 const SEVERITY = /^\s*\*\*(must|should|nit):\*\*/;
 
-const git = (cwd, args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
-const gitOk = (cwd, args) => { try { git(cwd, args); return true; } catch { return false; } };
+export const git = (cwd, args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
+export const gitOk = (cwd, args) => { try { git(cwd, args); return true; } catch { return false; } };
 const show = (cwd, ref, path) => { try { return git(cwd, ["show", `${ref}:${path}`]); } catch { return null; } };
 const json = (dir, name, v) => writeFileSync(join(dir, name), JSON.stringify(v, null, 2) + "\n");
 

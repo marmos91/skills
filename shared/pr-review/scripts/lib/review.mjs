@@ -7,7 +7,7 @@ import { basename, join, resolve, sep } from "node:path";
 import * as github from "./github.mjs";
 import { runChild as realRunChild, ChildFailed, stopping } from "./child.mjs";
 import { LENSES, applyEffort, loadConfig, pickEffort, plannedChildren, seatId, seatsForLens } from "./config.mjs";
-import { frame as realFrame, HeadMoved, DiffTooLarge } from "./frame.mjs";
+import { frame as realFrame, git, HeadMoved, DiffTooLarge } from "./frame.mjs";
 import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.mjs";
 import { tally } from "./tally.mjs";
 import { allowedSeverities, filterNew, fingerprint } from "./convergence.mjs";
@@ -109,6 +109,23 @@ function hunk(f, c) {
     if (!file.startsWith(wt + sep)) return "";
   } catch { return ""; }
   try { return readFileSync(file, "utf8").split("\n").slice(Math.max(0, c.line - 6), c.line + 5).join("\n"); } catch { return ""; }
+}
+
+// Spec 7.4: an answer given at an older sha holds only while the finding's line is the same code at the same place.
+// A failed diff (the old sha is gone) counts as changed.
+export function codeMoved(repoDir, q, head) {
+  if (q.sha === head) return false;
+  const { file, line } = q.finding ?? {};
+  if (!file || typeof line !== "number") return true;
+  let d;
+  try { d = git(repoDir, ["-c", "core.quotePath=false", "diff", "--no-color", "--no-renames", "-U0", q.sha, head, "--", file]); } catch { return true; }
+  let shift = 0;
+  for (const m of d.matchAll(/^@@ -(\d+)(?:,(\d+))? \+\d+(?:,(\d+))? @@/gm)) {
+    const a = +m[1], removed = m[2] === undefined ? 1 : +m[2], added = m[3] === undefined ? 1 : +m[3];
+    if (removed > 0 && a <= line && line < a + removed) return true; // the line itself changed
+    if (removed > 0 ? a + removed <= line : a < line) shift += added - removed; // a hunk above it moves it
+  }
+  return shift !== 0;
 }
 
 function changedLines(f) {
@@ -235,6 +252,12 @@ async function once(o, restart) {
   const agreed = [], rejected = [], open = [], applied = [];
   // Marco's answers win over the tally, from this run or an earlier one (the loop posts without the finding).
   const answers = new Map(pendingAnswers(repoState).filter((q) => q.pr === n).map((q) => [q.fingerprint, q]));
+  const repoDir = o.repoDir ?? process.cwd();
+  const moved = (q) => {
+    if (!codeMoved(repoDir, q, f.headSha)) return false;
+    log(`question ${q.id}: the code at ${q.finding?.file}:${q.finding?.line} changed since ${q.sha}; its answer is dropped`);
+    return true;
+  };
   const take = (q, c) => {
     answers.delete(q.fingerprint);
     applied.push(q.id);
@@ -242,7 +265,12 @@ async function once(o, restart) {
     else agreed.push({ ...c, ask_author: q.answer === "ask-author", answered: q.answer });
   };
   for (const { c, votes, status } of tallied) {
-    if (answers.has(c.fp)) { take(answers.get(c.fp), c); continue; }
+    if (answers.has(c.fp)) {
+      const q = answers.get(c.fp);
+      // The answer was about other code: the finding is dropped, not asked again under the same question id.
+      if (moved(q)) { answers.delete(q.fingerprint); applied.push(q.id); rejected.push(c); } else take(q, c);
+      continue;
+    }
     if (status === "agreed") { agreed.push({ ...c, ask_author: c.found.length === 1 }); continue; }
     if (status === "rejected") { rejected.push(c); continue; }
     const dfile = join(runDir, "decide", `${c.fp}.json`);
@@ -269,6 +297,7 @@ async function once(o, restart) {
   // An answered finding that this run did not find again is posted from the question record.
   // A held comment that was not found again has no text to post: its answer is closed.
   for (const q of [...answers.values()].filter((x) => x.finding?.secret)) { answers.delete(q.fingerprint); applied.push(q.id); }
+  for (const q of [...answers.values()].filter((x) => !x.finding?.kind && moved(x))) { answers.delete(q.fingerprint); applied.push(q.id); }
   [...answers.values()].filter((q) => !q.finding?.kind).forEach((q, i) => take(q, { ...q.finding, id: `q${i + 1}`, found: [], seats: [], fp: q.fingerprint }));
   const questionFiles = () => open.map((id) => join(repoState, "questions", `${id}.md`));
   if (open.length && mode === "interactive") {
@@ -444,6 +473,7 @@ async function followUp(o, head, pst, answered) {
   const seen = await gh.markerKeys(repo, n);
   for (const q of answered.filter((x) => x.answer !== "drop")) {
     if (seen.has(sha1(`inline\0${head}\0${q.fingerprint}`))) { already.push(q.fingerprint); continue; }
+    if (codeMoved(o.repoDir ?? process.cwd(), q, head)) { o.log(`question ${q.id}: the code at ${q.finding?.file}:${q.finding?.line} changed since ${q.sha}; its answer is dropped`); continue; }
     const f = q.finding;
     const text = f.secret ? heldText(repoState, n, pst.lastRunId, q.fingerprint)
       : `**${f.severity}:** ${f.title}\n\n${f.case}${f.fix ? `\n\n${f.fix}` : ""}${q.answer === "ask-author" ? "\n\nCan you confirm this case?" : ""}`;

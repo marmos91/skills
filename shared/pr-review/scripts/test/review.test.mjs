@@ -713,3 +713,68 @@ test("a CI read that fails at post time counts as unknown: no APPROVE", async ()
   assert.equal(r.exit, 0, r.summary);
   assert.equal(posts(fx)[0].event, "COMMENT");
 });
+
+// A new head B on the PR: a.js with `lines` (the fixture head is a=2, b=3, c=4, d=5).
+const pushHead = (fx, lines) => {
+  const b = commit(fx.seed, { "a.js": lines.join("\n") + "\n" }, "feat: more");
+  git(fx.seed, "push", "-qf", fx.origin, "HEAD:refs/pull/5/head");
+  routes(fx, { head: b });
+  return b;
+};
+const ANSWER_NO_FINDINGS = { all: { findings: [] }, compose: { body: "Summary.", comments: [] } };
+
+test("7.4: an answer from an older sha is posted when the finding's code did not change", async () => {
+  const fx = fixture(); routes(fx);
+  const first = await go(fx, split());
+  const id = basename(first.r.questions[0], ".md");
+  answer(fx.state, id, "post");
+  pushHead(fx, ["const a = 2;", "const b = 3;", "const c = 4;", "const d = 6;"]);
+  const { r } = await go(fx, ANSWER_NO_FINDINGS);
+  assert.equal(r.exit, 0, r.summary);
+  assert.deepEqual(posts(fx)[0].threads.map((t) => t.line), [2]);
+  assert.ok(JSON.parse(readFileSync(join(fx.state, "questions", `${id}.json`), "utf8")).appliedAt);
+});
+
+test("7.4: an answer from an older sha is dropped with a note when the finding's code changed", async () => {
+  for (const [why, lines] of [["line changed", ["const a = 2;", "const b = 30;", "const c = 4;", "const d = 5;"]], ["line shifted", ["// new", "const a = 2;", "const b = 3;", "const c = 4;", "const d = 5;"]]]) {
+    const fx = fixture(); routes(fx);
+    const first = await go(fx, split());
+    const id = basename(first.r.questions[0], ".md");
+    answer(fx.state, id, "post");
+    pushHead(fx, lines);
+    const lines2 = [];
+    const { r } = await go(fx, ANSWER_NO_FINDINGS, { log: (l) => lines2.push(l) });
+    assert.equal(r.exit, 0, r.summary);
+    assert.deepEqual(posts(fx)[0].threads, [], why);
+    assert.ok(lines2.some((l) => l.includes(id) && /changed/.test(l)), why);
+    assert.ok(JSON.parse(readFileSync(join(fx.state, "questions", `${id}.json`), "utf8")).appliedAt, why);
+  }
+});
+
+test("7.4: a re-found finding whose answer is from an older sha and whose code changed is dropped", async () => {
+  const fx = fixture(); routes(fx);
+  const first = await go(fx, split());
+  answer(fx.state, basename(first.r.questions[0], ".md"), "post");
+  pushHead(fx, ["const a = 2;", "const b = 30;", "const c = 4;", "const d = 5;"]);
+  let asked = 0;
+  const { r } = await go(fx, split(), { decide: async () => { asked++; return { decision: "unsure" }; } });
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(asked, 0);
+  assert.deepEqual(posts(fx)[0].threads, []);
+});
+
+test("7.4: the answer-only follow-up drops an answer whose code changed since its sha", async () => {
+  const fx = fixture(); routes(fx);
+  const first = await go(fx, split(), { mode: "loop", effort: "medium" });
+  assert.equal(first.r.exit, 0, first.r.summary);
+  const [q] = openQuestions(fx.state);
+  // The PR moved and was reviewed at B before the answer came.
+  const b = pushHead(fx, ["const a = 2;", "const b = 30;", "const c = 4;", "const d = 5;"]);
+  await go(fx, ANSWER_NO_FINDINGS, { mode: "loop", effort: "medium" });
+  assert.equal(prState(fx.state, N).lastReviewedSha, b);
+  answer(fx.state, q.id, "post");
+  const again = await go(fx, ANSWER_NO_FINDINGS);
+  assert.equal(again.r.exit, 0, again.r.summary);
+  assert.equal(posts(fx).length, 2, "no follow-up");
+  assert.ok(JSON.parse(readFileSync(join(fx.state, "questions", `${q.id}.json`), "utf8")).appliedAt);
+});
