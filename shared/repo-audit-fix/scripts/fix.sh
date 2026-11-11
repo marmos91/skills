@@ -119,7 +119,7 @@ run_pi() {
     # shellcheck disable=SC2086
     ( cd "$_cwd" && $TIMEOUT_BIN pi -p \
         --provider "$_p" --model "$_m" --thinking "$_th" \
-        --tools "$_tools" --no-session "$(cat "$_pf")" ) >"$_of" 2>"${_of%.txt}.err"
+        --tools "$_tools" --no-session "$(cat "$_pf")" ) </dev/null >"$_of" 2>"${_of%.txt}.err"
     _rc=$?
     set -e
     # dead/timed-out child = FATAL: discard partial output, stage retries
@@ -174,10 +174,6 @@ ensure_worktree() {
 
 step_plan() {
     mkdir -p "$STATE/tmp"
-rm -f "$STATE/jev-down"   # a new run tries jev again
-if [ "${1:-}" = run ] && [ "$JEV" != off ] && command -v jev >/dev/null 2>&1; then
-    log "jev on: plan text and finding titles go to Mimir SystemOne for coverage checks (JEV=off to disable)"
-fi
     if [ ! -s "$STATE/plan.json" ]; then
         [ -n "$AUDIT_STATE" ] || die "AUDIT_STATE not set — point it at the audit state dir (holds epics.json + findings.json)"
         [ -s "$AUDIT_STATE/epics.json" ] || die "no epics.json in $AUDIT_STATE"
@@ -726,7 +722,11 @@ export CONCURRENCY GATE_ROUNDS PLAN_ROUNDS EPIC_FILTER DRY_RUN ISSUE_LABEL JEV J
 
 case "${1:-help}" in
     plan)   step_plan ;;
-    run)    step_run ;;
+    run)    rm -f "$STATE/jev-down"   # a new run tries jev again
+            if [ "$JEV" != off ] && command -v jev >/dev/null 2>&1; then
+                log "jev on: plan text and finding titles go to Mimir SystemOne for coverage checks (JEV=off to disable)"
+            fi
+            step_run ;;
     status) step_status ;;
     clean)  step_clean ;;
     *) grep '^#' "$0" | sed 's/^# \{0,1\}//' ;;

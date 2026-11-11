@@ -56,7 +56,7 @@ run_pi() {
     # shellcheck disable=SC2086
     ( cd "$WORKTREE" && $TIMEOUT_BIN pi -p \
         --provider "$_p" --model "$_m" --thinking "$_th" \
-        --tools "$_tools" --no-session "$(cat "$_pf")" ) >"$_of" 2>"${_of%.txt}.err"
+        --tools "$_tools" --no-session "$(cat "$_pf")" ) </dev/null >"$_of" 2>"${_of%.txt}.err"
     set -e
 }
 
