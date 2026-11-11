@@ -489,6 +489,37 @@ The state records the review count and the reply count per thread, and
 - Before release: run `--dry-run` on 3 real PRs and compare `round1:
   per-seat` with `per-lens`.
 
+## 9.1 Lessons from the first manual run (PR #11)
+
+The first manual run of this pipeline on marmos91/skills#11 showed these
+facts. The build must follow them.
+
+- **`pi -p` reads stdin when stdin is not a terminal.** With an open pipe
+  (for example a background job) it waits until it is killed, and it gives no
+  output. The pi adapter always runs `pi -p ... < /dev/null`.
+- **`claude --tools` takes several values,** so a prompt after it is read as a
+  tool name. The claude adapter sends the prompt on stdin.
+- **`claude -p --bare` drops the login** ("Not logged in"). Without
+  `claude setup-token`, use `--restricted --strict-mcp-config`. `--restricted`
+  ignores the settings files (so no hooks), but it still loads `CLAUDE.md`.
+  `doctor` checks which mode works.
+- **Children must not outlive the engine.** The engine starts the seats and
+  waits for them (`wait`). A seat started from a shell that exits is killed.
+- **Mimir from Claude Code needs `it-router`.** A `mimir` subagent fails with
+  `model_not_found` unless the session started through `claude-mimir`. The
+  engine does not depend on this, because it starts Mimir seats with `pi -p`.
+- **Independent finds are votes.** In the run, all 3 seats found 7 of 16
+  clusters on their own. Rule: each seat that found a cluster counts as one
+  `keep` vote. Round 2 runs only for clusters that some seats did not find,
+  and only those seats vote. This replaces "the finder does not vote" in
+  section 6.5.
+- **Delta check on earlier threads works.** All 3 seats confirmed that the 3
+  earlier threads were fixed. The engine replied "Fixed in `<sha>`." and
+  resolved them.
+- **jev confidence is low, even for obvious answers** (about 0.26). The
+  decider bar comes from the jev calibration benchmark
+  (`shared/jev/bench/RESULTS.md`), not from a guess.
+
 ## 10. Left to the builder
 
 - The engine language (bash plus Node `.mjs`, like `repo-audit`, is the
