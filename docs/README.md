@@ -114,7 +114,7 @@ For a cheap test run, use `EPIC_FILTER=<epic> DRY_RUN=1`.
 | `EPIC_FILTER` | (all) | Comma list of epics to run |
 | `DRY_RUN` | `0` | `1` = do not push or open PRs |
 | `JEV` | `auto` | `auto` = use `jev` when it is on `PATH`; `off` = never |
-| `JEV_CONFIDENCE` | `0.5` | Minimum jev confidence to act on an answer |
+| `JEV_CONFIDENCE` | `0` | Minimum jev confidence to act on an answer. `0` = no gate: the benchmark shows confidence does not predict correctness |
 | `TIMEOUT` | `3600` | Seconds per child |
 | `REPO_CTX` | read `AGENTS.md` | One-line project context for every child |
 
@@ -151,7 +151,7 @@ jev doubt "Water boils at 100 degrees Celsius at sea level." --json
 1. Write the question so that "yes" is the answer you act on.
 2. Branch on the exit code: `0` = yes, `1` = no, `2` = no answer.
 3. Never treat exit `2` as "no".
-4. Add `--confidence MIN` to get exit `2` ("unsure") below that confidence.
+4. `--confidence MIN` gives exit `2` ("unsure") below that confidence. The benchmark shows confidence does not predict correctness, so use it only with your own data (see `shared/jev/bench/RESULTS.md`).
 5. Never send secrets. The text goes to an external API.
 
 Tests: `python3 -m unittest discover shared/jev`. Set `JEV_LIVE=1` to add a test against the real endpoint.

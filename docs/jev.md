@@ -52,7 +52,7 @@ Never read exit `2` as "no".
 1. Write the question so that "yes" is the answer you act on.
 2. Branch on exit `0` and `1` only. Treat `2` as "jev has no answer".
 3. Never send secrets: tokens, keys, credentials, `.env` contents. The text leaves the machine.
-4. Live confidence is low, even on obvious questions (about 0.26 for "the sky is blue"). A high `--confidence` makes most answers `unsure`.
+4. `confidence` does not predict correctness. In the benchmark (148 labeled cases, 3 repeats) it was about 0.92 on "no" answers and 0.48 on "yes" answers, and it separated right from wrong answers no better than chance (AUC 0.53). The verdict was the same on every repeat. See `shared/jev/bench/RESULTS.md`.
 
 ## How the skills use jev
 
@@ -72,7 +72,7 @@ See [repo-audit-fix.md](repo-audit-fix.md) for the full pipeline.
 The question for each finding:
 
 ```text
-This plan fixes finding <id> (<title>: <what>), or states explicitly why that finding is skipped.
+The plan has a step that fixes this problem: <title> (<what>); or it marks finding <id> as SKIP and says why.
 ```
 
 `jev_verdict` runs `jev ask "<question>" --confidence "$JEV_CONFIDENCE" < plan.md`.
@@ -94,4 +94,4 @@ This plan fixes finding <id> (<title>: <what>), or states explicitly why that fi
 3. jev never runs on the last plan round. A wrong "no" there would turn an approved plan into "plan review loop exhausted".
 4. The first outage turns jev off for the rest of the run. A hung API costs one 30 s timeout. A new `fix.sh run` deletes `jev-down` and tries jev again.
 5. Never send secrets. `fix.sh` sends `plan.md` and the finding title and `what` text. Set `JEV=off` if these can contain secrets.
-6. The engine acts only on a confident answer. `JEV_CONFIDENCE` (default `0.5`) is the bar.
+6. `JEV_CONFIDENCE` (default `0`, no gate) sets a confidence bar. The benchmarked question gave 0 false gaps on 108 plan calls, so no bar is needed.
