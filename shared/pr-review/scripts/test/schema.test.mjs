@@ -29,7 +29,7 @@ test("validate(merge): reverses is an optional non-empty string", () => {
   assert.ok(validate("merge", [{ ...c, reverses: 3 }]).length > 0);
 });
 test("validate(round1): a seat that reports an error failed; it is never zero findings", () => {
-  assert.deepEqual(validate("round1", { findings: [], error: "" }), []);
+  for (const error of ["", null, undefined]) assert.deepEqual(validate("round1", { findings: [], error }), [], String(error));
   for (const error of ["Review not performed: sandbox blocked every read of the ctx folder", true, { why: "x" }]) {
     assert.ok(validate("round1", { findings: [], error }).some((e) => /^error: /.test(e)), JSON.stringify(error));
   }
