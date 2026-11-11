@@ -277,7 +277,9 @@ For each finding:
 
 Only split findings reach this step.
 
-1. If `jev` is on PATH and `decider.kind` is not `off`, the engine runs:
+1. The engine finds jev at `../jev/jev` next to its own skill folder
+   (`shared/jev` in the same repo), or else on PATH. If it finds jev and
+   `decider.kind` is not `off`, the engine runs:
    `jev ask "This finding describes a real defect that this PR introduces." -t <finding, votes, code hunk> --json`.
    A result with confidence at or above `decider.confidence` settles the
    finding: yes = agreed, no = rejected. The run state records the jev result,
