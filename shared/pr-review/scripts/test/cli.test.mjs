@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, existsSync } from "node:fs";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -203,4 +203,18 @@ test("doctor: gitleaks probe (missing -> WARN, no stdin subcommand -> FAIL, ok)"
   r = await run(fake("new", "Available Commands:\n  detect      detect secrets\n  stdin       detect secrets from stdin"));
   assert.match(r.out, /ok\s+gitleaks 8\.21\.2/);
   assert.equal(r.code, 0);
+});
+
+test("pause and resume take owner/repo, --repo or the remote, and reject extra arguments", () => {
+  const fx = fixture();
+  const paused = join(fx.root, "state", "pr-review", "x__y", "paused");
+  assert.equal(cli(fx, "pause", "--repo", "x/y").status, 0);
+  assert.ok(existsSync(paused));
+  assert.equal(cli(fx, "resume", "x/y").status, 0);
+  assert.ok(!existsSync(paused));
+  assert.equal(cli(fx, "pause").status, 0, "the remote of the folder");
+  assert.ok(existsSync(join(fx.state, "paused")));
+  const extra = cli(fx, "pause", "x/y", "EXTRA");
+  assert.equal(extra.status, 1);
+  assert.ok(!existsSync(paused));
 });

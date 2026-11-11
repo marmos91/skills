@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // CLI: pr-review review|answer|tick|status|doctor. Exit codes: 0 done, 1 usage or setup error, 3 questions wait, 4 a stage failed.
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -23,7 +23,8 @@ const USAGE = `usage: pr-review review [<n|url>] [--repo owner/repo] [--dry-run]
        pr-review answer [<question-id> post|drop|ask-author] [--repo owner/repo]
        pr-review status [owner/repo]
        pr-review doctor [--config <file>]
-       pr-review tick [owner/repo]`;
+       pr-review tick [owner/repo]
+       pr-review pause|resume [owner/repo]`;
 
 const SKILL_DIR = realpathSync(join(dirname(fileURLToPath(import.meta.url)), ".."));
 
@@ -176,6 +177,13 @@ export async function main(argv, deps = {}) {
     return 0;
   }
   if (cmd === "doctor") return doctor(v, deps);
+  if (cmd === "pause" || cmd === "resume") {
+    if (rest.length > 1) throw new Usage(USAGE);
+    const repo = repoOf(rest[0] ?? v.repo), dir = stateRoot(repo);
+    if (cmd === "pause") { mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, "paused"), ""); } else rmSync(join(dir, "paused"), { force: true });
+    console.log(`${cmd}d: ${repo}`);
+    return 0;
+  }
   if (cmd === "tick") {
     if (rest.length > 1) throw new Usage(USAGE);
     const { tick } = await import("./lib/tick.mjs");
