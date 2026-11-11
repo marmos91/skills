@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync, renameSync, rmSync, existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
+import { randomBytes } from "node:crypto";
 import { join, dirname } from "node:path";
 
 // A run is finished once its last stage has a marker.
@@ -48,21 +49,46 @@ export function installSignalHandlers() {
   }
 }
 
+const rawPid = (dir) => { try { return readFileSync(join(dir, "pid"), "utf8"); } catch { return ""; } };
+
+// Moves a stale lock aside and takes its place. A mutex serializes takeovers, so a live lock is never moved.
+function takeOver(repoState, dir, deadRaw) {
+  const mutex = join(repoState, "lock.takeover");
+  try { mkdirSync(mutex); } catch (e) {
+    if (e.code !== "EEXIST") throw e;
+    // shortcut: a mutex left by a crash mid-takeover is cleared after 10 s; a racer that clears a live one could double-take, only after such a crash.
+    try { if (Date.now() - statSync(mutex).mtimeMs > 10000) rmSync(mutex, { recursive: true, force: true }); } catch {}
+    return false;
+  }
+  try {
+    if (rawPid(dir) !== deadRaw) return false; // replaced since we read it
+    const stale = `${dir}.stale.${process.pid}.${randomBytes(4).toString("hex")}`;
+    try { renameSync(dir, stale); } catch { return false; }
+    if (rawPid(stale) !== deadRaw) { try { renameSync(stale, dir); } catch {} return false; }
+    rmSync(stale, { recursive: true, force: true });
+    try { mkdirSync(dir); } catch (e) { if (e.code === "EEXIST") return false; throw e; }
+    return true;
+  } finally {
+    rmSync(mutex, { recursive: true, force: true });
+  }
+}
+
 export function acquireLock(repoState) {
   const dir = join(repoState, "lock");
   mkdirSync(repoState, { recursive: true });
-  try {
-    mkdirSync(dir);
-  } catch (e) {
-    if (e.code !== "EEXIST") throw e;
-    let pid = NaN;
-    try { pid = Number(readFileSync(join(dir, "pid"), "utf8")); } catch {}
+  let got = false, raw = "";
+  for (let attempt = 0; attempt < 2 && !got; attempt++) {
+    try { mkdirSync(dir); got = true; break; } catch (e) { if (e.code !== "EEXIST") throw e; }
+    raw = rawPid(dir);
+    let age;
+    try { age = Date.now() - statSync(dir).mtimeMs; } catch (e) { if (e.code === "ENOENT") continue; throw e; } // released meanwhile: retry once
+    const pid = Number(raw);
     // No pid file yet: a fresh lock is still being written; treat it as live for a few seconds.
-    const live = Number.isInteger(pid) && pid > 0 ? alive(pid) : Date.now() - statSync(dir).mtimeMs < 5000;
-    if (live) throw new Locked(pid);
-    rmSync(dir, { recursive: true, force: true });
-    try { mkdirSync(dir); } catch (e2) { throw e2.code === "EEXIST" ? new Locked(null) : e2; } // lost the takeover race
+    if (raw && Number.isInteger(pid) && pid > 0 ? alive(pid) : age < 5000) throw new Locked(raw ? pid : null);
+    got = takeOver(repoState, dir, raw);
+    if (!got) throw new Locked(null);
   }
+  if (!got) throw new Locked(Number(raw) || null);
   writeFileSync(join(dir, "pid"), String(process.pid));
   held.add(dir);
   installSignalHandlers();

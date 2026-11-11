@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stateRoot, acquireLock, Locked, runDir, done, markDone, prState, savePrState } from "../lib/state.mjs";
@@ -70,4 +70,36 @@ test("prState defaults, then round-trips", () => {
   savePrState(s, 5, { reviews: 1, settled: ["f1"], replies: { T1: 1 }, lastReviewedSha: "abc", cache: { head: "abc" } });
   assert.deepEqual(prState(s, 5), { reviews: 1, settled: ["f1"], replies: { T1: 1 }, lastReviewedSha: "abc", cache: { head: "abc" } });
   assert.ok(existsSync(join(s, "pr", "5", "state.json")));
+});
+
+const stateUrl = new URL("../lib/state.mjs", import.meta.url).href;
+const child = (code, s) => spawn(process.execPath, ["--input-type=module", "-e", code, s], { stdio: ["ignore", "pipe", "inherit"] });
+const output = (p) => new Promise((res) => { let out = ""; p.stdout.on("data", (d) => (out += d)); p.on("close", (code) => res({ out, code })); });
+
+test("racers on a stale lock: at most one wins", async () => {
+  const code = `import { acquireLock } from ${JSON.stringify(stateUrl)};
+    try { acquireLock(process.argv[1]); console.log("WIN"); setTimeout(() => {}, 1500); }
+    catch (e) { console.log(e.name); }`;
+  for (let round = 0; round < 5; round++) {
+    const s = tmp();
+    mkdirSync(join(s, "lock"));
+    writeFileSync(join(s, "lock", "pid"), String(spawnSync("true").pid));
+    const results = await Promise.all(Array.from({ length: 8 }, () => output(child(code, s))));
+    const outs = results.map((r) => r.out.trim());
+    assert.equal(outs.filter((o) => o === "WIN").length, 1, outs.join(","));
+    assert.ok(outs.every((o) => o === "WIN" || o === "Locked"), outs.join(","));
+    assert.deepEqual(readdirSync(s), []); // winner released on exit; no stale or mutex dirs left
+  }
+});
+
+test("SIGTERM releases the lock", async () => {
+  const s = tmp();
+  const p = child(`import { acquireLock } from ${JSON.stringify(stateUrl)};
+    acquireLock(process.argv[1]); console.log("HELD"); setInterval(() => {}, 1000);`, s);
+  await new Promise((res) => p.stdout.once("data", res));
+  assert.ok(existsSync(join(s, "lock", "pid")));
+  const closed = new Promise((res) => p.on("close", res));
+  p.kill("SIGTERM");
+  assert.equal(await closed, 143);
+  assert.equal(existsSync(join(s, "lock")), false);
 });
