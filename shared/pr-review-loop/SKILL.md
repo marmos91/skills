@@ -17,24 +17,27 @@ the skills repo, section "The loop".
 - pi or any shell: one tick is `pr-review-loop [owner/repo]`. Repeat it with
   cron, launchd, or `while :; do pr-review-loop; sleep 1800; done`.
 
-Without `owner/repo`, the loop uses the repo of the current directory.
+Without `owner/repo`, the loop uses the GitHub remote of the current
+directory, `origin` first. `pause`, `resume` and the tick use the same rule,
+so in a fork clone they all act on the fork.
 After each tick, show what the engine printed: open questions, to-do items,
 and the PRs it reviewed or replied on. Do not repeat the posted text.
 
 ## Pause and resume
 
-`pr-review-loop pause` stops every tick for the repo until
-`pr-review-loop resume`. An interrupted tick finishes its old queue first on
+`pr-review-loop pause [owner/repo]` stops every tick for the repo until
+`pr-review-loop resume [owner/repo]`. An interrupted tick finishes its old queue first on
 the next run.
 
 ## Answer the questions (`/pr-review-loop answer`)
 
-1. Run `sh "$SKILL_DIR/../pr-review/scripts/pr-review" answer`. It prints the
-   open questions as JSON.
+1. Run `sh "$SKILL_DIR/scripts/pr-review-loop" answer`. It prints the open
+   questions as JSON.
 2. Ask the user. Claude Code: `AskUserQuestion`, at most 4 questions per
    call. pi: the `ask_user` tool. Show the finding and both arguments. Do not
    add your own opinion.
-3. For each answer, run `pr-review answer <id> <post|drop|ask-author>`.
+3. For each answer, run
+   `sh "$SKILL_DIR/scripts/pr-review-loop" answer <id> <post|drop|ask-author>`.
 4. Do not run a tick for this. The next tick applies the answers. It checks
    each finding against the current head first and drops it if the code
    moved.
