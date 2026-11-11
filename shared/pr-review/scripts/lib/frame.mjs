@@ -21,6 +21,14 @@ const gitOk = (cwd, args) => { try { git(cwd, args); return true; } catch { retu
 const show = (cwd, ref, path) => { try { return git(cwd, ["show", `${ref}:${path}`]); } catch { return null; } };
 const json = (dir, name, v) => writeFileSync(join(dir, name), JSON.stringify(v, null, 2) + "\n");
 
+// shortcut: github.mjs has no issue reader (Task 8 is frozen), so this calls gh directly; move it there when it is next touched.
+function issue(repo, number) {
+  try {
+    const i = JSON.parse(execFileSync(process.env.GH_BIN || "gh", ["api", `repos/${repo}/issues/${number}`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }));
+    return { number, title: wrap(i.title), body: wrap(String(i.body ?? "").slice(0, 2000)) };
+  } catch { return { number }; }
+}
+
 // The repo's own guidance list counts too: frame runs before the caller merges repoConfigText.
 function repoGuidance(text) {
   try { const g = JSON.parse(stripComments(text)).review?.guidance; return Array.isArray(g) ? g.filter((x) => typeof x === "string") : []; } catch { return []; }
@@ -73,8 +81,10 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
   writeFileSync(join(ctxDir, "diff.patch"), diff);
   if (delta.base) writeFileSync(join(ctxDir, "delta.patch"), git(repoDir, ["-c", "core.quotePath=false", "diff", "--no-color", `${delta.base}..${head}`]));
 
-  const commits = git(repoDir, ["log", "--format=%H %s", `${base}..${head}`]).split("\n").filter(Boolean);
-  json(ctxDir, "pr.json", { number: n, ...p, title: wrap(p.title), body: wrap(p.body), commits: commits.map(wrap) });
+  const commits = git(repoDir, ["log", "--format=%H %s", `${base}..${head}`]).split("\n").filter(Boolean)
+    .map((l) => ({ sha: l.slice(0, l.indexOf(" ")), subject: wrap(l.slice(l.indexOf(" ") + 1)) }));
+  const issues = p.closingIssues.map((i) => issue(repo, i));
+  json(ctxDir, "pr.json", { number: n, ...p, title: wrap(p.title), body: wrap(p.body), commits, closingIssues: issues });
 
   const repoConfigText = show(repoDir, base, ".pr-review.json");
   const guidance = [...new Set([...GUIDANCE, ...config.review.guidance, ...repoGuidance(repoConfigText ?? "")])].filter(safePath);
