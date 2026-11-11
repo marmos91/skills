@@ -159,3 +159,13 @@ test("tick takes the repo as a positional, like status", () => {
   assert.match(r.stderr, /paused/);
   assert.equal(cli(fx, "tick", "x/y", "z/w").status, 1);
 });
+
+test("--max-diff-lines takes a positive integer", () => {
+  const fx = fixture();
+  for (const bad of ["0", "-3", "x", "1.5"]) {
+    const r = cli(fx, "review", "5", `--max-diff-lines=${bad}`);
+    assert.equal(r.status, 1, bad);
+    assert.match(r.stderr, /--max-diff-lines must be a positive integer/, bad);
+  }
+  assert.match(cli(fx, "review", "5", "--repo", "x/y", "--max-diff-lines", "5000").stderr, /not a clone of x\/y/);
+});

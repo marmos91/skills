@@ -778,3 +778,16 @@ test("7.4: the answer-only follow-up drops an answer whose code changed since it
   assert.equal(posts(fx).length, 2, "no follow-up");
   assert.ok(JSON.parse(readFileSync(join(fx.state, "questions", `${q.id}.json`), "utf8")).appliedAt);
 });
+
+test("a diff above the cap is a clean exit 1 with a hint; --max-diff-lines raises the cap", async () => {
+  const fx = fixture(); routes(fx);
+  mkdirSync(join(process.env.XDG_CONFIG_HOME, "pr-review"), { recursive: true });
+  writeFileSync(join(process.env.XDG_CONFIG_HOME, "pr-review", "config.json"), JSON.stringify({ review: { max_diff_lines: 3 } }));
+  const { r } = await go(fx, happy());
+  assert.equal(r.exit, 1);
+  assert.match(r.summary, /above review\.max_diff_lines \(3\).*--max-diff-lines/);
+  assert.equal(posts(fx).length, 0);
+  const ok = await go(fx, happy(), { maxDiffLines: 1000 });
+  assert.equal(ok.r.exit, 0, ok.r.summary);
+  assert.equal(posts(fx).length, 1);
+});

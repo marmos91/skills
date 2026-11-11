@@ -35,11 +35,17 @@ const MARKER_FP = /<!-- pr-review run=\S+ sha=\S+ key=[0-9a-f]{40} fp=([0-9a-f]{
 
 /** Config, flag or state problems: exit 1, not a failed stage. */
 export class SetupError extends Error { constructor(m) { super(m); this.name = "SetupError"; } }
-const config0 = (o) => { try { return loadConfig(o); } catch (e) { throw new SetupError(e.message); } };
+// maxDiffLines (--max-diff-lines) wins over review.max_diff_lines at every level.
+const config0 = (o, maxDiffLines) => {
+  let c;
+  try { c = loadConfig(o); } catch (e) { throw new SetupError(e.message); }
+  if (maxDiffLines) c.review.max_diff_lines = maxDiffLines;
+  return c;
+};
 
 /**
  * Review one PR. -> { exit: 0|3|4, summary, runDir?, url?, event?, questions?, planned? }
- * Options: repo, n, mode ("interactive"|"loop"), effort, dryRun, until, restart, lenses, configPath, repoDir;
+ * Options: repo, n, mode ("interactive"|"loop"), effort, dryRun, until, restart, lenses, maxDiffLines, configPath, repoDir;
  * injectable gh, runChild, decide, frame, hygiene, queue(note), log(line); lock=false when the caller holds it.
  */
 export async function review(opts) {
@@ -63,7 +69,9 @@ export async function review(opts) {
       }
     }
   } catch (e) {
-    if (e instanceof ChildFailed || e instanceof DiffTooLarge || e instanceof HeadMoved) return { exit: 4, summary: e.message };
+    // Too large is the user's call, not a failed stage: nothing ran, so exit 1 with the way out.
+    if (e instanceof DiffTooLarge) return { exit: 1, summary: `${e.message}. Review it anyway with --max-diff-lines N, or raise review.max_diff_lines in the config.` };
+    if (e instanceof ChildFailed || e instanceof HeadMoved) return { exit: 4, summary: e.message };
     throw e;
   } finally { release(); }
 }
@@ -150,7 +158,7 @@ function ciState(c) {
 async function once(o, restart) {
   const { repo, n, mode, gh, log, repoState } = o;
   const userPath = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "pr-review", "config.json");
-  const userConfig = config0({ userPath, cliPath: o.configPath });
+  const userConfig = config0({ userPath, cliPath: o.configPath }, o.maxDiffLines);
   let config = userConfig;
   const head = (await gh.pr(repo, n)).headSha;
   const runDir = pickRunDir(repoState, n, head, { restart });
@@ -164,7 +172,7 @@ async function once(o, restart) {
     return { exit: 0, runDir, skipped: true, summary: `already reviewed ${head}; use --restart to review it again` };
   }
   const f = await o.frame({ repo, n, repoDir: o.repoDir ?? process.cwd(), runDir, config, gh, prState: prState(repoState, n) });
-  config = config0({ userPath, cliPath: o.configPath, repoText: f.repoConfigText ?? undefined });
+  config = config0({ userPath, cliPath: o.configPath, repoText: f.repoConfigText ?? undefined }, o.maxDiffLines);
 
   // A resumed run keeps its effort and lenses: its finished children depend on them.
   const runFile = join(runDir, "run.json");

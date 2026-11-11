@@ -19,7 +19,7 @@ import { remoteRepos } from "./lib/github.mjs";
 installSignalHandlers();
 
 const USAGE = `usage: pr-review review [<n|url>] [--repo owner/repo] [--dry-run] [--lens a,b] [--until ${STAGES.join("|")}]
-                 [--config <file>] [--effort low|medium|high|max|auto] [--restart] [--loop]
+                 [--config <file>] [--effort low|medium|high|max|auto] [--max-diff-lines N] [--restart] [--loop]
        pr-review answer [<question-id> post|drop|ask-author] [--repo owner/repo]
        pr-review status [owner/repo]
        pr-review doctor [--config <file>]
@@ -152,7 +152,7 @@ export async function main(argv, deps = {}) {
     args: argv, allowPositionals: true,
     options: {
       repo: { type: "string" }, "dry-run": { type: "boolean" }, lens: { type: "string" }, until: { type: "string" },
-      config: { type: "string" }, effort: { type: "string" }, restart: { type: "boolean" }, loop: { type: "boolean" }, help: { type: "boolean", short: "h" },
+      config: { type: "string" }, effort: { type: "string" }, "max-diff-lines": { type: "string" }, restart: { type: "boolean" }, loop: { type: "boolean" }, help: { type: "boolean", short: "h" },
     },
   });
   if (v.help || !cmd) { console.log(USAGE); return v.help ? 0 : 1; }
@@ -180,12 +180,14 @@ export async function main(argv, deps = {}) {
   if (cmd !== "review" || rest.length > 1) throw new Usage(USAGE);
   if (v.effort && !["low", "medium", "high", "max", "auto"].includes(v.effort)) throw new Usage(`--effort must be low|medium|high|max|auto`);
   if (v.until && !STAGES.includes(v.until)) throw new Usage(`--until must be one of ${STAGES.join("|")}`);
+  const maxDiffLines = v["max-diff-lines"] === undefined ? undefined : Number(v["max-diff-lines"]);
+  if (maxDiffLines !== undefined && !(/^\d+$/.test(v["max-diff-lines"]) && maxDiffLines > 0)) throw new Usage("--max-diff-lines must be a positive integer");
   const lenses = v.lens?.split(",").map((s) => s.trim()).filter(Boolean);
   const bad = lenses?.filter((l) => !LENSES.includes(l));
   if (bad?.length) throw new Usage(`unknown lens ${bad.join(", ")}; lenses: ${LENSES.join(", ")}`);
   const r = await review({
     ...target(rest[0], v.repo), mode: v.loop ? "loop" : "interactive", effort: v.effort, dryRun: v["dry-run"], until: v.until,
-    restart: v.restart, lenses, configPath: v.config, log: (l) => console.error(l),
+    restart: v.restart, lenses, maxDiffLines, configPath: v.config, log: (l) => console.error(l),
   });
   console.log(r.summary);
   for (const q of r.questions ?? []) console.log(q);
