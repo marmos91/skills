@@ -371,6 +371,74 @@ PR head.
    review comments only from users with write or admin permission. On a
    public repo, read access does not count.
 
+## The loop
+
+![pr-review-loop tick and convergence](img/pr-review-loop.svg)
+
+- Claude Code: `/loop 30m /pr-review-loop [owner/repo]`.
+- pi or a shell: `pr-review-loop [owner/repo]` is one tick. Repeat it with
+  cron, launchd, or `while :; do pr-review-loop; sleep 1800; done`. The loop
+  has no scheduler of its own.
+
+### One tick
+
+1. Exit at once if the repo is paused. Take the lock; if another run holds
+   it, exit.
+2. Print the open questions and `todo.md`. Apply the answers you gave since
+   the last tick. Each answer is checked against the current head first; if
+   the code moved, the finding is dropped with a note. The loop never asks
+   during a tick.
+3. Finish the queue of an interrupted tick (`tick.json`).
+4. List open PRs where you are the author, a requested reviewer (you or one
+   of your teams), a past reviewer, or mentioned. Skip drafts and authors in
+   `loop.authors_ignore`.
+5. Skip a PR when its head SHA and newest comment did not change.
+6. First tick: set a baseline time. Only later activity counts, plus review
+   requests that are still open.
+7. Take at most `loop.max_prs_per_run` PRs (default 10), oldest activity
+   first.
+
+### What it does per PR
+
+| PR | Action |
+|---|---|
+| Your PR, with new review comments | `reply` for each new comment (below) |
+| Asks for your review, or you reviewed it before | `review`, as a delta review when possible |
+| A collaborator mentions you | `reply` in that thread; `review` only if the mention asks for one |
+
+The `reply` flow: one seat drafts a position (accept, push back, or ask),
+following the rules of `receiving-code-review`. It accepts only when the
+code shows that the reviewer is right. A seat of a different model family
+challenges the draft. When both seats agree, the judge writes the reply. When
+they disagree, jev decides (`The reviewer's comment is correct about this
+code.`); when jev is unsure or missing, the thread becomes a question and gets
+no reply yet.
+
+Thread rules:
+
+- Ignore your own comments and bot comments. Reply at most once per new
+  human comment.
+- Resolve only threads that you started and that are closed: a fixed earlier
+  finding is closed; an unanswered pushback is not; an accepted point on your
+  PR stays open until the fix is in the head.
+- Never resolve again a thread that a human reopened.
+- An accepted point on your PR gets a short reply ("Agreed, I will change
+  this.") and an entry in `todo.md`.
+
+### Thread convergence
+
+These rules apply to the replies of the loop. The review rules are in
+[Convergence](#convergence).
+
+1. **Thread budget.** `loop.max_replies_per_thread` (default 2) automatic
+   replies per thread. A reply that only repeats an earlier argument is not
+   sent (jev checks `This reply adds a new argument or new evidence.` when
+   available). When the budget ends and the thread is still open, the thread
+   goes to you with both positions.
+2. **Pushbacks are judged once per argument.** A pushback that the reviewer
+   answers with new evidence is judged again. A pushback answered with the
+   same argument goes to you and is not repeated.
+
 ## Resume and pause
 
 State root: `${XDG_STATE_HOME:-~/.local/state}/pr-review/<owner>__<repo>/`.

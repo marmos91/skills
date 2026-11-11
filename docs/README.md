@@ -15,6 +15,7 @@ The skills:
 - `repo-audit-fix` reads those epics, fixes each one, and opens one PR per epic.
 - `jev` answers yes/no questions. `repo-audit-fix` uses it as a second check on plans.
 - `pr-review` reviews one GitHub PR with a council of different models and posts only the findings they agree on. It uses `jev` to settle splits.
+- `pr-review-loop` runs `pr-review` and thread replies for a whole repo on an interval.
 - `refute-root-cause` tries to disprove a claimed root cause. It stands alone.
 
 ## Install
@@ -183,6 +184,18 @@ See [jev.md](jev.md) for the full algorithm.
 
 See [pr-review.md](pr-review.md) for the pipeline, effort levels and config.
 
+### pr-review-loop
+
+1. Run `claude setup-token`, so the loop does not stop when the normal login ends.
+2. Export a fine-grained PAT with pull-request write access on the target repos as `GH_TOKEN`.
+3. Start it:
+   - Claude Code: `/loop 30m /pr-review-loop owner/repo`
+   - A shell: `while :; do pr-review-loop owner/repo; sleep 1800; done`
+4. Answer the queued questions with `/pr-review-loop answer`. The next tick applies them.
+5. `pr-review-loop pause` and `pr-review-loop resume` stop and restart it.
+
+See [pr-review.md](pr-review.md#the-loop) for one tick and the thread rules.
+
 ## Troubleshooting
 
 ### `pi -p` hangs
@@ -236,7 +249,7 @@ Seats run `claude -p --restricted`, which uses your normal login or a
 `CLAUDE_CODE_OAUTH_TOKEN` from the environment. Run `claude setup-token` and
 export the token for unattended runs, or unset a stale one.
 
-### The review says `Locked`
+### The review or the loop says `Locked`
 
 Another run holds the repo lock. Wait for it. A lock with a dead PID is taken over by the next run.
 `pr-review status` shows the holder.

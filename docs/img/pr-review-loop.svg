@@ -1,0 +1,143 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 830" width="860" height="830" role="img" aria-labelledby="t">
+  <title id="t">One pr-review-loop tick: lock, answers, PR list, reply or review per PR, question queue, and the convergence rules</title>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#57606a"/>
+    </marker>
+    <marker id="arr-loop" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#bc4c00"/>
+    </marker>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 12px; fill: #1f2328; }
+      .h { font-size: 14px; font-weight: 600; }
+      .b { font-weight: 600; }
+      .c { text-anchor: middle; }
+      .s { font-size: 11px; fill: #57606a; }
+      .box { fill: #f6f8fa; stroke: #57606a; stroke-width: 1.5; }
+      .code { fill: #effaf1; stroke: #1a7f37; stroke-width: 1.5; }
+      .doc { fill: #ffffff; stroke: #57606a; stroke-width: 1.5; stroke-dasharray: 4 3; }
+      .jev { fill: #f3eefe; stroke: #8250df; stroke-width: 2; }
+      .loop { fill: #fff8f0; stroke: #bc4c00; stroke-width: 1.5; }
+      .edge { stroke: #57606a; stroke-width: 1.5; fill: none; }
+      .ledge { stroke: #bc4c00; stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+      .rule { stroke: #d0d7de; stroke-width: 1; }
+    </style>
+  </defs>
+  <rect width="860" height="830" rx="8" fill="#ffffff"/>
+
+  <!-- legend -->
+  <rect x="20" y="14" width="16" height="12" rx="2" class="code"/>
+  <text x="42" y="24">engine code, no model</text>
+  <rect x="190" y="14" width="16" height="12" rx="2" class="box"/>
+  <text x="212" y="24">model children</text>
+  <rect x="320" y="14" width="16" height="12" rx="2" class="loop"/>
+  <text x="342" y="24">waits for you</text>
+  <line x1="440" y1="20" x2="478" y2="20" class="ledge"/>
+  <text x="484" y="24">to the question queue</text>
+
+  <!-- input -->
+  <rect x="20" y="44" width="400" height="44" rx="6" class="doc"/>
+  <text x="220" y="64" class="h c">pr-review-loop [owner/repo]</text>
+  <text x="220" y="80" class="c">every 30 min: /loop, cron, launchd or a shell loop</text>
+
+  <!-- 1 -->
+  <rect x="20" y="112" width="400" height="52" rx="6" class="code"/>
+  <text x="220" y="134" class="h c">1. Paused or locked?</text>
+  <text x="220" y="153" class="c">a paused file or a live lock: exit at once</text>
+
+  <!-- 2 -->
+  <rect x="20" y="188" width="400" height="68" rx="6" class="code"/>
+  <text x="220" y="210" class="h c">2. Show questions and todo.md</text>
+  <text x="220" y="229" class="c">apply your answers; drop an answer when the</text>
+  <text x="220" y="246" class="c">code at that place moved. Never ask now.</text>
+
+  <!-- 3 -->
+  <rect x="20" y="280" width="400" height="52" rx="6" class="code"/>
+  <text x="220" y="302" class="h c">3. Finish the old queue</text>
+  <text x="220" y="321" class="c">tick.json of an interrupted tick</text>
+
+  <!-- 4 -->
+  <rect x="20" y="356" width="400" height="68" rx="6" class="code"/>
+  <text x="220" y="378" class="h c">4. List and filter PRs</text>
+  <text x="220" y="397" class="c">you are author, reviewer, past reviewer or mentioned</text>
+  <text x="220" y="414" class="c">skip drafts, ignored authors, unchanged PRs</text>
+
+  <!-- 5 -->
+  <rect x="20" y="448" width="400" height="52" rx="6" class="code"/>
+  <text x="220" y="470" class="h c">5. Take max_prs_per_run (10)</text>
+  <text x="220" y="489" class="c">oldest activity first; pending CI waits</text>
+
+  <line x1="220" y1="88" x2="220" y2="110" class="edge" marker-end="url(#arr)"/>
+  <line x1="220" y1="164" x2="220" y2="186" class="edge" marker-end="url(#arr)"/>
+  <line x1="220" y1="256" x2="220" y2="278" class="edge" marker-end="url(#arr)"/>
+  <line x1="220" y1="332" x2="220" y2="354" class="edge" marker-end="url(#arr)"/>
+  <line x1="220" y1="424" x2="220" y2="446" class="edge" marker-end="url(#arr)"/>
+
+  <!-- convergence panel -->
+  <rect x="460" y="44" width="380" height="456" rx="6" class="doc"/>
+  <text x="650" y="68" class="h c">Convergence: each round does less</text>
+  <line x1="476" y1="80" x2="824" y2="80" class="rule"/>
+  <text x="476" y="102" class="b">1. Scope shrinks</text>
+  <text x="476" y="119" class="s">new findings only on the delta since your last review</text>
+  <text x="476" y="160" class="b">2. Severity rises</text>
+  <text x="476" y="177" class="s">review 1: must, should, nit. 2: must, should. 3+: must</text>
+  <text x="476" y="218" class="b">3. Settled stays settled</text>
+  <text x="476" y="235" class="s">fingerprint = lens, file, symbol, normalized title</text>
+  <text x="476" y="276" class="b">4. No contradiction</text>
+  <text x="476" y="293" class="s">a finding that reverses an agreed one is dropped</text>
+  <text x="476" y="334" class="b">5. Review budget: 3 per PR</text>
+  <text x="476" y="351" class="s">then one question with the open must items</text>
+  <text x="476" y="392" class="b">6. Thread budget: 2 replies</text>
+  <text x="476" y="409" class="s">a repeated argument is not sent; then the thread goes to you</text>
+  <text x="476" y="450" class="b">7. Answers are monotonic</text>
+  <text x="476" y="467" class="s">APPROVE is withdrawn only for a new agreed must</text>
+
+  <!-- bus to actions -->
+  <line x1="220" y1="500" x2="220" y2="515" class="edge"/>
+  <line x1="150" y1="515" x2="710" y2="515" class="edge"/>
+  <line x1="150" y1="515" x2="150" y2="528" class="edge" marker-end="url(#arr)"/>
+  <line x1="430" y1="515" x2="430" y2="528" class="edge" marker-end="url(#arr)"/>
+  <line x1="710" y1="515" x2="710" y2="528" class="edge" marker-end="url(#arr)"/>
+
+  <!-- actions -->
+  <rect x="20" y="530" width="260" height="60" rx="6" class="box"/>
+  <text x="150" y="553" class="h c">Your PR, new comments</text>
+  <text x="150" y="573" class="c">reply to each new comment</text>
+
+  <rect x="300" y="530" width="260" height="60" rx="6" class="box"/>
+  <text x="430" y="553" class="h c">A collaborator mentions you</text>
+  <text x="430" y="573" class="c">reply; review only if asked</text>
+
+  <rect x="580" y="530" width="260" height="60" rx="6" class="box"/>
+  <text x="710" y="553" class="h c">Review asked, or reviewed before</text>
+  <text x="710" y="573" class="c">pr-review run, delta when possible</text>
+
+  <!-- reply flow -->
+  <rect x="20" y="626" width="540" height="88" rx="6" class="box"/>
+  <text x="290" y="648" class="h c">Reply flow</text>
+  <text x="290" y="667" class="c">seat A drafts: accept, push back or ask; seat B (other family) challenges</text>
+  <text x="290" y="684" class="c">both agree: the judge writes the reply; they disagree: jev decides</text>
+  <text x="290" y="701" class="c">resolve only closed threads you started; accepted points go to todo.md</text>
+  <line x1="150" y1="590" x2="150" y2="624" class="edge" marker-end="url(#arr)"/>
+  <line x1="430" y1="590" x2="430" y2="624" class="edge" marker-end="url(#arr)"/>
+
+  <!-- question queue -->
+  <rect x="600" y="626" width="190" height="88" rx="6" class="loop"/>
+  <text x="695" y="648" class="h c">Question queue</text>
+  <text x="695" y="667" class="c">answer with</text>
+  <text x="695" y="684" class="c">/pr-review-loop answer;</text>
+  <text x="695" y="701" class="c">the next tick applies it</text>
+  <line x1="695" y1="590" x2="695" y2="624" class="ledge" marker-end="url(#arr-loop)"/>
+  <text x="703" y="612" class="s">split, budget</text>
+  <line x1="560" y1="670" x2="598" y2="670" class="ledge" marker-end="url(#arr-loop)"/>
+  <text x="579" y="662" class="s c">unsure</text>
+
+  <!-- end of tick -->
+  <rect x="20" y="750" width="820" height="56" rx="6" class="doc"/>
+  <text x="430" y="773" class="h c">End of tick</text>
+  <text x="430" y="792" class="c">save tick.json and the PR caches, release the lock; the next tick starts in 30 min</text>
+  <line x1="290" y1="714" x2="290" y2="748" class="edge" marker-end="url(#arr)"/>
+  <line x1="695" y1="714" x2="695" y2="748" class="edge" marker-end="url(#arr)"/>
+  <line x1="815" y1="590" x2="815" y2="748" class="edge" marker-end="url(#arr)"/>
+  <path d="M20 778 H10 V66 H18" class="edge" marker-end="url(#arr)"/>
+</svg>
