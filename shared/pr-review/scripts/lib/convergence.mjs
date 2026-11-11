@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 // No line number: a moved finding must keep its fingerprint (R13).
 export function fingerprint(f) {
-  const title = f.title.toLowerCase().replace(/[\d\p{P}\p{S}]/gu, "").replace(/\s+/g, " ").trim();
+  const title = f.title.toLowerCase().replace(/[\d\p{P}]/gu, "").replace(/\s+/g, " ").trim();
   return createHash("sha1").update([f.lens, f.file, f.symbol ?? "", title].join("\u0000")).digest("hex");
 }
 

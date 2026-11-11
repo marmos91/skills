@@ -34,6 +34,11 @@ test("title is normalized; different title or symbol differs", () => {
   assert.notEqual(fingerprint(f({ title: "Race in cache" })), fingerprint(f()));
   assert.notEqual(fingerprint(f({ symbol: "parse" })), fingerprint(f()));
 });
+test("R13: only digits and punctuation are stripped; symbols such as < and > stay", () => {
+  assert.notEqual(fingerprint(f({ title: "x < y" })), fingerprint(f({ title: "x > y" })));
+  assert.notEqual(fingerprint(f({ title: "a + b" })), fingerprint(f({ title: "a - b" })), "- is punctuation, + is a symbol");
+  assert.equal(fingerprint(f({ title: "Check: x < y!" })), fingerprint(f({ title: "check x < y" })));
+});
 test("review budget: 3 reviews done -> review false", () => {
   const c = { loop: { max_review_rounds: 3, max_replies_per_thread: 2 } };
   assert.equal(budgetLeft({ reviews: 2, replies: {} }, c).review, true);
