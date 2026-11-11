@@ -6,20 +6,38 @@ const CLAUDE_THINKING = ["low", "medium", "high", "xhigh", "max"];
 const PI_THINKING = ["off", "minimal", ...CLAUDE_THINKING];
 const HARNESSES = ["claude", "pi", "auto"];
 
+export const EFFORTS = ["low", "medium", "high", "max"];
+const EFFORT_VALUES = [...EFFORTS, "auto"];
+
+// Default `auto` effort patterns (spec 5.1). Whole-path globs; see globMatch.
+export const EFFORT_AUTO_DEFAULTS = {
+  high_paths: [
+    "**/auth/**", "**/*auth*.*", "**/crypto/**", "**/*crypto*.*", "**/security/**",
+    "**/*permission*.*", "**/*secret*.*", "**/migrations/**", "**/*.sql",
+    ".github/workflows/**", "**/Dockerfile*", "**/*.tf", "**/k8s/**", "**/helm/**", "**/infra/**",
+  ],
+  low_paths: [
+    "**/*.md", "docs/**", "**/*.txt", "**/*.lock", "**/package-lock.json", "**/pnpm-lock.yaml",
+    "**/*.png", "**/*.jpg", "**/*.svg",
+  ],
+};
+
 const seat = (harness, model) => ({ harness, model, thinking: "high" });
 
 const DEFAULTS = {
+  effort: "medium",
+  effort_auto: EFFORT_AUTO_DEFAULTS,
   seats: [seat("claude", "opus"), seat("auto", "cubbit/mimir-pro"), seat("auto", "cubbit/mimir")],
   round1: "per-seat",
   lenses: Object.fromEntries(LENSES.map((l) => [l, { enabled: true }])),
   judge: seat("claude", "opus"),
   decider: { kind: "auto", confidence: 0.5 },
-  loop: { authors_ignore: [], max_prs_per_run: 10, max_review_rounds: 3, max_replies_per_thread: 2 },
+  loop: { authors_ignore: [], max_prs_per_run: 10, max_review_rounds: 3, max_replies_per_thread: 2, effort: "auto" },
   review: { guidance: [] },
 };
 
 // Repo level may set only these paths; "*" matches one lens name.
-const REPO_ALLOWED = ["lenses.*.enabled", "loop.authors_ignore", "loop.max_prs_per_run", "review.guidance"];
+const REPO_ALLOWED = ["lenses.*.enabled", "loop.authors_ignore", "loop.max_prs_per_run", "review.guidance", "effort_auto.high_paths"];
 
 // Strip // comments outside of strings.
 export function stripComments(text) {
@@ -109,6 +127,10 @@ function validate(c) {
   need(isObj(c.loop), "loop", "an object");
   need(strList(c.loop.authors_ignore), "loop.authors_ignore", "an array of strings");
   for (const k of ["max_prs_per_run", "max_review_rounds", "max_replies_per_thread"]) need(posInt(c.loop[k]), `loop.${k}`, "a positive integer");
+  need(EFFORT_VALUES.includes(c.effort), "effort", `one of ${EFFORT_VALUES.join("|")}`);
+  need(EFFORT_VALUES.includes(c.loop.effort), "loop.effort", `one of ${EFFORT_VALUES.join("|")}`);
+  need(isObj(c.effort_auto), "effort_auto", "an object");
+  for (const k of ["high_paths", "low_paths"]) need(strList(c.effort_auto[k]), `effort_auto.${k}`, "an array of strings");
   need(isObj(c.review) && strList(c.review.guidance), "review.guidance", "an array of strings");
 }
 
@@ -121,7 +143,12 @@ export function loadConfig({ userPath, repoText, cliPath } = {}) {
   if (repoText) {
     const repo = parse(repoText, ".pr-review.json");
     checkRepoKeys(repo);
+    const extra = repo.effort_auto?.high_paths;
+    if (extra !== undefined) need(strList(extra), "effort_auto.high_paths", "an array of strings");
+    const userHigh = cfg.effort_auto.high_paths;
     cfg = merge(cfg, repo);
+    // The repo may only add high_paths; arrays normally replace.
+    if (extra) cfg.effort_auto.high_paths = [...userHigh, ...extra];
   }
   validate(cfg);
   return cfg;
@@ -137,4 +164,75 @@ export function resolveHarness(s, routerUp) {
   if (s.harness !== "auto") return s.harness;
   if (!s.model.startsWith("cubbit/")) return "claude";
   return routerUp ? "claude" : "pi";
+}
+
+const RANK = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+const PROFILES = {
+  low: { n: 2, round1: "per-seat", cap: "low", post: { severities: ["must", "should"], maxFindings: 5 } },
+  medium: { n: 3, round1: "per-seat", cap: "medium", post: { severities: ["must", "should", "nit"], maxFindings: 10 } },
+  high: { n: 3, round1: "per-lens", cap: "high", post: { severities: ["must", "should", "nit"], maxFindings: 20 } },
+  max: { n: Infinity, round1: "per-lens", cap: null, post: { severities: ["must", "should", "nit"], maxFindings: null } },
+};
+
+function checkEffort(e) {
+  if (!EFFORTS.includes(e)) throw new Error(`effort must be one of ${EFFORTS.join("|")} (resolve auto with pickEffort first), got ${e}`);
+}
+
+// Returns a new config; never mutates the input.
+export function applyEffort(config, effort) {
+  checkEffort(effort);
+  const p = PROFILES[effort];
+  const capSeat = (s) => (p.cap && RANK.indexOf(s.thinking) > RANK.indexOf(p.cap) ? { ...s, thinking: p.cap } : { ...s });
+  const c = structuredClone(config);
+  c.seats = c.seats.slice(0, p.n).map(capSeat);
+  c.judge = capSeat(c.judge);
+  for (const l of Object.values(c.lenses)) if (l.seats) l.seats = l.seats.map(capSeat);
+  c.round1 = p.round1;
+  c.post = structuredClone(p.post);
+  return c;
+}
+
+export function lowerEffort(effort) {
+  checkEffort(effort);
+  return EFFORTS[Math.max(0, EFFORTS.indexOf(effort) - 1)];
+}
+
+// Children for one PR: round 1 + one vote per distinct seat + 2 judge calls.
+// A lens with its own seats runs in its own children in per-seat mode.
+export function plannedChildren(config, lenses) {
+  const all = new Set();
+  let round1 = 0;
+  const shared = new Set();
+  for (const l of lenses) {
+    const seats = seatsForLens(config, l);
+    seats.forEach((s) => all.add(seatId(s)));
+    if (config.round1 === "per-lens") round1 += seats.length;
+    else if (config.lenses[l]?.seats) round1 += seats.length;
+    else seats.forEach((s) => shared.add(seatId(s)));
+  }
+  return round1 + shared.size + all.size + 2;
+}
+
+// Whole-path glob: `**` spans directories (or none), `*` and `?` stay in one segment.
+export function globMatch(glob, path) {
+  let re = "";
+  for (let i = 0; i < glob.length; i++) {
+    const ch = glob[i];
+    if (ch === "*" && glob[i + 1] === "*") {
+      if (glob[i + 2] === "/") { re += "(?:.*/)?"; i += 2; }
+      else if (re.endsWith("/")) { re = re.slice(0, -1) + "(?:/.*)?"; i += 1; }
+      else { re += ".*"; i += 1; }
+    } else if (ch === "*") re += "[^/]*";
+    else if (ch === "?") re += "[^/]";
+    else re += ch.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  }
+  return new RegExp(`^${re}$`).test(path);
+}
+
+export function pickEffort(changedPaths, config) {
+  const { high_paths, low_paths } = config.effort_auto;
+  const any = (globs, p) => globs.some((g) => globMatch(g, p));
+  if (changedPaths.some((p) => any(high_paths, p))) return "high";
+  if (changedPaths.length > 0 && changedPaths.every((p) => any(low_paths, p))) return "low";
+  return "medium";
 }
