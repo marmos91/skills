@@ -12,7 +12,8 @@ export function verdict(i) {
   if (i.splits > 0) reasons.push("splits");
   if (i.failedLenses > 0) reasons.push("failed lenses");
   if (i.agreed.length > 0) reasons.push("agreed findings");
-  if (i.ci === "red" || i.ci === "pending") reasons.push(`ci ${i.ci}`);
+  // only green or none (no checks configured) may approve; unknown or missing blocks
+  if (i.ci !== "green" && i.ci !== "none") reasons.push(`ci ${i.ci ?? "unknown"}`);
   if (reasons.length) return { event: "COMMENT", queueApprove: false, reasons };
 
   if (i.mode === "loop") {

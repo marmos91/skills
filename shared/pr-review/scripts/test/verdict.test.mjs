@@ -69,3 +69,11 @@ test("red CI and no agreed must -> COMMENT; loop does not queue", () => {
   assert.equal(r.event, "COMMENT");
   assert.equal(r.queueApprove, false);
 });
+
+test("unknown or missing ci blocks APPROVE", () => {
+  for (const ci of [undefined, "stale", "error"]) {
+    const r = v({ ci });
+    assert.equal(r.event, "COMMENT");
+    assert.ok(r.reasons.includes(`ci ${ci ?? "unknown"}`));
+  }
+});
