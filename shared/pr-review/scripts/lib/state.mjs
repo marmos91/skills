@@ -8,7 +8,8 @@ export const FINAL_STAGE = "post";
 
 export function stateRoot(repo) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || repo.split("/").some((p) => /^\.+$/.test(p))) throw new Error(`repo must be owner/repo, got ${repo}`);
-  return join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "pr-review", repo.replace("/", "__"));
+  // GitHub names are case-insensitive: one folder per repo however it is typed.
+  return join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "pr-review", repo.toLowerCase().replace("/", "__"));
 }
 
 export function writeAtomic(file, text) {

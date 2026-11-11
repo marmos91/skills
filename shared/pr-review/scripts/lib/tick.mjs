@@ -29,17 +29,24 @@ const REPLY_REASONS = {
   secret: "The reply text matched the outbound secret scan.",
 };
 
-/** Adapts a reply() queue item to a queueQuestion record. The finding is engine text only; PR text goes only into sides. */
-export function replyQuestion(item, t, me) {
+export const commentUrl = (repo, n, id) => `https://github.com/${repo}/pull/${n}#discussion_r${id}`;
+
+/** Adapts a reply() queue item to a queueQuestion record. No PR text: comments appear only as author login and URL. */
+export function replyQuestion(item, t, me, repo) {
   const ours = t?.comments.findLast((c) => c.author === me);
   const theirs = t?.comments.findLast((c) => c.author !== me);
+  const ref = (c) => `${c.author}: ${commentUrl(repo, item.pr, c.id)}`;
   return {
-    pr: item.pr, sha: item.sha, fingerprint: sha1(`reply:${item.threadId}`), file: item.path, line: item.line, snippet: "",
+    pr: item.pr, sha: item.sha, fingerprint: sha1(`reply:${item.threadId}:${item.commentId}`), file: commentUrl(repo, item.pr, item.commentId), line: item.line ?? 0, snippet: "",
     finding: { kind: "reply", title: `Review thread needs your answer (${item.reason})`, case: REPLY_REASONS[item.reason] ?? "The loop did not reply.", threadId: item.threadId, commentId: item.commentId },
-    sides: { keep: ours?.body ?? "(no comment by you)", drop: theirs?.body ?? "(no comment)" },
+    sides: { keep: ours ? ref(ours) : "(no comment by you)", drop: theirs ? ref(theirs) : "(no comment)" },
     failure: `The loop posts no reply in thread ${item.threadId} for this comment.`,
   };
 }
+
+// An explicit request only; a clause after "don't" / "do not" does not count.
+const ASKS_REVIEW = /\b(?:(?:please|can you|could you|would you)\s+(?:re-?)?review|(?:re-?)?review\s+(?:this|it|again)|ptal)\b/i;
+export const asksReview = (body) => ASKS_REVIEW.test(String(body ?? "").replace(/\b(?:don['’]?t|do\s+not)\b[^.!?\n]*/gi, ""));
 
 function baseConfigText(repoDir) {
   try { return execFileSync("git", ["show", "origin/HEAD:.pr-review.json"], { cwd: repoDir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }); } catch { return null; }
@@ -82,13 +89,20 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
     const todo = existsSync(join(rs, "todo.md")) ? readFileSync(join(rs, "todo.md"), "utf8").trim() : "";
     if (todo) log(`todo.md:\n${todo}`);
 
-    // Apply answers. Questions without a loop kind belong to a review, which applies them on its next run.
-    const forced = new Set();
+    // Apply answers. Questions without a loop kind belong to a review: its PR is forced into this tick's queue.
+    const forced = new Map(); // pr -> [question ids]
     for (const q of pendingAnswers(rs)) {
       const kind = q.finding?.kind;
-      if (!kind) { forced.add(q.pr); continue; }
-      if (kind === "approve" && q.answer === "post") await approve(q);
-      appliedAnswer(rs, q.id);
+      try {
+        if (!kind) {
+          // A drop past the review budget needs no review: it is settled here.
+          if (q.answer === "drop" && !budgetLeft(prState(rs, q.pr), config).review) appliedAnswer(rs, q.id);
+          else forced.set(q.pr, [...(forced.get(q.pr) ?? []), q.id]);
+          continue;
+        }
+        if (kind === "approve" && q.answer === "post" && !(await approve(q))) continue; // CI pending: retry next tick
+        appliedAnswer(rs, q.id);
+      } catch (e) { log(`question ${q.id}: ${e.message}; retried next tick`); }
     }
 
     const loopFile = join(rs, "loop.json");
@@ -105,11 +119,20 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
     const old = readJson(jf);
     if (old) {
       log(`finishing the queue of an interrupted tick from ${old.startedAt}`);
-      budget -= await runQueue(old);
+      const n = await runQueue(old);
+      if (n === null) return;
+      budget -= n;
     }
 
-    const rows = [];
-    for (const r of await gh.searchPRs(repo, "@me")) {
+    const rows = [], found = await gh.searchPRs(repo, "@me");
+    // An answered review question on a PR that left the search (closed, merged) has nothing left to do.
+    for (const [pr, ids] of forced) {
+      if (found.some((r) => r.number === pr)) continue;
+      for (const id of ids) appliedAnswer(rs, id);
+      log(`#${pr}: not open any more; answers ${ids.join(", ")} closed without a review`);
+      forced.delete(pr);
+    }
+    for (const r of found) {
       if (config.loop.authors_ignore.includes(r.author)) continue;
       const force = forced.has(r.number);
       const fresh = r.updatedAt > baseline || r.reasons.includes("review-requested") || force;
@@ -124,12 +147,15 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
       let n = 0;
       for (const r of j.queue) {
         if (j.done.includes(r.number)) continue;
+        // Paused mid-run: keep tick.json so the next tick resumes this queue.
+        if (existsSync(join(rs, "paused"))) { log("pr-review-loop: paused; the rest of this queue waits for resume"); return null; }
         writeAtomic(jf, JSON.stringify({ ...j, current: r.number }, null, 2) + "\n");
         let res;
-        try { res = await handle(r, forced.has(r.number)); } catch (e) { log(`#${r.number}: ${e.message}`); res = { acted: false, cache: false }; }
+        try { res = await handle(r, forced.get(r.number)); } catch (e) { log(`#${r.number}: ${e.message}`); res = { acted: false, cache: false }; }
         if (res.cache) update(r.number, (s) => { s.cache = { updatedAt: r.updatedAt }; });
         res.acted ? out.processed++ : out.skipped++;
         j.done.push(r.number);
+        writeAtomic(jf, JSON.stringify({ ...j, current: null }, null, 2) + "\n");
         n++;
       }
       rmSync(jf, { force: true });
@@ -145,8 +171,12 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
       const mention = new RegExp(`@${me}(?![\\w-])`, "i");
       const markSeen = (t, c) => update(n, (x) => { x.loopSeen = { ...x.loopSeen, [t.id]: c.id }; });
       const threads = await gh.threads(repo, n);
-      const fresh = threads.map((t) => [t, t.comments.at(-1)]).filter(([t, c]) => c && c.author !== me && c.authorType !== "Bot"
-        && !config.loop.authors_ignore.includes(c.author) && c.createdAt > baseline && seen[t.id] !== c.id);
+      const human = (c) => c.author !== me && c.authorType !== "Bot" && !config.loop.authors_ignore.includes(c.author);
+      // The newest human comment, and only when we have not answered after it.
+      const fresh = threads.map((t) => {
+        const i = t.comments.findLastIndex(human);
+        return [t, t.comments[i], i >= 0 && !t.comments.slice(i + 1).some((x) => x.author === me)];
+      }).filter(([t, c, open]) => open && c.createdAt > baseline && seen[t.id] !== c.id).map(([t, c]) => [t, c]);
 
       // 7.2: Marco's PR -> reply per new thread; a collaborator's mention -> reply, review only if asked.
       // shortcut: mentions in top-level PR comments are not read (threads only); add an issue-comment reader when needed.
@@ -157,16 +187,17 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
         if (!mention.test(c.body ?? "")) continue;
         if (!COLLABORATOR.has(await gh.permission(repo, c.author))) { log(`#${n}: mention by ${c.author} (no write access) not answered`); markSeen(t, c); continue; }
         toReply.push([t, c]);
-        if (/\breview\b/i.test(c.body)) { wantReview = true; if (c.author === r.author) requested = true; }
+        if (asksReview(c.body)) { wantReview = true; if (c.author === r.author) requested = true; }
       }
 
-      let doReview = !own && (requested || wantReview || force || (r.reasons.includes("reviewed-by") && p.headSha !== s.lastReviewedSha));
+      // A forced PR (answered review question) is reviewed even when it is Marco's own, else the answer stays pending.
+      let doReview = !!force || (!own && (requested || wantReview || (r.reasons.includes("reviewed-by") && p.headSha !== s.lastReviewedSha)));
       let queued = false, wait = false;
       // 7.5 rule 5: after the round budget only a new request from the author reviews again.
-      if (doReview && !requested && !budgetLeft(s, config).review) {
+      if (doReview && !requested && !force && !budgetLeft(s, config).review) {
         doReview = false;
         queued = true;
-        const musts = threads.filter((t) => !t.isResolved && t.comments[0]?.author === me && MUST.test(t.comments[0].body ?? "")).map((t) => `${t.path}:${t.line ?? t.originalLine}`);
+        const musts = threads.filter((t) => !t.isResolved && t.comments[0]?.author === me && MUST.test(t.comments[0].body ?? "")).map((t) => commentUrl(repo, n, t.comments[0].id));
         queueQuestion(rs, {
           pr: n, sha: p.headSha, fingerprint: sha1(`budget:${n}`), file: "(whole PR)", line: 0, snippet: "",
           finding: { kind: "budget", title: "Review budget used", case: `The loop made ${s.reviews} automatic reviews (loop.max_review_rounds ${config.loop.max_review_rounds}) and stops until a new review request. Open must items: ${musts.length ? musts.join(", ") : "none"}.` },
@@ -188,7 +219,7 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
       const dir = runDir(rs, n, p.headSha);
       const fr = await frame({ repo, n, repoDir, runDir: dir, config, gh, prState: s });
       for (const [t, c] of toReply) {
-        await reply({ repo, n, threadId: t.id, mode: "loop", frame: fr, config, runDir: dir, gh, queue: (item) => queueQuestion(rs, replyQuestion(item, t, me)) });
+        await reply({ repo, n, threadId: t.id, mode: "loop", frame: fr, config, runDir: dir, gh, queue: (item) => queueQuestion(rs, replyQuestion(item, t, me, repo)) });
         markSeen(t, c);
       }
       if (doReview) {
@@ -197,6 +228,8 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
         if (fr.delta?.base) effort = lowerEffort(effort); // 5.1: delta review one level below
         const res = await review({ repo, n, mode: "loop", effort, repoDir, gh });
         if (res?.exit === 4) throw new Error("review failed after retries; retried next tick");
+        // The review ran with the answers; never force this PR again for them.
+        for (const id of force || []) appliedAnswer(rs, id);
         if (res?.queueApprove) {
           const why = Array.isArray(res.reasons) ? ` Reasons: ${res.reasons.join("; ")}.` : "";
           queueQuestion(rs, {
@@ -211,13 +244,18 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
     }
 
     // 7.4: check against the current head first; a moved head drops the answer with a note.
+    // -> true when the answer is settled (approved or dropped), false to retry next tick.
     async function approve(q) {
       const p = await gh.pr(repo, q.pr);
-      if (p.headSha !== q.sha) { log(`#${q.pr}: head moved since question ${q.id}; not approved`); return; }
+      const ci = p.headSha === q.sha ? await gh.checks(repo, q.pr, q.sha) : null;
+      if (!ci || ci.stale) { log(`#${q.pr}: head moved since question ${q.id}; approve dropped`); return true; }
+      if (ci.state === "pending") { log(`#${q.pr}: CI pending; approve (${q.id}) waits for the next tick`); return false; }
+      if (ci.state !== "green" && ci.state !== "none") { log(`#${q.pr}: CI ${ci.state}; approve (${q.id}) dropped`); return true; }
       const key = `key=${sha1(`approve\0${q.pr}\0${q.sha}`)}`;
-      if (await gh.findMarker(repo, q.pr, key)) return;
+      if (await gh.findMarker(repo, q.pr, key)) return true;
       await gh.postReview(repo, q.pr, { commitOID: q.sha, event: "APPROVE", body: `<!-- pr-review run=${runId} sha=${q.sha} ${key} -->` });
       log(`#${q.pr}: approved at ${q.sha} (answer to ${q.id})`);
+      return true;
     }
   }
 }

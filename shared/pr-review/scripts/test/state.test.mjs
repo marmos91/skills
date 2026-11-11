@@ -14,6 +14,7 @@ test("stateRoot follows XDG_STATE_HOME and rejects odd repo names", () => {
   process.env.XDG_STATE_HOME = "/x/state";
   try {
     assert.equal(stateRoot("o/r"), "/x/state/pr-review/o__r");
+    assert.equal(stateRoot("Marmos91/Skills"), "/x/state/pr-review/marmos91__skills", "one folder however the repo is typed");
     assert.throws(() => stateRoot("../r"), /owner\/repo/);
   } finally {
     if (old === undefined) delete process.env.XDG_STATE_HOME; else process.env.XDG_STATE_HOME = old;
