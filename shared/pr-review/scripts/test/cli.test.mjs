@@ -93,7 +93,7 @@ test("doctor: a seat whose probe fails is named and the exit is 1", async (t) =>
   const fx = fixture();
   Object.assign(process.env, { XDG_STATE_HOME: fx.env.XDG_STATE_HOME, XDG_CONFIG_HOME: fx.env.XDG_CONFIG_HOME });
   const cfg = join(fx.root, "c.json");
-  writeFileSync(cfg, JSON.stringify({ seats: [{ harness: "claude", model: "opus", thinking: "high" }, { harness: "pi", model: "bad/model", thinking: "high" }] }));
+  writeFileSync(cfg, JSON.stringify({ apiKey: "zz-unknown-key-value", seats: [{ harness: "claude", model: "opus", thinking: "high" }, { harness: "pi", model: "bad/model", thinking: "high" }] }));
   const gh = join(fx.root, "gh");
   writeFileSync(gh, "#!/bin/sh\nexit 0\n");
   chmodSync(gh, 0o755);
@@ -107,7 +107,7 @@ test("doctor: a seat whose probe fails is named and the exit is 1", async (t) =>
   const runChild = async ({ seat, timeoutMs }) => {
     probed.push(`${seat.harness}:${seat.model}`);
     assert.equal(timeoutMs, 60000);
-    if (seat.model === "bad/model") throw new Error("exit 1: no such model");
+    if (seat.model === "bad/model") throw new Error("exit 1: no such model ghp_" + "a".repeat(36));
     return { ok: true };
   };
   const askJev = async () => ({ answer: "unsure", raw: null });
@@ -120,6 +120,20 @@ test("doctor: a seat whose probe fails is named and the exit is 1", async (t) =>
   assert.match(out, /WARN\s+jev: not found/);
   assert.match(out, /claude mode: --(bare|restricted)/);
   assert.match(out, /effort low: \d+ children per PR/);
+  assert.ok(!out.includes("zz-unknown-key-value"), "unknown config keys are not printed");
+  assert.ok(!out.includes("ghp_" + "a".repeat(36)), "child errors are redacted");
+});
+
+test("status: a corrupt state.json and a young pid-less lock", () => {
+  const fx = fixture();
+  mkdirSync(join(fx.state, "lock"), { recursive: true });
+  mkdirSync(join(fx.state, "pr", "9"), { recursive: true });
+  writeFileSync(join(fx.state, "pr", "9", "state.json"), "{not json");
+  const r = cli(fx, "status", "--repo", "o/r");
+  assert.equal(r.status, 0, r.stderr);
+  const s = JSON.parse(r.stdout);
+  assert.deepEqual(s.lock, { pid: null, stale: false });
+  assert.match(s.prs.find((p) => p.pr === 9).error, /state.json unreadable/);
 });
 
 test("review exits with Locked while a tick holds the lock", async () => {

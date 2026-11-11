@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 // CLI: pr-review review|answer|tick|status|doctor. Exit codes: 0 done, 1 usage or setup error, 3 questions wait, 4 a stage failed.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { installSignalHandlers, runChild as realRunChild } from "./lib/child.mjs";
-import { EFFORTS, LENSES, applyEffort, loadConfig, plannedChildren, seatId } from "./lib/config.mjs";
+import { DEFAULTS, EFFORTS, LENSES, applyEffort, loadConfig, plannedChildren, seatId } from "./lib/config.mjs";
+import { redact } from "./lib/secrets.mjs";
 import { askJev as realAskJev, findJev as realFindJev } from "./lib/decider.mjs";
 import { review, SetupError, STAGES } from "./lib/review.mjs";
 import { answer, markAsked, openQuestions, questionWarnings } from "./lib/questions.mjs";
@@ -83,14 +84,18 @@ function listQuestions(rs) {
 function status(repo) {
   const rs = stateRoot(repo);
   const raw = readJson(join(rs, "lock", "pid")) ?? (existsSync(join(rs, "lock")) ? null : undefined);
-  const lock = raw === undefined ? null : { pid: raw, stale: raw === null || !alive(raw) };
+  // a lock dir with no pid is stale only after 60 s, as acquireLock treats it
+  const young = () => { try { return Date.now() - statSync(join(rs, "lock")).mtimeMs < 60000; } catch { return false; } };
+  const lock = raw === undefined ? null : { pid: raw, stale: raw === null ? !young() : !alive(raw) };
   const questions = openQuestions(rs).map((q) => ({ id: q.id, pr: q.pr, file: join(rs, "questions", `${q.id}.md`) }));
   const todo = existsSync(join(rs, "todo.md")) ? readFileSync(join(rs, "todo.md"), "utf8") : "";
   const t = readJson(join(rs, "tick.json"));
   let cfg = null;
   try { cfg = loadConfig({ userPath: USER_CONFIG }); } catch {}
   const prs = ls(join(rs, "pr")).filter((n) => /^\d+$/.test(n)).map(Number).sort((a, b) => a - b).map((n) => {
-    const st = prState(rs, n), runsDir = join(rs, "pr", String(n), "runs");
+    let st;
+    try { st = prState(rs, n); } catch (e) { return { pr: n, error: `state.json unreadable: ${e.message}` }; }
+    const runsDir = join(rs, "pr", String(n), "runs");
     const runs = ls(runsDir).filter((d) => !done(join(runsDir, d), FINAL_STAGE)).map((d) => {
       const dir = join(runsDir, d), run = readJson(join(dir, "run.json"));
       const childDone = ls(dir).reduce((k, s) => k + ls(join(dir, s)).filter((f) => f.endsWith(".done")).length, 0);
@@ -115,7 +120,8 @@ async function doctor(v, { runChild = realRunChild, askJev = realAskJev, findJev
   try { repoText = execFileSync("git", ["show", "origin/HEAD:.pr-review.json"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }); } catch {}
   let config;
   try { config = loadConfig({ userPath: USER_CONFIG, cliPath: v.config, repoText }); } catch (e) { throw new Usage(e.message); }
-  console.log(JSON.stringify(config, null, 2));
+  // only known keys: unknown keys in a user file may hold secrets
+  console.log(JSON.stringify(Object.fromEntries(Object.keys(DEFAULTS).map((k) => [k, config[k]])), null, 2));
   let fail = false;
   const line = (lvl, msg) => { if (lvl === "FAIL") fail = true; console.log(`${lvl.padEnd(4)} ${msg}`); };
 
@@ -128,7 +134,7 @@ async function doctor(v, { runChild = realRunChild, askJev = realAskJev, findJev
       writeFileSync(promptFile, 'Reply with exactly this JSON and nothing else: {"ok": true}\n');
       return runChild({ seat, promptFile, outFile: join(dir, `${i}.json`), timeoutMs: 60000, retries: 0 });
     }));
-    [...seats.keys()].forEach((id, i) => results[i].status === "fulfilled" ? line("ok", `seat ${id}`) : line("FAIL", `seat ${id}: ${results[i].reason?.message}`));
+    [...seats.keys()].forEach((id, i) => results[i].status === "fulfilled" ? line("ok", `seat ${id}`) : line("FAIL", `seat ${id}: ${redact(String(results[i].reason?.message))}`));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 
   try { execFileSync(process.env.GH_BIN || "gh", ["auth", "status"], { stdio: "ignore" }); line("ok", "gh auth status"); }

@@ -24,7 +24,7 @@ export const EFFORT_AUTO_DEFAULTS = {
 
 const seat = (harness, model) => ({ harness, model, thinking: "high" });
 
-const DEFAULTS = {
+export const DEFAULTS = {
   effort: "medium",
   effort_auto: EFFORT_AUTO_DEFAULTS,
   seats: [seat("claude", "opus"), seat("auto", "cubbit/mimir-pro"), seat("auto", "cubbit/mimir")],
