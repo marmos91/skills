@@ -120,8 +120,10 @@ function changedLines(f) {
 
 function ciOf(f) {
   const file = join(f.ctxDir, "ci.json");
-  if (!existsSync(file)) return { state: f.ci, line: null };
-  const c = readJson(file);
+  return existsSync(file) ? ciState(readJson(file)) : { state: f.ci, line: null };
+}
+
+function ciState(c) {
   // A stale sha means the checks belong to another commit: CI of the pinned head is unknown (blocks APPROVE).
   if (c.stale) return { state: "unknown", line: "The CI state of this commit is unknown." };
   if (c.state === "red") return { state: "red", line: `Failed checks: ${c.items.filter((i) => i.state === "fail" || i.state === "cancel").map((i) => safeText(i.name)).join(", ")}.` };
@@ -300,7 +302,7 @@ async function once(o, restart) {
   const items = posted.map((c) => ({ ...c, body: text.get(c.id) ?? `**${c.severity}:** ${c.title}\n\n${c.case}` }));
   const earlierAll = readJson(join(f.ctxDir, "earlier.json"));
   const fixed = earlierAll.filter((e) => { const r = earlier.get(e.threadId); return r && r.open.size === 0 && r.fixed.size >= 2; });
-  const ci = ciOf(f);
+  let ci = ciOf(f);
   const v = () => verdict({
     agreed: [...agreed, ...hygItems], earlierMustOpen: earlierAll.filter((e) => e.severity === "must" && !fixed.includes(e)).length,
     openQuestions: open.length, splits: 0, failedLenses: run.missing?.length ?? 0, ci: ci.state, mode, trustedAuthor: f.trusted, unanimousZero, ownPr: f.ownPr,
@@ -323,7 +325,11 @@ async function once(o, restart) {
     return finish("compose (dry run)", { dryRun: true, file, ...v(), summary: `dry run: review written to ${file}; ${planned} children planned` });
   }
 
-  // Post (spec 6.10). Step 2: a moved head drops this run; review() frames again.
+  // Post (spec 6.10). CI may have changed since frame: read it again; a failed read is unknown and blocks APPROVE.
+  if (config.review.ci !== "ignore") {
+    try { ci = ciState(await gh.checks(repo, n, f.headSha)); } catch (e) { log(`CI read failed: ${e.message}`); ci = ciState({ stale: true }); }
+  }
+  // Step 2: a moved head drops this run; review() frames again.
   const now = (await gh.pr(repo, n)).headSha;
   if (now !== f.headSha) throw new HeadMoved(f.headSha, now);
   const clean = [];

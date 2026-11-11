@@ -12,6 +12,7 @@ import { decide as realDecide } from "../lib/decider.mjs";
 import { answer, openQuestions } from "../lib/questions.mjs";
 import { stateRoot, prState, savePrState } from "../lib/state.mjs";
 import { fingerprint } from "../lib/convergence.mjs";
+import * as github from "../lib/github.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ghBin = join(mkdtempSync(join(tmpdir(), "ghbin-")), "gh");
@@ -689,4 +690,26 @@ test("answer-only rerun: a finding already posted inline at this head is not pos
   assert.equal(again.r.exit, 0, again.r.summary);
   assert.equal(posts(fx).length, 1, "no follow-up for a finding already on GitHub");
   assert.ok(JSON.parse(readFileSync(join(fx.state, "questions", `${q.id}.json`), "utf8")).appliedAt);
+});
+
+test("CI is read again at post time: none at frame, red at post -> no APPROVE", async () => {
+  const fx = fixture(); routes(fx);
+  const states = [{ state: "none", since: null, items: [] }, { state: "red", since: null, items: [{ name: "build", state: "fail", url: null, runId: null }] }];
+  const calls = [];
+  const gh = { ...github, checks: async (...a) => { calls.push(a); return states[Math.min(calls.length - 1, 1)]; } };
+  const { r } = await go(fx, { all: { findings: [] }, compose: { body: "Fine.", comments: [] } }, { gh });
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(calls.length, 2);
+  const p = posts(fx)[0];
+  assert.equal(p.event, "COMMENT");
+  assert.match(p.body, /Failed checks: build\./);
+});
+
+test("a CI read that fails at post time counts as unknown: no APPROVE", async () => {
+  const fx = fixture(); routes(fx);
+  let k = 0;
+  const gh = { ...github, checks: async () => { if (k++) throw new Error("rate limited"); return { state: "green", since: null, items: [] }; } };
+  const { r } = await go(fx, { all: { findings: [] }, compose: { body: "Fine.", comments: [] } }, { gh });
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(posts(fx)[0].event, "COMMENT");
 });
