@@ -36,6 +36,7 @@ each one into `~/.local/bin` (`BIN_DIR`).
 | repo-audit-fix | both | Executes audit epics: research → architect plan → plan review → implement → 3-lens gate → PR per epic; wave-parallel worktrees, resumable. Uses `jev` (when on PATH) as a second check for findings an approved plan drops |
 | refute-root-cause | pi | Adversarial panel that tries to kill a claimed root cause before you fix on it |
 | jev | both | Ask Mimir SystemOne (Jev) typed yes/no questions, get calibrated probabilities and clean exit codes (0 yes, 1 no, 2 no answer) — one bash-invokable CLI for pi and Claude Code workflows, installed as `~/.local/bin/jev` |
+| pr-review | both | Council review of one GitHub PR: different models review with 5 lenses (adversarial, correctness, simplification, architecture, security), vote on each other's findings, and post only what they agree on; jev or you settle the splits. Models per seat and per lens, effort levels, resumable. See [docs/pr-review.md](docs/pr-review.md) |
 
 (graphify and humanizer were removed from this repo — they exist upstream:
 `graphify install --platform pi|claude` from [Graphify-Labs/graphify](https://github.com/Graphify-Labs/graphify),

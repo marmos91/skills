@@ -17,7 +17,7 @@
   // Clusters findings and writes the final review text.
   "judge": { "harness": "claude", "model": "opus", "thinking": "high" },
   // Settles split votes. "auto" = use jev when the jev CLI is on PATH.
-  "decider": { "kind": "auto", "confidence": 0.8 },
+  "decider": { "kind": "auto", "confidence": 0 },
   "loop": {
     "authors_ignore": ["dependabot[bot]", "renovate[bot]"],
     "max_prs_per_run": 10,
