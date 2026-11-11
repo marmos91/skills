@@ -45,10 +45,16 @@ ${OPTIONS.map((o) => `- ${o}`).join("\n")}
 `;
 }
 
-/** q: { pr, sha, fingerprint, file, line, snippet, finding, sides: {keep, drop}, failure }. Same id twice keeps the first. */
+/**
+ * q: { pr, sha, fingerprint, file, line, snippet, finding, sides: {keep, drop}, failure }. Same id twice keeps the first,
+ * except a review finding whose earlier question was answered and applied: it comes back as a fresh question.
+ */
 export function queueQuestion(repoState, q) {
   const id = `${q.pr}-${q.fingerprint.slice(0, 8)}`;
-  if (existsSync(jsonFile(repoState, id))) return id;
+  if (existsSync(jsonFile(repoState, id))) {
+    const old = load(repoState, id);
+    if (old.finding?.kind || !old.appliedAt) return id;
+  }
   const r = (x) => (typeof x === "string" ? redact(x) : x);
   const finding = Object.fromEntries(Object.entries(q.finding).map(([k, v]) => [k, r(v)]));
   const sides = { keep: r(q.sides.keep), drop: r(q.sides.drop) };

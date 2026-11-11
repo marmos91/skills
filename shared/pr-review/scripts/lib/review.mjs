@@ -271,9 +271,10 @@ async function once(o, restart) {
   for (const { c, votes, status } of tallied) {
     if (answers.has(c.fp)) {
       const q = answers.get(c.fp);
-      // The answer was about other code: the finding is dropped, not asked again under the same question id.
-      if (moved(q)) { answers.delete(q.fingerprint); applied.push(q.id); rejected.push(c); } else take(q, c);
-      continue;
+      if (!moved(q)) { take(q, c); continue; }
+      // The answer was about other code: close it now, and let the tally (and jev or a fresh question) decide again.
+      answers.delete(q.fingerprint);
+      appliedAnswer(repoState, q.id);
     }
     if (status === "agreed") { agreed.push({ ...c, ask_author: c.found.length === 1 }); continue; }
     if (status === "rejected") { rejected.push(c); continue; }

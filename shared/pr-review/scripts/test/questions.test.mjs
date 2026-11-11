@@ -91,3 +91,17 @@ test("secrets in sides and failure are redacted in json and md", () => {
   const id = queueQuestion(r, q({ sides: { keep: `k ${key}`, drop: `d ${key}` }, failure: `f ${key}` }));
   for (const ext of ["json", "md"]) assert.ok(!readFileSync(join(r, "questions", `${id}.${ext}`), "utf8").includes(key), ext);
 });
+
+test("a review finding asked again after its answer was applied is a fresh question; loop kinds are not", () => {
+  const r = tmp();
+  const id = queueQuestion(r, q());
+  answer(r, id, "drop");
+  assert.equal(queueQuestion(r, q()), id, "answered but not applied: kept");
+  appliedAnswer(r, id);
+  assert.equal(queueQuestion(r, q()), id);
+  assert.deepEqual(openQuestions(r).map((x) => [x.id, x.answer, x.appliedAt ?? null]), [[id, null, null]]);
+  const k = queueQuestion(r, q({ fingerprint: "b".repeat(40), finding: { kind: "budget", title: "t", case: "c" } }));
+  answer(r, k, "drop"); appliedAnswer(r, k);
+  queueQuestion(r, q({ fingerprint: "b".repeat(40), finding: { kind: "budget", title: "t", case: "c" } }));
+  assert.ok(!openQuestions(r).some((x) => x.id === k), "a loop question is not asked again");
+});

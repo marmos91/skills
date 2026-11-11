@@ -755,16 +755,34 @@ test("7.4: an answer from an older sha is dropped with a note when the finding's
   }
 });
 
-test("7.4: a re-found finding whose answer is from an older sha and whose code changed is dropped", async () => {
+test("7.4: a stale 'drop' never turns a must the whole council now agrees on into APPROVE", async () => {
   const fx = fixture(); routes(fx);
   const first = await go(fx, split());
-  answer(fx.state, basename(first.r.questions[0], ".md"), "post");
+  const id = basename(first.r.questions[0], ".md");
+  answer(fx.state, id, "drop");
+  pushHead(fx, ["const a = 2;", "const b = 30;", "const c = 4;", "const d = 5;"]);
+  const { r } = await go(fx, happy());
+  assert.equal(r.exit, 0, r.summary);
+  const p = posts(fx)[0];
+  assert.equal(p.event, "REQUEST_CHANGES");
+  assert.deepEqual(p.threads.map((t) => t.line), [2]);
+  assert.ok(JSON.parse(readFileSync(join(fx.state, "questions", `${id}.json`), "utf8")).appliedAt);
+});
+
+test("7.4: a re-found split whose stale answer was dropped is asked again as a fresh question", async () => {
+  const fx = fixture(); routes(fx);
+  const first = await go(fx, split());
+  const id = basename(first.r.questions[0], ".md");
+  answer(fx.state, id, "post");
   pushHead(fx, ["const a = 2;", "const b = 30;", "const c = 4;", "const d = 5;"]);
   let asked = 0;
   const { r } = await go(fx, split(), { decide: async () => { asked++; return { decision: "unsure" }; } });
-  assert.equal(r.exit, 0, r.summary);
-  assert.equal(asked, 0);
-  assert.deepEqual(posts(fx)[0].threads, []);
+  assert.equal(r.exit, 3, r.summary);
+  assert.equal(asked, 1, "the tally and jev decide again");
+  const open = openQuestions(fx.state);
+  assert.equal(open.length, 1, "exit 3 always has a question to answer");
+  assert.deepEqual(r.questions.map((q) => basename(q, ".md")), open.map((q) => q.id));
+  assert.equal(posts(fx).length, 0);
 });
 
 test("7.4: the answer-only follow-up drops an answer whose code changed since its sha", async () => {
