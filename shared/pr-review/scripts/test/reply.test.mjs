@@ -77,9 +77,9 @@ test("challenger is a seat of another family; routerUp reaches runChild", async 
   const t = thread([human(112)]);
   const { run } = await go({ t, answers: { draft: pos("push_back"), challenge: pos("push_back"), compose: pos("push_back") } });
   const [d, c, j] = run.calls;
-  assert.deepEqual(d.seat, { ...config.seats[0], max_turns: 30, timeout_minutes: 10 }, "the seat carries its child limits");
+  assert.deepEqual(d.seat, { ...config.seats[0], max_turns: 40, timeout_minutes: 10 }, "the seat carries its child limits");
   assert.ok(c.seat.harness !== d.seat.harness || c.seat.model.split("/")[0] !== d.seat.model.split("/")[0]);
-  assert.deepEqual(j.seat, { ...config.judge, max_turns: 30, timeout_minutes: 10 });
+  assert.deepEqual(j.seat, { ...config.judge, max_turns: 40, timeout_minutes: 10 });
   assert.ok(run.calls.every((x) => x.routerUp === true && x.schema === "reply" && x.worktree));
 });
 

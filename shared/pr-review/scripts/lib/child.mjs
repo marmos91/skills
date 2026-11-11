@@ -131,7 +131,12 @@ export async function runChild({ seat, tools = "read", promptFile, outFile, work
       const errs = schema ? validate(schema, value) : [];
       if (errs.length) throw new Error(`invalid ${schema}: ${errs.join("; ")}`);
       return value;
-    } catch (e) { last = e; }
+    } catch (e) {
+      last = e;
+      // claude prints this and exits 1 at --max-turns: a retry hits the same limit, so fail at once.
+      const text = `${e.message}\n${await readFile(outFile, "utf8").catch(() => "")}`;
+      if (/Reached max turns|error_max_turns/.test(text)) throw new ChildFailed(`${harness}:${seat.model} hit its max_turns (${seat.max_turns}); not retried`);
+    }
   }
   throw new ChildFailed(`${fake ? "fake" : harness}:${seat.model} failed after ${retries + 1} attempts: ${last.message}`);
 }

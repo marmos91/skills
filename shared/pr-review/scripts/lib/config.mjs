@@ -39,7 +39,7 @@ export const DEFAULTS = {
   decider: { kind: "auto", confidence: 0 },
   loop: { authors_ignore: [], max_prs_per_run: 10, max_review_rounds: 3, max_replies_per_thread: 2, effort: "auto", ci_wait_minutes: 30 },
   // max_turns and timeout_minutes: defaults for every child; a seat or a lens may set its own.
-  review: { guidance: [], ci: "use", max_diff_lines: 3000, max_turns: 30, timeout_minutes: 10 },
+  review: { guidance: [], ci: "use", max_diff_lines: 3000, max_turns: 40, timeout_minutes: 10 },
   hygiene: { enabled: true },
 };
 

@@ -133,12 +133,14 @@ test("reply: role decides the task; compose adds writing.md; thread is data", ()
   assert.throws(() => replyPrompt(frame(), thread, "vote"), /role/);
 });
 
-test("round 1, vote and merge carry the tool budget line", async () => {
+test("round 1, vote and merge carry a tool budget 5 below the seat's max_turns (floor 5)", async () => {
   const { round1Prompt, votePrompt, mergePrompt, composePrompt } = await import("../lib/prompts.mjs");
   const f = { headSha: "a".repeat(40), baseRef: "main", ctxDir: "/ctx", worktree: "/wt", trusted: false, reviewNumber: 1, delta: {} };
-  const line = "Budget: at most 25 tool calls. Never run the same command twice. Run code only to confirm a specific suspected defect. When the budget is used, stop and output the JSON.";
-  for (const p of [round1Prompt(f, ["correctness"]), votePrompt(f, []), mergePrompt(f, {}, [])]) assert.ok(p.includes(line));
-  assert.ok(!composePrompt(f, [], "").includes(line));
+  const line = (n) => `Budget: at most ${n} tool calls. Never run the same command twice. Run code only to confirm a specific suspected defect. When the budget is used, stop and output the JSON.`;
+  for (const [turns, n] of [[40, 35], [12, 7], [8, 5], [3, 5]]) {
+    for (const p of [round1Prompt(f, ["correctness"], turns), votePrompt(f, [], turns), mergePrompt(f, {}, [], turns)]) assert.ok(p.includes(line(n)), `${turns}`);
+  }
+  assert.ok(!composePrompt(f, [], "").includes("Budget:"));
 });
 
 test("round 1 asks a seat that cannot read its inputs to say so in `error`", async () => {

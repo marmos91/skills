@@ -81,8 +81,9 @@ async function child(ctx, stage, key, { seat, prompt, schema, tools = "read", le
   if (done(ctx.runDir, stage, key)) return readJson(outFile);
   mkdirSync(dir, { recursive: true });
   const promptFile = join(dir, `${key}.prompt`);
-  writeFileSync(promptFile, prompt());
-  const v = await ctx.runChild({ seat: withLimits(ctx.config, seat, lens), tools, promptFile, outFile, worktree: ctx.frame.worktree, ctxDir: ctx.frame.ctxDir, schema, routerUp: ctx.routerUp });
+  const limited = withLimits(ctx.config, seat, lens);
+  writeFileSync(promptFile, prompt(limited));
+  const v = await ctx.runChild({ seat: limited, tools, promptFile, outFile, worktree: ctx.frame.worktree, ctxDir: ctx.frame.ctxDir, schema, routerUp: ctx.routerUp });
   save(outFile, v);
   markDone(ctx.runDir, stage, key);
   return v;
@@ -193,7 +194,7 @@ async function once(o, restart) {
   const jobs = round1Jobs(config, run.lenses);
   const hygFile = join(runDir, "hygiene-result.json");
   const [outs, hyg] = await settled([
-    settled(jobs.map((j) => child(ctx, "round1", j.key, { seat: j.seat, tools, schema: "round1", lens: j.lenses.length === 1 ? j.lenses[0] : undefined, prompt: () => round1Prompt(f, j.lenses) }).then((v) => ({ ...j, v })))),
+    settled(jobs.map((j) => child(ctx, "round1", j.key, { seat: j.seat, tools, schema: "round1", lens: j.lenses.length === 1 ? j.lenses[0] : undefined, prompt: (s) => round1Prompt(f, j.lenses, s.max_turns) }).then((v) => ({ ...j, v })))),
     existsSync(hygFile) ? readJson(hygFile) : o.hygiene(f, config, run.effort, { routerUp: o.routerUp }).then((h) => { save(hygFile, h); return h; }),
   ]);
   markDone(runDir, "round1");
@@ -214,7 +215,7 @@ async function once(o, restart) {
   // Merge (spec 6.4, 7.5 rule 4): a cluster that reverses an earlier agreed finding is dropped and recorded.
   const pst = pst0;
   const raw = Object.values(bySeat).some((x) => x.length)
-    ? await child(ctx, "merge", "merge", { seat: config.judge, schema: "merge", prompt: () => mergePrompt(f, bySeat, pst.agreed ?? []) })
+    ? await child(ctx, "merge", "merge", { seat: config.judge, schema: "merge", prompt: (s) => mergePrompt(f, bySeat, pst.agreed ?? [], s.max_turns) })
     : [];
   const threads = readJson(join(f.ctxDir, "threads.json"));
   // Spec 6.4: a cluster repeats a thread of ours on the same line whose finding was agreed or settled before.
@@ -241,7 +242,7 @@ async function once(o, restart) {
   const ballots = await settled(voters.map((seat, i) => {
     const id = seatId(seat), mine = clusters.filter((c) => c.seats.includes(id) && !c.found.includes(id));
     if (!mine.length) return { id, votes: [] };
-    return child(ctx, "round2", `v~${i}`, { seat, tools, schema: "vote", prompt: () => votePrompt(f, mine.map(view)) }).then((votes) => ({ id, votes }));
+    return child(ctx, "round2", `v~${i}`, { seat, tools, schema: "vote", prompt: (s) => votePrompt(f, mine.map(view), s.max_turns) }).then((votes) => ({ id, votes }));
   }));
   markDone(runDir, "round2");
   if (o.until === "round2") return finish("round2");

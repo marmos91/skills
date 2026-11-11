@@ -436,7 +436,7 @@ decider and `round1` belong to you.
     "max_replies_per_thread": 2,
     "effort": "auto"
   },
-  "review": { "guidance": [], "ci": "use", "max_diff_lines": 3000, "max_turns": 30, "timeout_minutes": 10 },
+  "review": { "guidance": [], "ci": "use", "max_diff_lines": 3000, "max_turns": 40, "timeout_minutes": 10 },
   "hygiene": { "enabled": true }
 }
 ```
@@ -459,10 +459,12 @@ A commented copy is in `shared/pr-review/config.example.json`.
   `claude -p`. pi cannot run Opus or Fable, so those seats always use claude.
 - `max_turns` and `timeout_minutes` limit one child. A seat may set its
   own; a lens may set `max_turns` for its children; else `review.max_turns`
-  (default 30) and `review.timeout_minutes` (default 10) apply. Only claude
+  (default 40) and `review.timeout_minutes` (default 10) apply. Only claude
   seats get `--max-turns`: pi has no such flag, so there the timeout is the
-  only limit on a long tool loop. The round 1, vote and merge prompts also
-  ask each seat to stay within 25 tool calls and never to repeat a command.
+  only limit on a long tool loop. A claude seat that reaches its
+  `max_turns` fails at once, with no retry. The round 1, vote and merge
+  prompts ask each seat to stay within `max_turns` minus 5 tool calls (at
+  least 5) and never to repeat a command.
 - Use different model families in the council. The point of the vote is
   that one model's blind spots do not decide the result.
 - **Per-lens models.** Put the strongest model on the lens where a miss

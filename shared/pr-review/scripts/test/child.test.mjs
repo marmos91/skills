@@ -218,3 +218,11 @@ test("a round-1 output with an error field fails the child after its retries", a
     await assert.rejects(runChild(base(claudeSeat, { schema: "round1", retries: 1 })), (e) => e instanceof ChildFailed && /after 2 attempts: invalid round1: error: /.test(e.message));
   } finally { delete process.env.PR_REVIEW_FAKE; }
 });
+
+test("a claude seat that hits its max_turns fails at once, without retries", async () => {
+  const count = join(dir, "mt.count");
+  writeFileSync(count, "");
+  stub("claude", `echo x >>"${count}"; printf 'Error: Reached max turns (3)'; exit 1`);
+  await assert.rejects(runChild(base({ ...claudeSeat, max_turns: 3 }, { retries: 2 })), (e) => e instanceof ChildFailed && /max_turns \(3\)/.test(e.message));
+  assert.equal(readFileSync(count, "utf8").trim().split("\n").length, 1);
+});

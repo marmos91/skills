@@ -28,7 +28,7 @@
   },
   // Limits per child: a seat may set its own "max_turns" and "timeout_minutes", a lens its own "max_turns".
   // max_turns reaches claude seats only (--max-turns); pi has no such flag, so the timeout bounds it.
-  "review": { "max_turns": 30, "timeout_minutes": 10 },
+  "review": { "max_turns": 40, "timeout_minutes": 10 },
   // PR hygiene check (title, body, linked issue, changelog). Repo level may set it too.
   "hygiene": { "enabled": true }
 }

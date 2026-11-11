@@ -833,6 +833,9 @@ test("round-1 children carry the lens max_turns; other children the global one",
   assert.deepEqual([...new Set(turns("security~"))], [12]);
   assert.deepEqual([...new Set(turns("correctness~"))], [25]);
   assert.deepEqual(turns("compose"), [25]);
+  const prompt = (k) => run.calls.find((c) => c.k.startsWith(k)).prompt;
+  assert.match(prompt("security~"), /Budget: at most 7 tool calls\./);
+  assert.match(prompt("correctness~"), /Budget: at most 20 tool calls\./);
   assert.ok(run.calls.every((c) => c.seat.timeout_minutes === 10));
 });
 

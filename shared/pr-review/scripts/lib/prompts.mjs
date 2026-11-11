@@ -10,8 +10,9 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const read = (p) => readFileSync(join(ROOT, p), "utf8").trim();
 const json = (v) => JSON.stringify(v, null, 2);
 const OUT = "Print only this JSON value. No prose and no code fence before or after it.";
-// Seats on long tool loops repeat commands; the engine's turn limit is the backstop (review.max_turns).
-const BUDGET = "Budget: at most 25 tool calls. Never run the same command twice. Run code only to confirm a specific suspected defect. When the budget is used, stop and output the JSON.";
+// Seats on long tool loops repeat commands. The budget stays 5 below the seat's max_turns, so the seat
+// stops and answers before claude's --max-turns cuts it off.
+const budget = (maxTurns = 40) => `Budget: at most ${Math.max(5, maxTurns - 5)} tool calls. Never run the same command twice. Run code only to confirm a specific suspected defect. When the budget is used, stop and output the JSON.`;
 
 // Untrusted text must not close its own block early (spec 4 rule 5): a random tag per block,
 // and look-alike tags inside the text are broken as a second layer.
@@ -54,7 +55,7 @@ function context(frame, extra = "", from) {
 
 const finding = (sev) => `{"lens": "<lens>", "severity": "${sev}", "file": "path/from/repo/root", "line": 42, "symbol": "functionName (optional)", "title": "short title", "case": "input or situation -> wrong result", "evidence": "trace through the code, or a command and its output", "fix": "smallest fix, with a snippet"}`;
 
-export function round1Prompt(frame, lenses) {
+export function round1Prompt(frame, lenses, maxTurns) {
   const ctx = context(frame);
   const n = frame.reviewNumber ?? 1;
   if (!Number.isInteger(n) || n < 1) throw new Error(`frame.reviewNumber must be an integer >= 1, got ${frame.reviewNumber}`);
@@ -81,7 +82,7 @@ export function round1Prompt(frame, lenses) {
       : []),
     "",
     ...lenses.flatMap((l) => [`## Lens: ${l}`, "", lens(l, frame.trusted), ""]),
-    BUDGET,
+    budget(maxTurns),
     "",
     "## Output",
     OUT,
@@ -91,7 +92,7 @@ export function round1Prompt(frame, lenses) {
   ].join("\n");
 }
 
-export function votePrompt(frame, clusters) {
+export function votePrompt(frame, clusters, maxTurns) {
   return [
     "You are one seat of a review council. Other seats found the findings below. Check each one against the code, and vote on it.",
     "",
@@ -110,7 +111,7 @@ export function votePrompt(frame, clusters) {
       : "- You have no shell. Set `evidence_run` to false.",
     "- Vote on each finding one time.",
     "",
-    BUDGET,
+    budget(maxTurns),
     "",
     "## Output",
     OUT,
@@ -119,7 +120,7 @@ export function votePrompt(frame, clusters) {
 }
 
 // earlierAgreed: agreed findings of earlier reviews of this PR (spec 7.5 rule 4).
-export function mergePrompt(frame, findingsBySeat, earlierAgreed = []) {
+export function mergePrompt(frame, findingsBySeat, earlierAgreed = [], maxTurns) {
   return [
     "You are the judge of a review council. The seats reviewed the PR alone. Merge their findings into clusters.",
     "",
@@ -140,7 +141,7 @@ export function mergePrompt(frame, findingsBySeat, earlierAgreed = []) {
     "- Do not add findings. Do not judge if a finding is real; the vote does that.",
     "- Number the clusters c1, c2, c3, and so on.",
     "",
-    BUDGET,
+    budget(maxTurns),
     "",
     "## Output",
     OUT,
