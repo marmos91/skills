@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
-import { reply, askJev } from "../lib/reply.mjs";
+import { reply } from "../lib/reply.mjs";
+import { askJev } from "../lib/decider.mjs";
 import { loadConfig } from "../lib/config.mjs";
 import { stateRoot, prState, savePrState } from "../lib/state.mjs";
 import { replyPrompt } from "../lib/prompts.mjs";
@@ -236,17 +237,17 @@ test("askJev: settles only when the verdict matches the exit code; missing jev -
   const env = { PATH: `${bin}:/usr/bin:/bin`, GH_TOKEN: "x" };
   const skillDir = join(dir, "skill");
   make("yes", 0);
-  assert.equal(await askJev("Q?", "text ghp_" + "a".repeat(36), config, { env, skillDir }), "yes");
+  assert.equal((await askJev("Q?", "text ghp_" + "a".repeat(36), config, { env, skillDir })).answer, "yes");
   assert.ok(!readFileSync(join(dir, "in"), "utf8").includes("ghp_"), "payload is redacted");
-  assert.match(readFileSync(join(dir, "argv"), "utf8"), /^ask Q\? --json --confidence 0\.5$/m);
+  assert.match(readFileSync(join(dir, "argv"), "utf8"), /^ask Q\? --json$/m);
   make("no", 1);
-  assert.equal(await askJev("Q?", "t", config, { env, skillDir }), "no");
+  assert.equal((await askJev("Q?", "t", config, { env, skillDir })).answer, "no");
   make("error", 1);
-  assert.equal(await askJev("Q?", "t", config, { env, skillDir }), "unsure");
+  assert.equal((await askJev("Q?", "t", config, { env, skillDir })).answer, "unsure");
   make("unsure", 2);
-  assert.equal(await askJev("Q?", "t", config, { env, skillDir }), "unsure");
-  assert.equal(await askJev("Q?", "t", config, { env: { PATH: "/nonexistent" }, skillDir }), "unsure");
-  assert.equal(await askJev("Q?", "t", { ...config, decider: { kind: "off", confidence: 0.5 } }, { env, skillDir }), "unsure");
+  assert.equal((await askJev("Q?", "t", config, { env, skillDir })).answer, "unsure");
+  assert.equal((await askJev("Q?", "t", config, { env: { PATH: "/nonexistent" }, skillDir })).answer, "unsure");
+  assert.equal((await askJev("Q?", "t", { ...config, decider: { kind: "off", confidence: 0.5 } }, { env, skillDir })).answer, "unsure");
 });
 
 test("jev roles: own PR names the reviewer; others' PR: Marco's finding stands unless jev says the author is right", async () => {

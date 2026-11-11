@@ -7,7 +7,6 @@ import { ENV_OK } from "./env.mjs";
 import { track, untrack } from "./child.mjs";
 
 const QUESTION = "This finding describes a real defect that this PR introduces.";
-const UNSURE = { decision: "unsure", raw: null };
 
 const executable = (f) => { try { accessSync(f, constants.X_OK); return true; } catch { return false; } };
 
@@ -27,25 +26,26 @@ function text(c, votes, hunk) {
   ].join("\n");
 }
 
-/** Settle a split finding with jev. -> { decision: "agreed"|"rejected"|"unsure", raw } */
-export function decide(cluster, votes, codeHunk, config, { env = process.env, timeoutMs = 60000, skillDir } = {}) {
+/** Ask jev a yes/no question about text. -> { answer: "yes"|"no"|"unsure", raw } */
+export function askJev(question, input, config, { env = process.env, timeoutMs = 60000, skillDir } = {}) {
+  const unsure = { answer: "unsure", raw: null };
   const { kind, confidence } = config.decider;
-  if (kind === "off") return Promise.resolve(UNSURE);
+  if (kind === "off") return Promise.resolve(unsure);
   skillDir ??= realpathSync(join(dirname(fileURLToPath(import.meta.url)), "..", ".."));
   const bin = findJev(skillDir, env);
-  if (!bin) return Promise.resolve(UNSURE);
+  if (!bin) return Promise.resolve(unsure);
   env = Object.fromEntries(Object.entries(env).filter(([k]) => ENV_OK.test(k)));
-  const args = ["ask", QUESTION, "--json", ...(confidence > 0 ? ["--confidence", String(confidence)] : [])];
+  const args = ["ask", question, "--json", ...(confidence > 0 ? ["--confidence", String(confidence)] : [])];
   return new Promise((resolve) => {
     let out = "", settled = false;
     const p = spawn(bin, args, { env, detached: true, stdio: ["pipe", "pipe", "ignore"] });
     const end = (r) => { if (!settled) { settled = true; clearTimeout(timer); resolve(r); } };
     track(p.pid);
     const killGroup = () => { try { process.kill(-p.pid, "SIGKILL"); } catch {} };
-    const timer = setTimeout(() => { killGroup(); end(UNSURE); }, timeoutMs);
+    const timer = setTimeout(() => { killGroup(); end(unsure); }, timeoutMs);
     p.stdout.on("data", (d) => (out += d));
     p.stdin.on("error", () => {});
-    p.on("error", () => end(UNSURE));
+    p.on("error", () => end(unsure));
     p.on("close", (code) => {
       let raw = null;
       try { raw = JSON.parse(out); } catch { /* raw stays null */ }
@@ -54,8 +54,14 @@ export function decide(cluster, votes, codeHunk, config, { env = process.env, ti
       // R22: older jev builds exit 1 on network errors, so settle only when the verdict agrees with the exit code.
       const yes = code === 0 && ["yes", "doubted"].includes(raw?.verdict);
       const no = code === 1 && ["no", "trusted"].includes(raw?.verdict);
-      end({ decision: yes ? "agreed" : no ? "rejected" : "unsure", raw });
+      end({ answer: yes ? "yes" : no ? "no" : "unsure", raw });
     });
-    p.stdin.end(redact(text(cluster, votes, codeHunk)));
+    p.stdin.end(redact(input));
   });
+}
+
+/** Settle a split finding with jev. -> { decision: "agreed"|"rejected"|"unsure", raw } */
+export async function decide(cluster, votes, codeHunk, config, opts = {}) {
+  const { answer, raw } = await askJev(QUESTION, text(cluster, votes, codeHunk), config, opts);
+  return { decision: { yes: "agreed", no: "rejected" }[answer] ?? "unsure", raw };
 }

@@ -1,53 +1,19 @@
 // Reply flow for one review thread (spec 7.2, 7.3, 7.5 rule 6).
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { basename, delimiter, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import * as github from "./github.mjs";
-import { runChild as realRunChild, ENV_OK } from "./child.mjs";
+import { runChild as realRunChild } from "./child.mjs";
+import { askJev } from "./decider.mjs";
 import { budgetLeft } from "./convergence.mjs";
 import { prData, replyPrompt, seatData } from "./prompts.mjs";
-import { redact, scanOutbound } from "./secrets.mjs";
+import { scanOutbound } from "./secrets.mjs";
 import { prState, savePrState, stateRoot } from "./state.mjs";
 
 const CORRECT = "The last comment in this thread, by the other party, is correct about this code.";
 const NEW_ARG = "This reply adds a new argument or new evidence.";
 // On public repos every user has "read" (Task 8 note).
 const COLLABORATOR = new Set(["write", "admin"]);
-
-const executable = (f) => { try { accessSync(f, constants.X_OK); return true; } catch { return false; } };
-
-// shortcut: same jev lookup and R22 rule as decider.decide (Task 11a, not on this branch); fold into one helper when both land.
-/** Ask jev a yes/no question about text. -> "yes" | "no" | "unsure" */
-export function askJev(question, text, config, { env = process.env, timeoutMs = 60000, skillDir } = {}) {
-  const { kind, confidence } = config.decider;
-  if (kind === "off") return Promise.resolve("unsure");
-  skillDir ??= realpathSync(join(dirname(fileURLToPath(import.meta.url)), "..", ".."));
-  const sibling = join(skillDir, "..", "jev", "bin", "jev");
-  const bin = executable(sibling) ? sibling : (env.PATH || "").split(delimiter).filter(Boolean).map((d) => join(d, "jev")).find(executable);
-  if (!bin) return Promise.resolve("unsure");
-  const cleanEnv = Object.fromEntries(Object.entries(env).filter(([k]) => ENV_OK.test(k)));
-  const args = ["ask", question, "--json", ...(confidence > 0 ? ["--confidence", String(confidence)] : [])];
-  return new Promise((resolve) => {
-    let out = "", settled = false;
-    const p = spawn(bin, args, { env: cleanEnv, detached: true, stdio: ["pipe", "pipe", "ignore"] });
-    const killGroup = () => { try { process.kill(-p.pid, "SIGKILL"); } catch {} };
-    const end = (r) => { if (!settled) { settled = true; clearTimeout(timer); resolve(r); } };
-    const timer = setTimeout(() => { killGroup(); end("unsure"); }, timeoutMs);
-    p.stdout.on("data", (d) => (out += d));
-    p.stdin.on("error", () => {});
-    p.on("error", () => end("unsure"));
-    p.on("close", (code) => {
-      let v = null;
-      try { v = JSON.parse(out).verdict; } catch {}
-      killGroup();
-      // R22: settle only when the verdict agrees with the exit code.
-      end(code === 0 && ["yes", "doubted"].includes(v) ? "yes" : code === 1 && ["no", "trusted"].includes(v) ? "no" : "unsure");
-    });
-    p.stdin.end(redact(text));
-  });
-}
 
 const family = (s) => `${s.harness}|${s.model.split("/")[0]}`;
 const threadData = (t) => prData(JSON.stringify(t.comments.map((c) => ({ author: c.author, body: c.body })), null, 2), "the PR and its commenters");
@@ -60,7 +26,7 @@ const isSkip = (b) => b.replace(/[`\p{P}\s]/gu, "").toUpperCase() === "SKIP";
  * -> { action: "replied"|"queued"|"skipped", resolved, queued: [items] }
  */
 export async function reply({ repo, n, threadId, mode, frame, config, runDir, gh = github, runChild = realRunChild, jev, queue = () => {}, routerUp }) {
-  jev ??= (q, text) => askJev(q, text, config);
+  jev ??= async (q, text) => (await askJev(q, text, config)).answer;
   const queued = [];
   const t = (await gh.threads(repo, n)).find((x) => x.id === threadId);
   if (!t) throw new Error(`thread ${threadId} not found on ${repo}#${n}`);
