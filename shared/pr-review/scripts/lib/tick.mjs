@@ -44,9 +44,9 @@ export function replyQuestion(item, t, me, repo) {
   };
 }
 
-// An explicit request only; a clause after "don't" / "do not" does not count.
+// An explicit request only. A clause after a negation ("don't", "can't", "no need to") or an offer ("want me to", "shall I") does not count.
 const ASKS_REVIEW = /\b(?:(?:please|can you|could you|would you)\s+(?:re-?)?review|(?:re-?)?review\s+(?:this|it|again)|ptal)\b/i;
-export const asksReview = (body) => ASKS_REVIEW.test(String(body ?? "").replace(/\b(?:don['’]?t|do\s+not)\b[^.!?\n]*/gi, ""));
+export const asksReview = (body) => ASKS_REVIEW.test(String(body ?? "").replace(/\b(?:don['’]?t|do\s+not|can['’]?t|cannot|can\s+not|no\s+need\s+to|want\s+me\s+to|shall\s+i|should\s+i)\b[^.!?\n]*/gi, ""));
 
 function baseConfigText(repoDir) {
   try { return execFileSync("git", ["show", "origin/HEAD:.pr-review.json"], { cwd: repoDir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }); } catch { return null; }
@@ -116,11 +116,14 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
     // Resume: an interrupted tick finishes its queue before new work is listed.
     const jf = join(rs, "tick.json");
     let budget = config.loop.max_prs_per_run;
+    const handled = new Set();
     const old = readJson(jf);
     if (old) {
       log(`finishing the queue of an interrupted tick from ${old.startedAt}`);
       const n = await runQueue(old);
       if (n === null) return;
+      // Handled by the resumed queue: not listed again in this tick.
+      for (const r of old.queue) { handled.add(r.number); forced.delete(r.number); }
       budget -= n;
     }
 
@@ -133,6 +136,7 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
       forced.delete(pr);
     }
     for (const r of found) {
+      if (handled.has(r.number)) continue;
       if (config.loop.authors_ignore.includes(r.author)) continue;
       const force = forced.has(r.number);
       const fresh = r.updatedAt > baseline || r.reasons.includes("review-requested") || force;
@@ -165,7 +169,11 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
     async function handle(r, force) {
       const n = r.number, own = r.author === me;
       const p = await gh.pr(repo, n);
-      if (p.isDraft) return { acted: false, cache: true };
+      if (p.isDraft) {
+        // A draft gets no review; an answer waiting on it is closed as dropped, never left pending.
+        if (force) { for (const id of force) appliedAnswer(rs, id); log(`#${n}: draft; answers ${force.join(", ")} dropped`); }
+        return { acted: false, cache: true };
+      }
       const s = prState(rs, n);
       const seen = s.loopSeen ?? {};
       const mention = new RegExp(`@${me}(?![\\w-])`, "i");

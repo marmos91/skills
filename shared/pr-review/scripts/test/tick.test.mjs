@@ -389,5 +389,29 @@ test("pause during a tick stops the queue and keeps tick.json", async () => {
 
 test("asksReview: explicit requests only, not negated", () => {
   for (const t of ["please review", "@marmos91 can you review this?", "PTAL", "review this when you can", "could you re-review", "review again please"]) assert.ok(asksReview(t), t);
-  for (const t of ["don't review yet", "Please do not review this, still WIP", "the review found x", "I reviewed it", "reviewer said"]) assert.ok(!asksReview(t), t);
+  for (const t of ["don't review yet", "Please do not review this, still WIP", "the review found x", "I reviewed it", "reviewer said",
+    "I can't review this", "you cannot review it yet", "no need to review this", "do you want me to review this?", "shall I review it again?"]) assert.ok(!asksReview(t), t);
+});
+
+test("forced PR that is now a draft: answers dropped, not pending", async () => {
+  const rs = fresh();
+  withBaseline(rs);
+  answered(rs, 1, "post");
+  const gh = fakeGh({ rows: [row(1, ["reviewed-by"])] });
+  gh.pr = async () => ({ headSha: "sha1", author: "alice", isDraft: true, authorAssociation: "MEMBER" });
+  const lines = [];
+  const { f } = await go({ gh, log: (m) => lines.push(m) });
+  assert.equal(f.reviews.length, 0);
+  assert.deepEqual(pendingAnswers(rs), []);
+  assert.ok(lines.some((l) => /draft/.test(l)));
+});
+
+test("resumed queue: its PRs are not listed again in the same tick, forced or not", async () => {
+  const rs = fresh();
+  withBaseline(rs);
+  answered(rs, 8, "post");
+  writeAtomic(join(rs, "tick.json"), JSON.stringify({ startedAt: BEFORE, queue: [row(7, ["review-requested"]), row(8, ["review-requested"])], done: [7], current: 8 }));
+  const f = fakes();
+  await go({ gh: fakeGh({ rows: [row(7, ["review-requested"]), row(8, ["review-requested"])] }), f });
+  assert.deepEqual(f.reviews.map((r) => r.n), [8]);
 });
