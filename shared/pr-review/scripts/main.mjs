@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // CLI: pr-review review|answer|tick|status|doctor. Exit codes: 0 done, 1 usage or setup error, 3 questions wait, 4 a stage failed.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -103,7 +103,17 @@ function status(repo) {
   };
 }
 
-async function doctor(v, { runChild = realRunChild, askJev = realAskJev, findJev = realFindJev } = {}) {
+// The outbound scan runs `gitleaks stdin` when gitleaks is installed; an old gitleaks without it blocks every post.
+function gitleaksProbe(bin) {
+  const v = spawnSync(bin, ["version"], { encoding: "utf8" });
+  if (v.error || v.status !== 0) return ["WARN", "gitleaks: not found; the built-in secret patterns still apply"];
+  const version = v.stdout.trim();
+  const help = spawnSync(bin, ["--help"], { encoding: "utf8" });
+  if (!/^\s+stdin\s/m.test(`${help.stdout}${help.stderr}`)) return ["FAIL", `gitleaks ${version}: no "stdin" subcommand, so every post is held; upgrade gitleaks or remove it from PATH`];
+  return ["ok", `gitleaks ${version}`];
+}
+
+async function doctor(v, { runChild = realRunChild, askJev = realAskJev, findJev = realFindJev, gitleaks = "gitleaks" } = {}) {
   let repoText;
   try { repoText = execFileSync("git", ["show", "origin/HEAD:.pr-review.json"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }); } catch {}
   let config;
@@ -135,13 +145,14 @@ async function doctor(v, { runChild = realRunChild, askJev = realAskJev, findJev
     const { answer: a } = await askJev("The text says the sky is blue.", "The sky is blue.", { decider: { kind: "jev", confidence: 0 } }, { timeoutMs: 20000, skillDir: SKILL_DIR });
     line(a === "unsure" ? "WARN" : "ok", `jev: found at ${bin}, ${a === "unsure" ? "not answering" : "answering"}`);
   }
+  line(...gitleaksProbe(gitleaks));
   console.log(`claude mode: ${process.env.CLAUDE_CODE_OAUTH_TOKEN ? "--bare" : "--restricted"}`);
   const lenses = LENSES.filter((l) => config.lenses[l].enabled);
   for (const e of EFFORTS) console.log(`effort ${e}: ${plannedChildren(applyEffort(config, e), lenses)} children per PR`);
   return fail ? 1 : 0;
 }
 
-/** deps (tests): runChild, askJev, findJev for doctor. */
+/** deps (tests): runChild, askJev, findJev, gitleaks (binary) for doctor. */
 export async function main(argv, deps = {}) {
   const { values: v, positionals: [cmd, ...rest] } = parseArgs({
     args: argv, allowPositionals: true,

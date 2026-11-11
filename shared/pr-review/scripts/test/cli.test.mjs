@@ -169,3 +169,38 @@ test("--max-diff-lines takes a positive integer", () => {
   }
   assert.match(cli(fx, "review", "5", "--repo", "x/y", "--max-diff-lines", "5000").stderr, /not a clone of x\/y/);
 });
+
+test("doctor: gitleaks probe (missing -> WARN, no stdin subcommand -> FAIL, ok)", async (t) => {
+  const fx = fixture();
+  Object.assign(process.env, { XDG_STATE_HOME: fx.env.XDG_STATE_HOME, XDG_CONFIG_HOME: fx.env.XDG_CONFIG_HOME });
+  const gh = join(fx.root, "gh");
+  writeFileSync(gh, "#!/bin/sh\nexit 0\n");
+  chmodSync(gh, 0o755);
+  const oldGh = process.env.GH_BIN;
+  process.env.GH_BIN = gh;
+  t.after(() => { if (oldGh === undefined) delete process.env.GH_BIN; else process.env.GH_BIN = oldGh; });
+  const { main } = await import("../main.mjs");
+  const fake = (name, help) => {
+    const f = join(fx.root, name);
+    writeFileSync(`${f}.help`, help + "\n");
+    writeFileSync(f, `#!/bin/sh\ncase "$1" in version) echo 8.21.2 ;; --help) cat "${f}.help" ;; esac\n`);
+    chmodSync(f, 0o755);
+    return f;
+  };
+  const run = async (gitleaks) => {
+    const lines = [];
+    const m = t.mock.method(console, "log", (l) => lines.push(l));
+    const code = await main(["doctor"], { runChild: async () => ({ ok: true }), askJev: async () => ({ answer: "yes" }), findJev: () => "/x/jev", gitleaks });
+    m.mock.restore();
+    return { code, out: lines.join("\n") };
+  };
+  let r = await run(join(fx.root, "nope"));
+  assert.match(r.out, /WARN\s+gitleaks: not found; the built-in secret patterns still apply/);
+  assert.equal(r.code, 0);
+  r = await run(fake("old", "Available Commands:\n  detect      detect secrets\n  version     version"));
+  assert.match(r.out, /FAIL\s+gitleaks 8\.21\.2: no "stdin" subcommand/);
+  assert.equal(r.code, 1);
+  r = await run(fake("new", "Available Commands:\n  detect      detect secrets\n  stdin       detect secrets from stdin"));
+  assert.match(r.out, /ok\s+gitleaks 8\.21\.2/);
+  assert.equal(r.code, 0);
+});
