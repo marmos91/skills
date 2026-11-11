@@ -548,15 +548,27 @@ of total), an interrupted tick queue, and the paused flag.
 
 ## Live dry runs
 
-TODO: fill in from Task 15 Step 4 (`pr-review doctor`, then
-`pr-review review <n> --repo marmos91/skills --dry-run` on 3 real PRs, once
-with `round1: "per-seat"` and once with `"per-lens"`).
+Measured on 2026-11-11 with `--dry-run` (nothing posted), on marmos91/skills.
 
-| PR | `round1` | Effort | Children | Run time | Findings (agreed / split / rejected) | Notes |
+| PR | Seats | Effort | Children | Run time | Result | Notes |
 |---|---|---|---|---|---|---|
-| marmos91/skills#11 | per-seat | TODO | TODO | TODO | TODO | TODO |
-| marmos91/skills#11 | per-lens | TODO | TODO | TODO | TODO | TODO |
-| TODO | per-seat | TODO | TODO | TODO | TODO | TODO |
-| TODO | per-lens | TODO | TODO | TODO | TODO | TODO |
-| TODO | per-seat | TODO | TODO | TODO | TODO | TODO |
-| TODO | per-lens | TODO | TODO | TODO | TODO | TODO |
+| #10 (264 lines) | opus, mimir, mimir-pro (default council) | medium | 8 | 11 min 21 s | COMMENT: 3 must, 2 body questions | Round 1: opus 1 min 31 s, mimir-pro 6 min 44 s, mimir 9 min 21 s. Votes 17–32 s. No seat dropped |
+| #10 | opus, mimir and mimir-pro through pi | medium | 8 | 12 min 18 s | COMMENT: 1 must, 2 should, 2 body questions | Round 1 took 74% of the run |
+| #11 (3,722 lines) | default | medium | – | – | exit 1 | Above `review.max_diff_lines` (3000); run again with `--max-diff-lines 4000` |
+
+### Mimir thinking level
+
+A blind Opus judge checked every finding from 13 single-seat runs of round 1
+on #10 (5 real defects, 1 of them a must):
+
+| mimir thinking | Mean time | Real defects per run | Found the must | False findings |
+|---|---|---|---|---|
+| medium | 503 s | 1.67 | 2 of 3 | 30% |
+| low | 336 s | 0.67 | 0 of 3 | 25% |
+| off | 54 s | 0.50 | 0 of 4 | 56% |
+
+So Mimir seats think at their own level in round 1 and at `off` in the vote
+and merge stages (`thinking_by_stage`). mimir-pro reasons even at `off`, and
+at `medium` one round 1 took 21 minutes; the default council therefore caps
+it with `max_turns: 40` and `timeout_minutes: 15`, and a seat that hits a cap
+is dropped (the review then never approves).
