@@ -42,7 +42,10 @@ ISSUE_LABEL="${ISSUE_LABEL:-audit}"
 DRY_RUN="${DRY_RUN:-0}"
 # jev (shared/jev): cheap calibrated yes/no checks. auto = use it when on PATH; off = never.
 JEV="${JEV:-auto}"
-JEV_CONFIDENCE="${JEV_CONFIDENCE:-0.8}"
+# Live SystemOne confidence is low even on obvious answers (~0.26 for "the sky
+# is blue"), so the bar is 0.5. shortcut: not measured on real plans; tune it
+# once there is data on how often jev's "no" matches a real dropped finding.
+JEV_CONFIDENCE="${JEV_CONFIDENCE:-0.5}"
 # Project context for every child. Generic default; override per project.
 REPO_CTX="${REPO_CTX:-Context: this repo documents its stack, layout and house rules in AGENTS.md (and README) — read it first and follow its conventions: branch/PR workflow, commit style, test and lint commands, code style. Prefer the smallest complete diff; small pure modules; no speculative flexibility.}"
 
@@ -66,18 +69,25 @@ log()  { echo "fix: $*" >&2; }
 die()  { echo "fix: FATAL: $*" >&2; exit 1; }
 
 # jev_verdict <question> <text-file> -> prints yes | no | unsure.
-# unsure = jev off/missing/failed (exit 2) or confidence < JEV_CONFIDENCE;
+# unsure = jev off/missing, below JEV_CONFIDENCE, or no answer (exit 2);
 # callers keep their old behaviour on unsure, so jev only ever adds signal.
+# The first outage (exit 2 with an error on stderr) writes $STATE/jev-down and
+# turns jev off for the rest of the run, so a hung API costs one timeout.
 jev_verdict() {
-    if [ "$JEV" = off ] || ! command -v jev >/dev/null 2>&1; then echo unsure; return 0; fi
+    if [ "$JEV" = off ] || [ -e "$STATE/jev-down" ] || ! command -v jev >/dev/null 2>&1; then
+        echo unsure; return 0
+    fi
     _jrc=0
-    _jout="$(jev ask "$1" --json <"$2" 2>/dev/null)" || _jrc=$?
-    if [ "$_jrc" -gt 1 ]; then echo unsure; return 0; fi
-    printf '%s' "$_jout" | node -e '
-let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
-  try { const a=JSON.parse(s); console.log(a.confidence>=Number(process.argv[1]) ? a.verdict : "unsure"); }
-  catch { console.log("unsure"); }
-});' "$JEV_CONFIDENCE"
+    _jerr="$(jev ask "$1" --confidence "$JEV_CONFIDENCE" <"$2" 2>&1 >/dev/null)" || _jrc=$?
+    case "$_jrc" in
+        0) echo yes ;;
+        1) echo no ;;
+        *) if [ -n "$_jerr" ]; then
+               echo "$_jerr" >"$STATE/jev-down"
+               log "jev unavailable, off for the rest of this run: $_jerr"
+           fi
+           echo unsure ;;
+    esac
 }
 
 # plan_coverage_gaps <epic> -> one "<id>: <title>" line per finding jev is
@@ -164,6 +174,10 @@ ensure_worktree() {
 
 step_plan() {
     mkdir -p "$STATE/tmp"
+rm -f "$STATE/jev-down"   # a new run tries jev again
+if [ "${1:-}" = run ] && [ "$JEV" != off ] && command -v jev >/dev/null 2>&1; then
+    log "jev on: plan text and finding titles go to Mimir SystemOne for coverage checks (JEV=off to disable)"
+fi
     if [ ! -s "$STATE/plan.json" ]; then
         [ -n "$AUDIT_STATE" ] || die "AUDIT_STATE not set — point it at the audit state dir (holds epics.json + findings.json)"
         [ -s "$AUDIT_STATE/epics.json" ] || die "no epics.json in $AUDIT_STATE"
@@ -283,7 +297,9 @@ stage_planreview() {
         [ "$_ok" = 1 ] || die "plan review child failed for $_ep"
         _verdict="$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).verdict)' "$_dir/plan-review.tmp")"
         # second opinion on the reviewer's coverage check: a dropped finding is a defect
-        if [ "$_verdict" != revise ]; then
+        # only with a round left to act on it: on the last round a wrong "no"
+        # would turn an approved plan into "plan review loop exhausted"
+        if [ "$_verdict" != revise ] && [ "$_rounds" -lt "$PLAN_ROUNDS" ]; then
             _gaps="$(plan_coverage_gaps "$_ep")"
             if [ -n "$_gaps" ]; then
                 printf '%s\n' "$_gaps" | node -e '
@@ -706,7 +722,7 @@ GH_REPO="${GH_REPO:-$( ( cd "$REPO_DIR" && git remote get-url origin 2>/dev/null
 # derived vars are read inside backgrounded stage functions — export them so
 # subshells always inherit the same values even if the caller forgot export
 export STATE FIXROOT REPO_DIR AUDIT_STATE BASE_REF LENS SCRIPTS LIB GH_REPO
-export CONCURRENCY GATE_ROUNDS PLAN_ROUNDS EPIC_FILTER DRY_RUN ISSUE_LABEL
+export CONCURRENCY GATE_ROUNDS PLAN_ROUNDS EPIC_FILTER DRY_RUN ISSUE_LABEL JEV JEV_CONFIDENCE
 
 case "${1:-help}" in
     plan)   step_plan ;;
