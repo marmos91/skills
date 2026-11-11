@@ -64,4 +64,14 @@ check "jev_flag is idempotent" "$(cat "$STATE/E1/jev-flagged")" B
 check "saved gap not reported" "$(plan_coverage_gaps E1)" ""
 check "saved gap not asked" "$(calls)" "A C "
 
+# jev_save_revision: flag only after the plan is saved
+reset
+: >"$STATE/E1/jev-flagged"; echo new >"$STATE/E1/plan.tmp"
+jev_save_revision E1 "B: tb" "$STATE/E1/plan.tmp" "$STATE/E1/plan.md"
+check "save: plan saved and gap flagged" "$(cat "$STATE/E1/plan.md") $(cat "$STATE/E1/jev-flagged")" "new B"
+reset
+: >"$STATE/E1/jev-flagged"
+jev_save_revision E1 "B: tb" "$STATE/E1/plan.tmp" "$STATE/E1/plan.md" 2>/dev/null || true
+check "save fails: nothing flagged" "$(cat "$STATE/E1/jev-flagged")" ""
+
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

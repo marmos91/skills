@@ -293,10 +293,7 @@ fs.writeFileSync(f, JSON.stringify(r));' "$_dir/plan-review.tmp"
         } >"$_dir/plan-prompt-r$_rounds.txt"
         run_read "$PLAN_PROVIDER" "$PLAN_MODEL" "$PLAN_THINKING" "$_dir/plan-prompt-r$_rounds.txt" "$_dir/plan.tmp" "$(epic_worktree "$_ep")"
         [ -s "$_dir/plan.tmp" ] || die "plan revision child empty for $_ep"
-        mv "$_dir/plan.tmp" "$_dir/plan.md"
-        # only now is the revise round a gap caused on disk; a crash before
-        # this line re-asks jev on resume instead of skipping the finding
-        jev_flag "$_ep" "$_gaps"
+        jev_save_revision "$_ep" "$_gaps" "$_dir/plan.tmp" "$_dir/plan.md"
     done
     rm -f "$_dir/preview-prompt.txt" "$_dir/plan-review.tmp.err"
 }

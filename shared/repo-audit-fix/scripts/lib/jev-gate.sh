@@ -52,3 +52,8 @@ jev_flag() {
         grep -qxF "$_fid" "$_fdir/jev-flagged" 2>/dev/null || echo "$_fid" >>"$_fdir/jev-flagged"
     done
 }
+
+# jev_save_revision <epic> <gaps> <tmp> <dest> -> saves the revised plan, then
+# records the gaps: only once the revise round is on disk, so a crash before
+# the save re-asks jev on resume instead of skipping the finding.
+jev_save_revision() { mv "$3" "$4" && jev_flag "$1" "$2"; }
