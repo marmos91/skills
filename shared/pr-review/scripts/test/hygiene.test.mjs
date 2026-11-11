@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, renameSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -39,6 +39,14 @@ test("guidance asks for a linked issue and none is linked -> should", () => {
   assert.equal(run({ guidanceText: "Every PR must link an issue.", closingIssues: [] })[0].severity, "should");
   assert.deepEqual(run({ guidanceText: "Every PR must link an issue.", closingIssues: [3] }), []);
   assert.deepEqual(run({ closingIssues: [] }), []);
+});
+
+test("a Closes # trailer example in guidance is not a link request", () => {
+  assert.deepEqual(run({ guidanceText: "Trailer example: Closes #123", closingIssues: [] }), []);
+});
+
+test("Revert titles and subjects are exempt from the style check", () => {
+  assert.deepEqual(run({ title: 'Revert "feat: x"', commits: [{ sha: "eeeeeee", subject: 'Revert "feat: x"' }] }), []);
 });
 
 test("repo has CHANGELOG.md, code changed, changelog untouched -> nit", () => {
@@ -138,6 +146,16 @@ test("a failed child warns and keeps the code findings", async () => {
     assert.deepEqual(r.warnings, ["hygiene child failed"]);
     assert.ok(r.findings.length > 0);
   } finally { delete process.env.PR_REVIEW_FAKE; }
+});
+
+test("a setup error in the child block is a warning, not a throw", async () => {
+  const lens = new URL("../../lenses/hygiene.md", import.meta.url).pathname;
+  renameSync(lens, lens + ".bak");
+  try {
+    const r = await hygiene(frame, cfg, "medium");
+    assert.deepEqual(r.warnings, ["hygiene child failed"]);
+    assert.ok(r.findings.length > 0);
+  } finally { renameSync(lens + ".bak", lens); }
 });
 
 test("hygiene.enabled false -> no findings and no child", async () => {
