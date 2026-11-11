@@ -71,6 +71,35 @@ def main():
         assert captured["question"] == "is it about pasta?"
         assert captured["state_text"] == "about weather"
 
+    # no answer -> exit 2, never 1 ("no")
+    import io
+    import urllib.error
+    with patch.object(jev, "_secret", return_value="https://example.invalid/v1"):
+        down = urllib.error.URLError("refused")
+        with patch.object(jev.urllib.request, "urlopen", side_effect=down):
+            code, _ = run_main(["ask", "q?", "-t", "text"])
+            assert code == 2, code
+
+        class Resp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        for raw in (b"not json", b'{"error": "boom"}', b'{"answers": {"q": {"noul": 1}}}'):
+            with patch.object(jev.urllib.request, "urlopen", return_value=Resp(raw)):
+                code, _ = run_main(["ask", "q?", "-t", "text"])
+                assert code == 2, (raw, code)
+
+    with patch.object(jev, "_secret", return_value="not-a-url"):
+        code, _ = run_main(["ask", "q?", "-t", "text"])
+        assert code == 2, code
+
+    with patch.object(jev, "MIMIR_DIR", Path("/nonexistent-jev-test")):
+        code, _ = run_main(["doubt", "claim"])
+        assert code == 2, code
+
     print("test_jev: all assertions passed")
 
 

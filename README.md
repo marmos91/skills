@@ -29,9 +29,9 @@ by directory; the description drives automatic routing.
 | Skill | Agent | Purpose |
 |---|---|---|
 | repo-audit | both | Multi-lens whole-repo quality audit: cleanliness/design patterns, structure, over-engineering, dead code, tests, docs, UI coherence, security, AI-slop/hallucination, Postgres, API design, correctness. Adversarially-verified findings → epic roadmap → optional GH issues. Portable engine: headless `pi -p` children, resumable |
-| repo-audit-fix | both | Executes audit epics: research → architect plan → plan review → implement → 3-lens gate → PR per epic; wave-parallel worktrees, resumable |
+| repo-audit-fix | both | Executes audit epics: research → architect plan → plan review → implement → 3-lens gate → PR per epic; wave-parallel worktrees, resumable. Uses `jev` (when on PATH) as a second check for findings a plan drops and for untagged gate findings |
 | refute-root-cause | pi | Adversarial panel that tries to kill a claimed root cause before you fix on it |
-| jev | both | Ask Mimir SystemOne (Jev) typed yes/no questions, get calibrated probabilities and clean exit codes — one bash-invokable CLI for pi and Claude Code workflows |
+| jev | both | Ask Mimir SystemOne (Jev) typed yes/no questions, get calibrated probabilities and clean exit codes (0 yes, 1 no, 2 no answer) — one bash-invokable CLI for pi and Claude Code workflows; `install.sh` links it into `~/.local/bin` |
 
 (graphify and humanizer were removed from this repo — they exist upstream:
 `graphify install --platform pi|claude` from [Graphify-Labs/graphify](https://github.com/Graphify-Labs/graphify),
@@ -43,5 +43,6 @@ run under pi, Claude Code, or any agent with the `pi` CLI available.
 ## Conventions
 
 - Skill engines never fake success: a dead/empty child is a failed gate, never "no findings".
+- `jev` only adds signal: engines act on a confident yes/no and keep their old behaviour when jev is missing, down (exit 2) or unsure. `JEV=off` disables it; `JEV_CONFIDENCE` (default 0.8) sets the bar.
 - Resumable by on-disk markers; crash = retry, never silent skip.
 - Project-specific tuning lives in env vars (REPO_CTX, model routes, paths) — engines default generically.

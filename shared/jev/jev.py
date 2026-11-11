@@ -7,7 +7,9 @@ Reads the same sops-provisioned credentials as the Mimir gateway
 
 Exit codes encode the decision so scripts and agent playbooks can branch:
   ask:   0 = yes, 1 = no (with -e, exit 1 when confidence < the threshold)
-  doubt: 0 = trusted, 1 = doubted (confidence below threshold, default 0.5)
+  doubt: 0 = doubted, 1 = trusted (P(yes) below threshold, default 0.5)
+  any:   2 = no answer (missing credentials, API unreachable, bad response,
+         usage error) — never read 2 as "no"
 
 Wire format (mapped by probing {base-url}/systemone):
   POST {"state": {"text": ...},
@@ -29,17 +31,22 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import NoReturn
 
 MIMIR_DIR = Path.home() / ".config" / "mimir"
+
+
+def die(msg: str) -> NoReturn:
+    # 0/1 are answers; 2 = no answer (same code argparse uses for usage errors)
+    print(msg, file=sys.stderr)
+    sys.exit(2)
 
 
 def _secret(name: str) -> str:
     try:
         return (MIMIR_DIR / name).read_text().strip()
     except OSError:
-        sys.exit(
-            f"jev: cannot read ~/.config/mimir/{name}; run `rebuild` to provision it from sops"
-        )
+        die(f"jev: cannot read ~/.config/mimir/{name}; run `rebuild` to provision it from sops")
 
 
 def ask_noul(question: str, text: str) -> dict:
@@ -57,20 +64,25 @@ def ask_noul(question: str, text: str) -> dict:
             },
         }
     ).encode()
-    req = urllib.request.Request(
-        f"{base}/systemone",
-        data=body,
-        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-    )
     try:
+        req = urllib.request.Request(
+            f"{base}/systemone",
+            data=body,
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        )
         with urllib.request.urlopen(req, timeout=30) as r:
             resp = json.load(r)
     except urllib.error.HTTPError as e:
         detail = e.read().decode(errors="replace")[:500]
-        sys.exit(f"jev: HTTP {e.code} from SystemOne: {detail}")
-    except urllib.error.URLError as e:
-        sys.exit(f"jev: cannot reach SystemOne: {e.reason}")
-    return resp["answers"]["q"]
+        die(f"jev: HTTP {e.code} from SystemOne: {detail}")
+    except (OSError, ValueError) as e:  # URLError, timeouts, non-JSON body
+        die(f"jev: cannot get an answer from SystemOne: {e}")
+    try:
+        ans = resp["answers"]["q"]
+        float(ans["probabilities"]["yes"]), float(ans["confidence"])
+    except (KeyError, TypeError, ValueError):
+        die(f"jev: unexpected SystemOne response: {str(resp)[:300]}")
+    return ans
 
 
 def fmt_pct(p: float) -> str:

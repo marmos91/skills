@@ -42,6 +42,9 @@ jev doubt "This function has no side effects."
 - Exit codes: `ask` exits 0 for yes and 1 for no; with `-e` it also exits 1
   when confidence is below `--confidence` (default 0.5) instead of guessing.
   `doubt` exits 0 when the claim is doubted, 1 when trusted.
+  Both exit **2** when there is no answer (missing credentials, API down,
+  malformed response, usage error). Gate on 0/1 only; treat 2 as "jev
+  unavailable", never as "no".
 - `--json` prints the full answer object (`noul`, `probabilities`,
   `confidence`, plus the verdict flag) for workflows that need the numbers.
 

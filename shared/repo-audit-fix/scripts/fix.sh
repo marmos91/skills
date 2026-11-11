@@ -40,6 +40,9 @@ TIMEOUT="${TIMEOUT:-3600}"
 EPIC_FILTER="${EPIC_FILTER:-}"
 ISSUE_LABEL="${ISSUE_LABEL:-audit}"
 DRY_RUN="${DRY_RUN:-0}"
+# jev (shared/jev): cheap calibrated yes/no checks. auto = use it when on PATH; off = never.
+JEV="${JEV:-auto}"
+JEV_CONFIDENCE="${JEV_CONFIDENCE:-0.8}"
 # Project context for every child. Generic default; override per project.
 REPO_CTX="${REPO_CTX:-Context: this repo documents its stack, layout and house rules in AGENTS.md (and README) — read it first and follow its conventions: branch/PR workflow, commit style, test and lint commands, code style. Prefer the smallest complete diff; small pure modules; no speculative flexibility.}"
 
@@ -61,6 +64,41 @@ fi
 
 log()  { echo "fix: $*" >&2; }
 die()  { echo "fix: FATAL: $*" >&2; exit 1; }
+
+# jev_verdict <question> <text-file> -> prints yes | no | unsure.
+# unsure = jev off/missing/failed (exit 2) or confidence < JEV_CONFIDENCE;
+# callers keep their old behaviour on unsure, so jev only ever adds signal.
+jev_verdict() {
+    if [ "$JEV" = off ] || ! command -v jev >/dev/null 2>&1; then echo unsure; return 0; fi
+    _jrc=0
+    _jout="$(jev ask "$1" --json <"$2" 2>/dev/null)" || _jrc=$?
+    if [ "$_jrc" -gt 1 ]; then echo unsure; return 0; fi
+    printf '%s' "$_jout" | node -e '
+let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
+  try { const a=JSON.parse(s); console.log(a.confidence>=Number(process.argv[1]) ? a.verdict : "unsure"); }
+  catch { console.log("unsure"); }
+});' "$JEV_CONFIDENCE"
+}
+
+# plan_coverage_gaps <epic> -> one "<id>: <title>" line per finding jev is
+# confident the plan neither fixes nor explicitly skips. Each id is flagged at
+# most once per epic (jev-flagged), so a wrong "no" costs one revise round,
+# never an endless loop.
+plan_coverage_gaps() {
+    _dir="$(epic_dir "$1")"
+    touch "$_dir/jev-flagged"
+    node -e '
+const e=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
+for (const f of e.findings) console.log([f.id, f.title, f.what].map(x=>String(x||"").replace(/[\t\n]/g," ")).join("\t"));' "$_dir/epic.json" |
+    while IFS="$(printf '\t')" read -r _id _title _what; do
+        grep -qxF "$_id" "$_dir/jev-flagged" && continue
+        _v="$(jev_verdict "This plan fixes finding $_id ($_title: $_what), or states explicitly why that finding is skipped." "$_dir/plan.md")"
+        if [ "$_v" = no ]; then
+            echo "$_id" >>"$_dir/jev-flagged"
+            echo "$_id: $_title"
+        fi
+    done
+}
 
 # run_pi <provider> <model> <thinking> <tools> <prompt-file> <out-file> [cwd]
 run_pi() {
@@ -244,6 +282,21 @@ stage_planreview() {
         done
         [ "$_ok" = 1 ] || die "plan review child failed for $_ep"
         _verdict="$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).verdict)' "$_dir/plan-review.tmp")"
+        # second opinion on the reviewer's coverage check: a dropped finding is a defect
+        if [ "$_verdict" != revise ]; then
+            _gaps="$(plan_coverage_gaps "$_ep")"
+            if [ -n "$_gaps" ]; then
+                printf '%s\n' "$_gaps" | node -e '
+const fs=require("fs"); const f=process.argv[1];
+const r=JSON.parse(fs.readFileSync(f,"utf8"));
+const gaps=fs.readFileSync(0,"utf8").split("\n").filter(Boolean);
+r.verdict="revise";
+r.blocking=r.blocking.concat(gaps.map(g=>`Plan does not address finding ${g} (fix it or state why it is skipped).`));
+fs.writeFileSync(f, JSON.stringify(r));' "$_dir/plan-review.tmp"
+                _verdict=revise
+                log "plan review: jev flagged unaddressed findings in $_ep: $(printf '%s' "$_gaps" | tr '\n' ' ')"
+            fi
+        fi
         if [ "$_verdict" = "approved" ]; then
             mv "$_dir/plan-review.tmp" "$_dir/plan-review.json"
             echo ok >"$_dir/plan-approved"
