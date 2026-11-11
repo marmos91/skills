@@ -1,0 +1,40 @@
+{
+  "api user": { "stdout": { "login": "marmos91" } },
+  "pr view 5 -R o/r --json id,headRefOid,baseRefName,author,isDraft,body,title,closingIssuesReferences": {
+    "stdout": { "id": "PR_node1", "headRefOid": "abc123", "baseRefName": "main", "author": { "login": "alice" }, "isDraft": false, "body": "Fixes #7", "title": "Add thing", "closingIssuesReferences": [{ "number": 7 }] }
+  },
+  "api repos/o/r/pulls/5": { "stdout": { "author_association": "MEMBER" } },
+  "graphql Threads": { "stdout": { "data": { "repository": { "pullRequest": { "reviewThreads": {
+    "pageInfo": { "hasNextPage": false, "endCursor": null },
+    "nodes": [
+      { "id": "T1", "isResolved": false, "viewerCanResolve": true, "path": "a.js", "line": 10,
+        "comments": { "nodes": [
+          { "databaseId": 111, "author": { "login": "alice", "__typename": "User" }, "body": "nit", "createdAt": "2026-11-01T10:00:00Z" },
+          { "databaseId": 112, "author": { "login": "ci-bot", "__typename": "Bot" }, "body": "auto", "createdAt": "2026-11-01T11:00:00Z" } ] } }
+    ] } } } } } },
+  "graphql PendingReview": { "stdout": { "data": { "repository": { "pullRequest": { "reviews": { "nodes": [{ "id": "PRR_1" }] } } } } } },
+  "graphql Markers": { "stdout": { "data": { "viewer": { "login": "marmos91" }, "repository": { "pullRequest": {
+    "comments": { "nodes": [{ "body": "hi\n<!-- pr-review run=r1 sha=abc123 key=k1 -->", "author": { "login": "marmos91" } },
+                            { "body": "<!-- pr-review run=r1 sha=abc123 key=other -->", "author": { "login": "mallory" } }] },
+    "reviews": { "nodes": [{ "body": "", "author": { "login": "marmos91" }, "comments": { "nodes": [{ "body": "x key=k2 -->", "author": { "login": "marmos91" } }] } }] } } } } } },
+  "graphql PostReview": { "stdout": { "data": { "addPullRequestReview": { "pullRequestReview": { "url": "https://github.com/o/r/pull/5#pullrequestreview-1" } } } } },
+  "graphql ResolveThread": { "stdout": { "data": { "resolveReviewThread": { "thread": { "id": "T1", "isResolved": true } } } } },
+  "api -X POST repos/o/r/pulls/5/comments/111/replies --input -": { "stdout": { "id": 999 } },
+  "api repos/o/r/collaborators/alice/permission": { "stdout": { "permission": "write" } },
+  "api repos/o/r/collaborators/nobody/permission": { "stderr": "gh: Not Found (HTTP 404)", "exit": 1 },
+  "search prs --repo o/r --state open --draft=false --author marmos91 --limit 100 --json number,title,author,updatedAt": { "stdout": [{ "number": 5, "title": "Add thing", "author": { "login": "marmos91" }, "updatedAt": "2026-11-01T00:00:00Z" }] },
+  "search prs --repo o/r --state open --draft=false --review-requested marmos91 --limit 100 --json number,title,author,updatedAt": { "stdout": [{ "number": 5, "title": "Add thing", "author": { "login": "marmos91" }, "updatedAt": "2026-11-01T00:00:00Z" }, { "number": 6, "title": "Other", "author": { "login": "bob" }, "updatedAt": "2026-11-02T00:00:00Z" }] },
+  "search prs --repo o/r --state open --draft=false --reviewed-by marmos91 --limit 100 --json number,title,author,updatedAt": { "stdout": [] },
+  "search prs --repo o/r --state open --draft=false --mentions marmos91 --limit 100 --json number,title,author,updatedAt": { "stdout": [{ "number": 6, "title": "Other", "author": { "login": "bob" }, "updatedAt": "2026-11-02T00:00:00Z" }] },
+  "pr checks 5 -R o/r --json name,state,link,bucket,startedAt": { "stdout": [
+    { "name": "build", "state": "SUCCESS", "bucket": "pass", "link": "https://github.com/o/r/actions/runs/100/job/1", "startedAt": "2026-11-01T10:00:00Z" },
+    { "name": "lint", "state": "SKIPPED", "bucket": "skipping", "link": "", "startedAt": "2026-11-01T10:00:00Z" } ] },
+  "pr checks 6 -R o/r --json name,state,link,bucket,startedAt": { "exit": 1, "stdout": [
+    { "name": "build", "state": "FAILURE", "bucket": "fail", "link": "https://github.com/o/r/actions/runs/200/job/2", "startedAt": "2026-11-01T10:00:00Z" },
+    { "name": "e2e", "state": "PENDING", "bucket": "pending", "link": "https://github.com/o/r/actions/runs/201/job/3", "startedAt": "2026-11-01T10:05:00Z" } ] },
+  "pr checks 7 -R o/r --json name,state,link,bucket,startedAt": { "exit": 8, "stdout": [
+    { "name": "b", "state": "IN_PROGRESS", "bucket": "pending", "link": "https://github.com/o/r/actions/runs/300/job/4", "startedAt": "2026-11-01T10:09:00Z" },
+    { "name": "a", "state": "QUEUED", "bucket": "pending", "link": "https://github.com/o/r/actions/runs/301/job/5", "startedAt": "2026-11-01T10:07:00Z" } ] },
+  "pr checks 8 -R o/r --json name,state,link,bucket,startedAt": { "exit": 1, "stderr": "no checks reported on the 'x' branch\n" },
+  "run view 200 -R o/r --log-failed": { "stdout": "line1\nline2\nline3\nline4\n" }
+}
