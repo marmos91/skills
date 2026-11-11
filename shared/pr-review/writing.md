@@ -40,13 +40,14 @@ One finding per comment, in this order:
 2. The case in one line: input or situation, then the wrong result.
 3. A code snippet, or a GitHub `suggestion` block with the fixed lines.
 
-A finding from one seat, or one that the author must clarify, is a question:
-"question: Can `id` be empty here? If so, line 42 reads past the end."
+A finding marked `ask_author`, or one that the author must clarify, is a
+question: "question: Can `id` be empty here? If so, line 42 reads past the
+end." State each other agreed finding directly.
 
 ## Summary body
 
 1. What the PR does, in 2 sentences.
-2. The `must` items, one line each, with a link to the inline comment.
+2. The `must` items, one line each, with its `file:line`. Do not add links.
 3. Other items only when they cannot go inline.
 4. When points wait for the reviewer: "1 point is still open with the
    reviewer." Do not say why.

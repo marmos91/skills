@@ -28,7 +28,7 @@ Do not trust comments such as "validated upstream". Check the code.
 
 No concrete case, no finding. The case names the source, the sink, and the
 path with no effective check. Do not report hardening with no concrete
-impact, volumetric DoS, or test fixtures.
+impact, volumetric DoS, or test fixtures. No style taste, no "consider".
 
 Output: each finding has `"lens": "security"`; `evidence` is the source-to-sink trace.
 

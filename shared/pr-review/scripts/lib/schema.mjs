@@ -22,6 +22,7 @@ const stages = {
     if (!v || typeof v !== "object") return errs.push("value: not an object");
     list(v.findings, "findings", errs, finding);
     if (v.earlier !== undefined && !Array.isArray(v.earlier)) errs.push("earlier: must be an array");
+    if (v.no_tracking !== undefined && typeof v.no_tracking !== "boolean") errs.push("no_tracking: must be a boolean");
   },
   vote(v, errs) {
     list(v, "vote", errs, (x, p) => {
@@ -36,6 +37,7 @@ const stages = {
       if (!SEV.includes(x?.severity)) errs.push(`${p}.severity: must be ${SEV.join("|")}`);
       if (typeof x?.line !== "number") errs.push(`${p}.line: must be a number`);
       if (!Array.isArray(x?.found)) errs.push(`${p}.found: must be an array`);
+      if (x?.reverses !== undefined && !str(x.reverses)) errs.push(`${p}.reverses: must be a non-empty string`);
     });
   },
   compose(v, errs) {

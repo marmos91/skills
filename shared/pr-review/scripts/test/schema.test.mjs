@@ -19,3 +19,12 @@ test("validate covers the other stages", () => {
   assert.ok(validate("reply", { position: "x", body: "" }).length);
   assert.ok(validate("nope", {}).length);
 });
+test("validate(round1): no_tracking is an optional boolean", () => {
+  assert.deepEqual(validate("round1", { findings: [f], no_tracking: true }), []);
+  assert.ok(validate("round1", { findings: [f], no_tracking: "yes" }).length > 0);
+});
+test("validate(merge): reverses is an optional non-empty string", () => {
+  const c = { id: "a", lens: "l", severity: "nit", file: "f", line: 1, title: "t", found: [] };
+  assert.deepEqual(validate("merge", [{ ...c, reverses: "e1" }]), []);
+  assert.ok(validate("merge", [{ ...c, reverses: 3 }]).length > 0);
+});

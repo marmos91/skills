@@ -25,7 +25,7 @@ helper does the same job with the same edge cases.
 
 No concrete case, no finding. The case names the cost: "2 copies of the parse
 rule; a fix in one leaves the other wrong". Prefer fixes that delete code.
-Never propose a new layer, framework or config. No style taste.
+Never propose a new layer, framework or config. No style taste, no "consider".
 
 Output: each finding has `"lens": "simplification"`; `fix` says how many lines go.
 

@@ -23,7 +23,8 @@ Look for:
 
 Check the plan. Read the issue or plan in the context folder. Does the PR do
 all of it, and nothing else? A missing part or an unasked change is a finding.
-When there is no issue or plan, check the PR against its own description.
+When there is no issue or plan, check the PR against its own description,
+and set `no_tracking: true` in the output.
 If CI failed, read the failed log and connect the failure to a line.
 
 No concrete case, no finding. Re-read the lines before you report: confirm

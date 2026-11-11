@@ -33,6 +33,7 @@ you expect in `evidence`, with the trace that shows why.
 
 No concrete case, no finding. A risk that needs a future change to matter is
 not a finding. Style, names and structure are not findings for this lens.
+No "consider".
 
 Output: each finding has `"lens": "adversarial"`; `case` is input -> wrong result.
 
