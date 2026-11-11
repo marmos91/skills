@@ -39,6 +39,15 @@ DOUBT_QUESTION = "This claim is doubtful or likely false."
 LABELS = {"ask": ("yes", "no"), "doubt": ("doubted", "trusted")}
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    # urllib keeps the Authorization header across redirects; a 30x is an error
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def die(msg: str) -> NoReturn:
     # 0/1 are answers; 2 = no answer (same code argparse uses for usage errors)
     print(msg, file=sys.stderr)
@@ -73,7 +82,7 @@ def ask_noul(question: str, text: str) -> dict:
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+        with _OPENER.open(req, timeout=TIMEOUT) as r:
             resp = json.load(r)
     except urllib.error.HTTPError as e:
         die(f"jev: HTTP {e.code} from SystemOne: {e.read().decode(errors='replace')[:500]}")

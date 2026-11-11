@@ -41,10 +41,17 @@ class StubHandler(BaseHTTPRequestHandler):
         time.sleep(r.get("delay", 0))
         body = r["body"] if isinstance(r["body"], bytes) else json.dumps(r["body"]).encode()
         self.send_response(r.get("status", 200))
+        if "location" in r:
+            self.send_header("Location", r["location"])
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(r.get("length", len(body))))
         self.end_headers()
         self.wfile.write(body)
+
+    def do_GET(self):  # only reached if jev follows a redirect
+        self.server.requests.append({"path": self.path, "headers": self.headers, "body": b""})
+        self.send_response(404)
+        self.end_headers()
 
     def log_message(self, *args):
         pass
@@ -182,6 +189,12 @@ class JevCLI(unittest.TestCase):
             with self.subTest(name):
                 self.server.reply = reply
                 self.assertNoAnswer(self.jev("ask", "q?", "-t", "text", "--json"))
+
+    def test_redirect_is_not_followed(self):
+        # following it would send the Bearer key to the redirect target
+        self.server.reply = {"status": 302, "location": "/elsewhere", "body": b""}
+        self.assertNoAnswer(self.jev("ask", "q?", "-t", "text"))
+        self.assertEqual([r["path"] for r in self.server.requests], ["/v1/systemone"])
 
     def test_slow_api_times_out_as_no_answer(self):
         self.server.reply = {"body": answer(0.9, 0.1, 0.8), "delay": 2}

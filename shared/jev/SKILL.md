@@ -59,6 +59,8 @@ jev doubt "Water boils at 100 degrees Celsius at sea level." --json
 - When the decision matters, gate with `--confidence` or report the
   confidence from `--json`. Don't present a low-confidence yes as a verdict.
 - Not for open-ended questions, code generation, or anything that needs prose.
+- Never send secrets (tokens, keys, credentials, `.env` contents): the text
+  leaves the machine and goes to an external model API.
 
 Tests: `python3 -m unittest discover shared/jev` (stub server, no network).
 `JEV_LIVE=1` adds a smoke test against the real endpoint.
