@@ -1,0 +1,19 @@
+#!/bin/sh
+# pr-review-loop [owner/repo]          one loop run (repeat it with /loop, cron or launchd)
+# pr-review-loop pause|resume [owner/repo]
+# pr-review-loop answer [<id> <option>]
+set -e
+engine="$(dirname "$(realpath "$0")")/../../pr-review/scripts"
+case "${1:-}" in
+  pause|resume)
+    cmd=$1
+    repo=${2:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}
+    dir=$(node --input-type=module -e 'const { stateRoot } = await import(process.argv[1]); console.log(stateRoot(process.argv[2]));' "$engine/lib/state.mjs" "$repo")
+    if [ "$cmd" = pause ]; then
+      mkdir -p "$dir" && : > "$dir/paused" && echo "paused: $repo"
+    else
+      rm -f "$dir/paused" && echo "resumed: $repo"
+    fi ;;
+  answer) shift; exec "$engine/pr-review" answer "$@" ;;
+  *) exec "$engine/pr-review" tick "$@" ;;
+esac
