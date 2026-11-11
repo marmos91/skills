@@ -56,8 +56,10 @@ jev doubt "Water boils at 100 degrees Celsius at sea level." --json
 - A fast, calibrated yes/no about text you have (verify a claim, classify a
   log, gate a playbook step): use `jev ask` instead of asking a model and
   parsing its prose.
-- When the decision matters, gate with `--confidence` or report the
-  confidence from `--json`. Don't present a low-confidence yes as a verdict.
+- `confidence` does not predict whether the answer is right (it runs high on
+  "no" and low on "yes"), so a `--confidence` bar mostly drops right answers.
+  Wording the question well matters far more. Benchmark:
+  `bench/RESULTS.md`.
 - Not for open-ended questions, code generation, or anything that needs prose.
 - Never send secrets (tokens, keys, credentials, `.env` contents): the text
   leaves the machine and goes to an external model API.
