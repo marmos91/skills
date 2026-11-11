@@ -124,7 +124,16 @@ test("timeout kills the process group", async () => {
   await assert.rejects(runChild(base(claudeSeat, { timeoutMs: 500 })), ChildFailed);
   for (const f of ["gc.pid", "c.pid"]) {
     const pid = Number(readFileSync(join(dir, f), "utf8"));
-    assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+    // SIGKILL is delivered synchronously, but the orphaned grandchild is reaped by init
+    // asynchronously; until then it is a zombie that still answers kill(pid, 0).
+    const gone = async () => {
+      for (let i = 0; i < 100; i++) {
+        try { process.kill(pid, 0); } catch (e) { return e.code === "ESRCH"; }
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      return false;
+    };
+    assert.ok(await gone(), `pid ${pid} (${f}) still alive after 2s`);
   }
 });
 
