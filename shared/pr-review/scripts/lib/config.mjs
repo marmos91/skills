@@ -1,4 +1,9 @@
 import { readFileSync, existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+/** The user config file, read from the environment at call time. */
+export const userConfigPath = () => join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "pr-review", "config.json");
 
 export const LENSES = ["adversarial", "correctness", "simplification", "architecture", "security"];
 

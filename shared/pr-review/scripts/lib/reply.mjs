@@ -12,8 +12,8 @@ import { prState, savePrState, stateRoot } from "./state.mjs";
 
 const CORRECT = "The last comment in this thread, by the other party, is correct about this code.";
 const NEW_ARG = "This reply adds a new argument or new evidence.";
-// On public repos every user has "read" (Task 8 note).
-const COLLABORATOR = new Set(["write", "admin"]);
+// Permissions that count as a collaborator. On public repos every user has "read".
+export const COLLABORATOR = new Set(["write", "admin"]);
 
 const family = (s) => `${s.harness}|${s.model.split("/")[0]}`;
 const threadData = (t) => prData(JSON.stringify(t.comments.map((c) => ({ author: c.author, body: c.body })), null, 2), "the PR and its commenters");
@@ -21,7 +21,7 @@ const isSkip = (b) => b.replace(/[`\p{P}\s]/gu, "").toUpperCase() === "SKIP";
 
 /**
  * Answer the newest human comment of one review thread.
- * Extra inputs: frame (from frame()), config, runDir; injectable gh, runChild, jev, queue, stopping; routerUp (R1).
+ * Extra inputs: frame (from frame()), config, runDir; injectable gh, runChild, jev, queue, stopping; routerUp.
  * queue(item) gets { kind: "reply", reason, pr, sha, threadId, commentId, path, line, mode, positions?, hits? }.
  * -> { action: "replied"|"queued"|"skipped", resolved, queued: [items] }
  */

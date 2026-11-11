@@ -1,13 +1,12 @@
 // Review pipeline (spec 6): frame -> round1 -> merge -> round2 -> tally -> decide -> compose -> post.
 // Every child output and stage gets a marker (spec 8), so a rerun continues where the last run stopped.
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import * as github from "./github.mjs";
 import { runChild as realRunChild, ChildFailed, stopping } from "./child.mjs";
-import { LENSES, applyEffort, loadConfig, pickEffort, plannedChildren, seatId, seatsForLens } from "./config.mjs";
-import { frame as realFrame, git, HeadMoved, DiffTooLarge } from "./frame.mjs";
+import { LENSES, applyEffort, loadConfig, pickEffort, plannedChildren, seatId, seatsForLens, userConfigPath } from "./config.mjs";
+import { frame as realFrame, git, readTree, HeadMoved, DiffTooLarge } from "./frame.mjs";
 import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.mjs";
 import { tally } from "./tally.mjs";
 import { filterNew, fingerprint } from "./convergence.mjs";
@@ -103,10 +102,6 @@ function round1Jobs(config, lenses) {
   return jobs;
 }
 
-function readTree(dir) {
-  try { return readdirSync(dir, { recursive: true }).map((p) => join(dir, p)).filter((p) => statSync(p).isFile()).map((p) => readFileSync(p, "utf8")).join("\n\n"); } catch { return ""; }
-}
-
 // Code around a finding, for jev and questions. The path comes from a model: it must stay in the worktree.
 function hunk(f, c) {
   let file;
@@ -156,7 +151,7 @@ function ciState(c) {
 
 async function once(o, restart) {
   const { repo, n, mode, gh, log, repoState } = o;
-  const userPath = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "pr-review", "config.json");
+  const userPath = userConfigPath();
   const userConfig = config0({ userPath, cliPath: o.configPath }, o.maxDiffLines);
   let config = userConfig;
   const head = (await gh.pr(repo, n)).headSha;
@@ -215,7 +210,7 @@ async function once(o, restart) {
   const unanimousZero = outs.every((x) => x.v.findings.length === 0);
   if (o.until === "round1") return finish("round1");
 
-  // Merge (spec 6.4). R17: a cluster that reverses an earlier agreed finding is dropped and recorded.
+  // Merge (spec 6.4, 7.5 rule 4): a cluster that reverses an earlier agreed finding is dropped and recorded.
   const pst = pst0;
   const raw = Object.values(bySeat).some((x) => x.length)
     ? await child(ctx, "merge", "merge", { seat: config.judge, schema: "merge", prompt: () => mergePrompt(f, bySeat, pst.agreed ?? []) })
@@ -438,7 +433,7 @@ async function once(o, restart) {
     savePrState(repoState, n, st);
   }
 
-  // Spec 6.9: reply "Fixed in <sha>." and resolve. prState.resolved is the list reply.mjs reads too (R23 note).
+  // Spec 6.9: reply "Fixed in <sha>." and resolve. prState.resolved is the list reply.mjs reads too.
   for (const e of fixed) {
     st = prState(repoState, n);
     if ((st.resolved ?? []).includes(e.threadId)) continue;
@@ -473,7 +468,7 @@ function heldText(repoState, n, runId, fp) {
 }
 
 /**
- * Answers at a sha that was already reviewed: no pipeline and no new summary (spec 6.7, fix round 2).
+ * Answers at a sha that was already reviewed: no pipeline and no new summary (spec 6.7).
  * "drop" only closes the question. "post" / "ask-author" go out as inline comments in one small COMMENT review,
  * whose key comes from the answered fingerprints, so a rerun never posts it twice.
  */

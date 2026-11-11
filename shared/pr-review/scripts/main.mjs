@@ -2,17 +2,17 @@
 // CLI: pr-review review|answer|tick|status|doctor. Exit codes: 0 done, 1 usage or setup error, 3 questions wait, 4 a stage failed.
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { installSignalHandlers, runChild as realRunChild } from "./lib/child.mjs";
-import { DEFAULTS, EFFORTS, LENSES, applyEffort, loadConfig, plannedChildren, seatId } from "./lib/config.mjs";
+import { DEFAULTS, EFFORTS, LENSES, applyEffort, loadConfig, plannedChildren, seatId, userConfigPath } from "./lib/config.mjs";
 import { redact } from "./lib/secrets.mjs";
 import { askJev as realAskJev, findJev as realFindJev } from "./lib/decider.mjs";
 import { review, SetupError, STAGES } from "./lib/review.mjs";
 import { answer, markAsked, openQuestions, questionWarnings } from "./lib/questions.mjs";
-import { FINAL_STAGE, Locked, done, prState, stateRoot } from "./lib/state.mjs";
+import { FINAL_STAGE, Locked, alive, done, prState, stateRoot } from "./lib/state.mjs";
 import { remoteRepos } from "./lib/github.mjs";
 
 // The one signal path: stop the children, then exit; the lock is released on exit.
@@ -26,7 +26,6 @@ const USAGE = `usage: pr-review review [<n|url>] [--repo owner/repo] [--dry-run]
        pr-review tick [owner/repo]`;
 
 const SKILL_DIR = realpathSync(join(dirname(fileURLToPath(import.meta.url)), ".."));
-const USER_CONFIG = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "pr-review", "config.json");
 
 // --repo or the positional, else the GitHub remote of this folder (origin first). pr-review-loop uses the same rule.
 function repoOf(flag) {
@@ -62,7 +61,6 @@ class Usage extends Error {}
 
 const readJson = (f) => { try { return JSON.parse(readFileSync(f, "utf8")); } catch { return null; } };
 const ls = (d) => { try { return readdirSync(d); } catch { return []; } };
-const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; } };
 
 // Engine fields and file paths only: the PR's code stays in the fenced .md file; finding and sides are redacted there.
 function listQuestions(rs) {
@@ -117,7 +115,7 @@ async function doctor(v, { runChild = realRunChild, askJev = realAskJev, findJev
   let repoText;
   try { repoText = execFileSync("git", ["show", "origin/HEAD:.pr-review.json"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }); } catch {}
   let config;
-  try { config = loadConfig({ userPath: USER_CONFIG, cliPath: v.config, repoText }); } catch (e) { throw new Usage(e.message); }
+  try { config = loadConfig({ userPath: userConfigPath(), cliPath: v.config, repoText }); } catch (e) { throw new Usage(e.message); }
   // only known keys: unknown keys in a user file may hold secrets
   console.log(JSON.stringify(Object.fromEntries(Object.keys(DEFAULTS).map((k) => [k, config[k]])), null, 2));
   let fail = false;

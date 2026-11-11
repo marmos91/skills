@@ -28,7 +28,7 @@ function lens(name, trusted) {
     .replace(new RegExp(`<!-- /?${keep} -->\\n?`, "g"), "");
 }
 
-// Children run in a neutral folder (R9), so every path must be absolute.
+// Children run in a neutral folder, so every path must be absolute.
 function context(frame, extra = "", from) {
   for (const k of ["ctxDir", "worktree"]) {
     if (typeof frame[k] !== "string" || !isAbsolute(frame[k])) throw new Error(`frame.${k} must be an absolute path, got ${frame[k]}`);
@@ -111,7 +111,7 @@ export function votePrompt(frame, clusters) {
   ].join("\n");
 }
 
-// earlierAgreed: agreed findings of earlier reviews of this PR (spec 7.5 rule 4, R4).
+// earlierAgreed: agreed findings of earlier reviews of this PR (spec 7.5 rule 4).
 export function mergePrompt(frame, findingsBySeat, earlierAgreed = []) {
   return [
     "You are the judge of a review council. The seats reviewed the PR alone. Merge their findings into clusters.",

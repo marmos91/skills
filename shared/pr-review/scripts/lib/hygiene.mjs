@@ -1,9 +1,8 @@
 // PR hygiene check (spec 6.3.1): code checks plus one cheap judge-seat child.
-import { execFileSync } from "node:child_process";
-import { readFileSync, readdirSync, writeFileSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { EFFORT_AUTO_DEFAULTS, globMatch } from "./config.mjs";
-import { PR_DATA_NOTE } from "./frame.mjs";
+import { PR_DATA_NOTE, git, gitOk, readTree } from "./frame.mjs";
 import { hygienePrompt } from "./prompts.mjs";
 import { runChild } from "./child.mjs";
 
@@ -31,16 +30,10 @@ export function hygieneChecks({ title, body, commits, baseSubjects, changedPaths
   return out;
 }
 
-const git = (cwd, args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-const gitOk = (cwd, args) => { try { git(cwd, args); return true; } catch { return false; } };
 
 function unwrap(s, nonce) {
   const head = `<<<PR-DATA-${nonce}\n${PR_DATA_NOTE}\n`, tail = `\nPR-DATA-${nonce}>>>`;
   return typeof s === "string" && s.startsWith(head) && s.endsWith(tail) ? s.slice(head.length, -tail.length) : String(s ?? "");
-}
-
-function readAll(dir) {
-  try { return readdirSync(dir, { recursive: true }).map((p) => join(dir, p)).filter((p) => statSync(p).isFile()).map((p) => readFileSync(p, "utf8")).join("\n"); } catch { return ""; }
 }
 
 // Returns { findings, warnings }. A failed child is advisory: a warning, not an error.
@@ -54,7 +47,7 @@ export async function hygiene(frame, config, effort, { routerUp } = {}) {
   const findings = hygieneChecks({
     title: un(pr.title), body: un(pr.body), commits: (pr.commits ?? []).map((c) => ({ sha: String(c.sha), subject: un(c.subject) })), baseSubjects,
     changedPaths: frame.changedPaths, hasChangelog: gitOk(frame.worktree, ["cat-file", "-e", `${base}:CHANGELOG.md`]),
-    guidanceText: readAll(join(frame.ctxDir, "guidance")), closingIssues: pr.closingIssues ?? [],
+    guidanceText: readTree(join(frame.ctxDir, "guidance")), closingIssues: pr.closingIssues ?? [],
   });
   const warnings = [];
   if (effort !== "low") {

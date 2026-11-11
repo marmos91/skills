@@ -51,7 +51,7 @@ export function askJev(question, input, config, { env = process.env, timeoutMs =
       try { raw = JSON.parse(out); } catch { /* raw stays null */ }
       untrack(p.pid);
       killGroup(); // reap stragglers
-      // R22: older jev builds exit 1 on network errors, so settle only when the verdict agrees with the exit code.
+      // Older jev builds exit 1 on network errors, so settle only when the verdict agrees with the exit code.
       const yes = code === 0 && ["yes", "doubted"].includes(raw?.verdict);
       const no = code === 1 && ["no", "trusted"].includes(raw?.verdict);
       end({ answer: yes ? "yes" : no ? "no" : "unsure", raw });

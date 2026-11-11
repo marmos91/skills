@@ -24,7 +24,7 @@ export class Locked extends Error {
   constructor(pid) { super(`another pr-review run holds the lock (pid ${pid})`); this.name = "Locked"; this.pid = pid; }
 }
 
-function alive(pid) {
+export function alive(pid) {
   try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; }
 }
 

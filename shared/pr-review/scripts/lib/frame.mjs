@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, readdirSync, statSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join, dirname, normalize, isAbsolute } from "node:path";
 import * as github from "./github.mjs";
@@ -25,10 +25,14 @@ const SEVERITY = /^\s*\*\*(must|should|nit):\*\*/;
 
 export const git = (cwd, args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
 export const gitOk = (cwd, args) => { try { git(cwd, args); return true; } catch { return false; } };
+/** Every file under dir (ctx/guidance), joined; "" when the folder is missing. */
+export function readTree(dir) {
+  try { return readdirSync(dir, { recursive: true }).map((p) => join(dir, p)).filter((p) => statSync(p).isFile()).map((p) => readFileSync(p, "utf8")).join("\n\n"); } catch { return ""; }
+}
 const show = (cwd, ref, path) => { try { return git(cwd, ["show", `${ref}:${path}`]); } catch { return null; } };
 const json = (dir, name, v) => writeFileSync(join(dir, name), JSON.stringify(v, null, 2) + "\n");
 
-// shortcut: github.mjs has no issue, review or comment reader (Task 8 is frozen), so these call gh directly; move them there when it is next touched.
+// shortcut: github.mjs has no issue, review or comment reader, so these call gh directly; move them there when it is next touched.
 const ghApi = (args) => JSON.parse(execFileSync(process.env.GH_BIN || "gh", ["api", ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 }));
 const ghList = (path) => ghApi(["--paginate", "--slurp", path]).flat();
 
@@ -122,7 +126,7 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
 
   const threads = await gh.threads(repo, n);
   json(ctxDir, "threads.json", threads.map((t) => ({ ...t, comments: t.comments.map((c) => ({ ...c, body: mine(c.author, c.body) })) })));
-  // R3: the viewer's open earlier findings.
+  // The viewer's open earlier findings.
   json(ctxDir, "earlier.json", threads.filter((t) => !t.isResolved && t.comments[0]?.author === viewer).map((t) => ({
     threadId: t.id, commentId: t.comments[0].id, path: t.path, line: t.line, originalLine: t.originalLine, isOutdated: t.isOutdated,
     severity: SEVERITY.exec(t.comments[0].body ?? "")?.[1] ?? null, body: t.comments[0].body,
