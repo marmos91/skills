@@ -41,3 +41,20 @@ test("votes from the finder or from outsiders are ignored", () => {
   assert.equal(tally({ cluster: c, votes: [keep("b"), drop("a"), drop("zzz"), drop("zzz")] }), "agreed");
   assert.equal(tally({ cluster: c, votes: [drop("a"), drop("zzz"), drop("c")] }), "split");
 });
+
+test("evidence_run exemption is what flips rejected to split", () => {
+  const c = { found: ["a"], seats: ["a", "b", "c", "d", "e"] };
+  const votes = (ev) => [keep("b", ev), drop("c"), drop("d"), drop("e")];
+  assert.equal(tally({ cluster: c, votes: votes(true) }), "split");
+  assert.equal(tally({ cluster: c, votes: votes(false) }), "rejected");
+});
+test("duplicate votes and duplicate found seats count once", () => {
+  assert.equal(tally({ cluster: three([]), votes: [keep("b"), keep("b")] }), "split");
+  assert.equal(tally({ cluster: three(["a", "a"]), votes: [] }), "split");
+  assert.equal(tally({ cluster: three(["a"]), votes: [drop("b"), drop("b"), keep("c")] }), "split");
+});
+test("non-string counter_case abstains", () => {
+  const bad = (seat, cc) => ({ seat, vote: "drop", counter_case: cc, evidence_run: false });
+  assert.equal(tally({ cluster: three(["a"]), votes: [bad("b", null), bad("c", 42)] }), "split");
+  assert.equal(tally({ cluster: three(["a"]), votes: [bad("b", undefined), keep("c")] }), "agreed");
+});

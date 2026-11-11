@@ -3,10 +3,12 @@ export const votersFor = ({ found, seats }) => seats.filter((s) => !found.includ
 
 export function tally({ cluster, votes }) {
   const voters = new Set(votersFor(cluster));
-  const valid = votes.filter((v) => voters.has(v.seat));
-  const keeps = cluster.found.length + valid.filter((v) => v.vote === "keep").length;
+  const seen = new Set();
+  // only the first vote of each eligible seat counts
+  const valid = votes.filter((v) => voters.has(v.seat) && !seen.has(v.seat) && seen.add(v.seat));
+  const keeps = new Set(cluster.found).size + valid.filter((v) => v.vote === "keep").length;
   // a drop without a counter-case abstains
-  const drops = valid.filter((v) => v.vote === "drop" && v.counter_case?.trim()).length;
+  const drops = valid.filter((v) => v.vote === "drop" && typeof v.counter_case === "string" && v.counter_case.trim()).length;
   const evidence = valid.some((v) => v.vote === "keep" && v.evidence_run);
   if (drops * 2 > keeps + drops && !evidence) return "rejected";
   if (drops > 0) return "split";
