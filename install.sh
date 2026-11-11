@@ -6,6 +6,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")" && pwd)"
 PI_DIR="${PI_DIR:-$HOME/.pi/agent/skills}"
 CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude/skills}"
+BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
 
 link() { # link <src-dir> <dest-dir>
     local src="$1" dest="$2"
@@ -39,6 +40,13 @@ unlink() { # unlink <dest-dir>
     done
 }
 
+for l in "$BIN_DIR"/jev; do
+    [ -L "$l" ] || continue
+    case "$(readlink "$l")" in
+        "$REPO"/*) rm "$l"; echo "  removed bin/$(basename "$l")" ;;
+    esac
+done
+
 if [ "${1:-}" = "--rm" ]; then
     echo "Removing $REPO symlinks from agent skill dirs:"
     unlink "$PI_DIR"; unlink "$CLAUDE_DIR"
@@ -56,5 +64,14 @@ echo "Installing skills into:"
 echo "  pi: $PI_DIR";      install_group "$REPO/pi" "$PI_DIR"
 echo "  claude: $CLAUDE_DIR"; install_group "$REPO/claude" "$CLAUDE_DIR"
 echo "  shared -> both";     install_group "$REPO/shared" "$PI_DIR"; install_group "$REPO/shared" "$CLAUDE_DIR"
+
+# bin tools: link every executable skill script onto PATH (jev)
+mkdir -p "$BIN_DIR"
+for d in "$REPO/shared"/*/; do
+    d="${d%/}"
+    [ -d "$d/bin" ] && for b in "$d"/bin/*; do link "$b" "$BIN_DIR"; done
+    # skills that are name-matched single scripts (shared/<name>/<name>.py + jev shim)
+    [ -x "$d/jev" ] && link "$d/jev" "$BIN_DIR"
+done
 
 echo "Done. (Uninstall: ./install.sh --rm)"
