@@ -157,11 +157,13 @@ test("diff above the cap throws DiffTooLarge", async () => {
   await assert.rejects(run(fx, { config }), DiffTooLarge);
 });
 
-test("delta: last reviewed sha not an ancestor -> full review", async () => {
+test("delta: after a rebase the diff runs against the reviewed commit; an unknown sha gives a full review", async () => {
   const fx = fixture();
   stub(fx.head);
   const forced = await run(fx, { prState: { reviews: 1, lastReviewedSha: fx.old } });
-  assert.deepEqual(forced.delta, { base: null, isAncestor: false });
+  // not an ancestor (rebase/force-push), but the commit exists: delta.patch is the direct diff, so settled stays settled
+  assert.deepEqual(forced.delta, { base: fx.old, isAncestor: false });
+  assert.ok(existsSync(join(forced.ctxDir, "delta.patch")));
   assert.equal(forced.reviewNumber, 2);
   const inc = await run(fx, { prState: { reviews: 1, lastReviewedSha: fx.base } });
   assert.deepEqual(inc.delta, { base: fx.base, isAncestor: true });

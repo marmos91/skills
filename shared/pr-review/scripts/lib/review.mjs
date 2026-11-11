@@ -214,11 +214,12 @@ async function once(o, restart) {
     }
   };
   const ctx = { runDir, frame: f, runChild: o.runChild, routerUp: o.routerUp, config, dropped: isDropped, drop };
-  const tools = f.trusted ? "shell" : "read";
+  // a shell only for a trusted author, and only in jobs that run the adversarial lens (docs: trust rule 3)
+  const toolsFor = (j) => (f.trusted && j.lenses.includes("adversarial") ? "shell" : "read");
   const jobs = round1Jobs(config, run.lenses);
   const hygFile = join(runDir, "hygiene-result.json");
   const [outs, hyg] = await settled([
-    settled(jobs.map((j) => child(ctx, "round1", j.key, { seat: j.seat, tools, schema: "round1", lens: j.lenses.length === 1 ? j.lenses[0] : undefined, prompt: (s) => round1Prompt(f, j.lenses, s.max_turns) }).then((v) => ({ ...j, v })))).then((all) => all.filter((x) => x.v && !isDropped(x.seat))),
+    settled(jobs.map((j) => child(ctx, "round1", j.key, { seat: j.seat, tools: toolsFor(j), schema: "round1", lens: j.lenses.length === 1 ? j.lenses[0] : undefined, prompt: (s) => round1Prompt(f, j.lenses, s.max_turns) }).then((v) => ({ ...j, v })))).then((all) => all.filter((x) => x.v && !isDropped(x.seat))),
     existsSync(hygFile) ? readJson(hygFile) : o.hygiene(f, config, run.effort, { routerUp: o.routerUp }).then((h) => { save(hygFile, h); return h; }),
   ]);
   enoughSeats();
@@ -270,7 +271,7 @@ async function once(o, restart) {
   const ballots = await settled(voters.map((seat, i) => {
     const id = seatId(seat), mine = clusters.filter((c) => c.seats.includes(id) && !c.found.includes(id));
     if (!mine.length) return { id, votes: [] };
-    return child(ctx, "round2", `v~${i}`, { seat, tools, schema: "vote", prompt: (s) => votePrompt(f, mine.map(view), s.max_turns) }).then((votes) => ({ id, votes: votes ?? [] }));
+    return child(ctx, "round2", `v~${i}`, { seat, tools: "read", schema: "vote", prompt: (s) => votePrompt(f, mine.map(view), s.max_turns) }).then((votes) => ({ id, votes: votes ?? [] }));
   }));
   enoughSeats();
   markDone(runDir, "round2");
@@ -371,7 +372,7 @@ async function once(o, restart) {
   let ci = ciOf(f);
   const v = () => verdict({
     agreed: [...agreed, ...hygItems], earlierMustOpen: earlierAll.filter((e) => e.severity === "must" && !fixed.includes(e)).length,
-    openQuestions: open.length, splits: 0, failedLenses: run.missing?.length ?? 0, droppedSeats: run.dropped.length, ci: ci.state, mode, trustedAuthor: f.trusted, unanimousZero, ownPr: f.ownPr,
+    openQuestions: open.length, failedLenses: run.missing?.length ?? 0, droppedSeats: run.dropped.length, ci: ci.state, mode, trustedAuthor: f.trusted, unanimousZero, ownPr: f.ownPr,
   });
   const bodyOf = (outside, key) => [
     composed.body.trim(),

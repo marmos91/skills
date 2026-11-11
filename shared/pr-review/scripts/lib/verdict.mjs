@@ -9,7 +9,6 @@ export function verdict(i) {
   if (must || i.earlierMustOpen > 0) return { event: "REQUEST_CHANGES", queueApprove: false, reasons };
 
   if (i.openQuestions > 0) reasons.push("open questions");
-  if (i.splits > 0) reasons.push("splits");
   if (i.failedLenses > 0) reasons.push("failed lenses");
   if (i.droppedSeats > 0) reasons.push("dropped seats");
   if (i.agreed.length > 0) reasons.push("agreed findings");

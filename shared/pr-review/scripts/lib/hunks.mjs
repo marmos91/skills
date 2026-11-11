@@ -45,8 +45,7 @@ export function place(findings, hunks, permalinkBase) {
   for (const f of findings) {
     const kind = f.line == null ? undefined : hunks.get(f.file)?.right.get(f.line);
     if (kind) {
-      const text = kind === "add" || kind === "ctx" ? f.body : f.body.replace(FENCE, "$1");
-      inline.push({ path: f.file, line: f.line, side: "RIGHT", body: text });
+      inline.push({ path: f.file, line: f.line, side: "RIGHT", body: f.body }); // right holds only add/ctx lines
     } else {
       const head = f.body.replace(FENCE, "$1").split("\n")[0];
       const loc = f.line == null ? "" : `:${f.line}`;

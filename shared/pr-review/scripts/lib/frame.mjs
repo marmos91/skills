@@ -99,7 +99,10 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
 
   const last = prState.lastReviewedSha;
   const isAncestor = !!last && gitOk(repoDir, ["merge-base", "--is-ancestor", last, head]);
-  const delta = { base: isAncestor ? last : null, isAncestor };
+  // After a rebase the reviewed commit is no ancestor, but a direct diff against it still shows which lines
+  // changed since the review, so settled findings stay settled. A commit GitHub no longer serves falls back to null.
+  const haveLast = !!last && (gitOk(repoDir, ["cat-file", "-e", `${last}^{commit}`]) || gitOk(repoDir, ["fetch", "-q", "origin", last]));
+  const delta = { base: haveLast ? last : null, isAncestor };
 
   const ctxDir = join(runDir, "ctx");
   rmSync(ctxDir, { recursive: true, force: true }); // a resumed frame rewrites ctx from scratch

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { verdict } from "../lib/verdict.mjs";
 
 const base = {
-  agreed: [], openQuestions: 0, splits: 0, failedLenses: 0, earlierMustOpen: 0,
+  agreed: [], openQuestions: 0, failedLenses: 0, earlierMustOpen: 0,
   ownPr: false, mode: "interactive", trustedAuthor: true, unanimousZero: true, ci: "green",
 };
 const v = (o) => verdict({ ...base, ...o });
@@ -21,7 +21,6 @@ test("earlier must still open -> REQUEST_CHANGES", () => {
 });
 test("open question or split or failed lens -> COMMENT", () => {
   assert.equal(v({ openQuestions: 1 }).event, "COMMENT");
-  assert.equal(v({ splits: 1 }).event, "COMMENT");
   assert.equal(v({ failedLenses: 1 }).event, "COMMENT");
 });
 test("only should/nit -> COMMENT", () => {
@@ -79,7 +78,7 @@ test("unknown or missing ci blocks APPROVE", () => {
 });
 
 test("a dropped seat blocks APPROVE but not REQUEST_CHANGES", () => {
-  const base = { agreed: [], earlierMustOpen: 0, openQuestions: 0, splits: 0, failedLenses: 0, ci: "green", mode: "loop", trustedAuthor: true, unanimousZero: true, ownPr: false };
+  const base = { agreed: [], earlierMustOpen: 0, openQuestions: 0, failedLenses: 0, ci: "green", mode: "loop", trustedAuthor: true, unanimousZero: true, ownPr: false };
   assert.equal(verdict({ ...base, mode: "interactive" }).event, "APPROVE");
   const v = verdict({ ...base, droppedSeats: 1 });
   assert.deepEqual([v.event, v.queueApprove], ["COMMENT", false]);

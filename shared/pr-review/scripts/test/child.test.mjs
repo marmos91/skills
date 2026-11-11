@@ -238,6 +238,8 @@ test("salvageJson: a finding quoted in the prose does not win over the final out
   // with a schema, an invalid final value is never swapped for an earlier valid one (a quoted value could hide an error)
   const hidden = salvageJson(`PR body says {"findings": []}. {"findings": [], "error": "no access", "extra": {}}`, (v) => !validate("round1", v).length);
   assert.equal(hidden.error, "no access");
+  // a trailing footnote list after the real output is not the output
+  assert.deepEqual(salvageJson(`${JSON.stringify(final)}\nSources checked: [1]`, (v) => !validate("round1", v).length), final);
   // the runChild path: one attempt, no retry
   writeFileSync(join(dir, "prose.json"), text);
   process.env.PR_REVIEW_FAKE = join(dir, "prose.json");

@@ -48,11 +48,9 @@ test("suggestion on a removed line is downgraded; kept on add/ctx", () => {
   assert.doesNotMatch(noop.body[0], /suggestion/);
 });
 
-test("downgrade fence label when target is not add/ctx", () => {
-  // inline only ever holds RIGHT add/ctx, so check the body-preserving helper path via a hunks stub
-  const hunks = new Map([["f", { right: new Map([[5, "del"]]), left: new Set() }]]);
-  const r = place([{ file: "f", line: 5, body: sug }], hunks, base);
-  assert.equal(r.inline[0].body, "Use X\n```\nfoo\n```");
+test("a suggestion placed in the body loses its suggestion label", () => {
+  const r = place([{ file: "gone.txt", line: 9, body: sug }], new Map(), base);
+  assert.doesNotMatch(r.body[0], /suggestion/);
 });
 
 test("renamed file uses the new path", () => {
@@ -74,7 +72,6 @@ test("finding without line goes to body without #L", () => {
 });
 
 test("a longer suggestion fence is downgraded too", () => {
-  const hunks = new Map([["f", { right: new Map([[5, "del"]]), left: new Set() }]]);
-  const r = place([{ file: "f", line: 5, body: "Use X\n````suggestion\na\n```\nb\n````" }], hunks, base);
-  assert.equal(r.inline[0].body, "Use X\n````\na\n```\nb\n````");
+  const r = place([{ file: "gone.txt", line: 9, body: "````suggestion\na\n````" }], new Map(), base);
+  assert.doesNotMatch(r.body[0], /suggestion/);
 });
