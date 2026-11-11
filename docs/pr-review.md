@@ -331,13 +331,16 @@ PR content is untrusted: the diff, the body, comments, and every file in the
 PR head.
 
 1. **Children are isolated.** A claude seat runs
-   `claude -p --restricted --strict-mcp-config --tools Read,Grep,Glob`
-   (`--bare` instead of `--restricted` when `CLAUDE_CODE_OAUTH_TOKEN` is set).
+   `claude -p --restricted --strict-mcp-config --tools Read,Grep,Glob`, with
+   your login or a `CLAUDE_CODE_OAUTH_TOKEN` from the environment.
    The file tools have no allow rule, so they read only the child's folder and
    the `--add-dir` folders: the worktree and the run's `ctx` folder. Deny rules block `~/.ssh`, `~/.config`, `~/.aws`
    and `~/.gnupg` on top.
    A pi seat runs
    `pi -p --no-session --no-context-files --no-extensions --no-skills --no-mcp --tools read,grep,find,ls < /dev/null`.
+   pi has no file sandbox, so a pi seat (and an `auto` seat that falls back to
+   pi) runs only for a trusted author. For other authors such a seat fails,
+   and the review stops with exit 4 rather than risk a local file in a post.
    The prompt goes on stdin, never on the command line.
 2. **Children get a clean environment.** The environment is an allowlist.
    `GH_TOKEN`, `GITHUB_PERSONAL_ACCESS_TOKEN` and `AWS_*` never reach a child.

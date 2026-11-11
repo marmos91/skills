@@ -16,7 +16,7 @@ const prompt = join(dir, "prompt.txt");
 writeFileSync(prompt, "SECRET-PROMPT-TEXT");
 process.env.PATH = `${bin}:${process.env.PATH}`;
 const OK = '{"position":"ask","body":"b"}';
-const base = (seat, extra = {}) => ({ seat, promptFile: prompt, outFile: join(dir, "out.json"), cwd: dir, timeoutMs: 5000, retries: 0, ...extra });
+const base = (seat, extra = {}) => ({ seat, promptFile: prompt, outFile: join(dir, "out.json"), cwd: dir, timeoutMs: 5000, retries: 0, trusted: true, ...extra });
 const claudeSeat = { harness: "claude", model: "opus", thinking: "high" };
 const piSeat = { harness: "pi", model: "cubbit/mimir", thinking: "high" };
 
@@ -52,13 +52,20 @@ test("pi adapter attaches the prompt as a file and omits an empty provider", asy
   assert.match(a, new RegExp(`@${prompt}`));
 });
 
-test("claude --bare keeps --strict-mcp-config when an OAuth token is set", async () => {
+test("an OAuth token keeps --restricted (file tools stay confined); never --bare", async () => {
   stub("claude", `echo "$@" >"${dir}/argv"; printf '%s' '${OK}'`);
   process.env.CLAUDE_CODE_OAUTH_TOKEN = "t";
   try { await runChild(base(claudeSeat)); } finally { delete process.env.CLAUDE_CODE_OAUTH_TOKEN; }
   const a = readFileSync(join(dir, "argv"), "utf8");
-  assert.match(a, /--bare --strict-mcp-config/);
-  assert.doesNotMatch(a, /--restricted/);
+  assert.match(a, /--restricted --strict-mcp-config/);
+  assert.doesNotMatch(a, /--bare/);
+});
+
+test("pi seats run only for trusted authors (pi has no file sandbox)", async () => {
+  stub("pi", `printf '%s' '${OK}'`);
+  await assert.rejects(runChild(base(piSeat, { trusted: false, routerUp: false })), (e) => e instanceof ChildFailed && /no file sandbox/.test(e.message));
+  await assert.rejects(runChild(base({ harness: "auto", model: "cubbit/mimir", thinking: "high" }, { trusted: false, routerUp: false })), /no file sandbox/);
+  assert.ok(await runChild(base(piSeat, { routerUp: false })));
 });
 
 test("cwd is a neutral folder; the worktree is added via --add-dir", async () => {

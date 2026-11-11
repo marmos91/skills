@@ -40,7 +40,7 @@ The skills:
 
 | Tool | Used by |
 |---|---|
-| `pi` CLI | `repo-audit`, `repo-audit-fix`, `review-lens.sh` (headless `pi -p` children); `refute-root-cause` (pi `subagent` tool); `pr-review` seats with `harness: pi`, and `auto` seats when no router answers |
+| `pi` CLI | `repo-audit`, `repo-audit-fix`, `review-lens.sh` (headless `pi -p` children); `refute-root-cause` (pi `subagent` tool); `pr-review` seats with `harness: pi`, and `auto` seats when no router answers (pi seats run only for trusted authors) |
 | `gh` (logged in) | `audit.sh issues`, `fix.sh plan` (issue map), `fix.sh` PR stage; `pr-review` and `pr-review-loop`: all GitHub reads and posts |
 | `node` | JSON steps in `audit.sh` and `fix.sh`; the `pr-review` engine |
 | `claude` CLI | `pr-review` seats with `harness: claude` (the default judge and first seat) |
@@ -232,9 +232,9 @@ Run `pr-review doctor` to probe each seat.
 
 ### A claude seat says "Not logged in"
 
-`claude -p --bare` drops the normal login. The engine uses `--bare` only when
-`CLAUDE_CODE_OAUTH_TOKEN` is set, and `--restricted` otherwise.
-Run `claude setup-token` and export the token, or unset a stale one.
+Seats run `claude -p --restricted`, which uses your normal login or a
+`CLAUDE_CODE_OAUTH_TOKEN` from the environment. Run `claude setup-token` and
+export the token for unattended runs, or unset a stale one.
 
 ### The review says `Locked`
 

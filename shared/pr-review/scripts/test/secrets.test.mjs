@@ -17,6 +17,10 @@ const cases = {
   jwt: "eyJ" + r("a", 10) + ".eyJ" + r("b", 10) + "." + r("c", 10),
   "age-secret-key": "AGE-SECRET-KEY-1" + r("Q", 58),
   bearer: "Bearer " + r("z", 24),
+  "anthropic-key": "sk-ant-api03-" + r("A", 30),
+  "openai-key": "sk-proj-" + r("B", 40),
+  "stripe-key": "sk_live_" + r("C", 24),
+  "slack-webhook": "https://hooks.slack.com/services/" + r("T", 9) + "/" + r("B", 11) + "/" + r("x", 24),
 };
 
 for (const [kind, secret] of Object.entries(cases)) {

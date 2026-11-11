@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { accessSync, constants, realpathSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { redact } from "./secrets.mjs";
+import { redact, scanOutbound } from "./secrets.mjs";
 import { ENV_OK } from "./env.mjs";
 import { track, untrack } from "./child.mjs";
 
@@ -34,6 +34,9 @@ export function askJev(question, input, config, { env = process.env, timeoutMs =
   skillDir ??= realpathSync(join(dirname(fileURLToPath(import.meta.url)), "..", ".."));
   const bin = findJev(skillDir, env);
   if (!bin) return Promise.resolve(unsure);
+  // jev is an outbound service: the same scan as a post; a hit after redaction means no jev call
+  const text = redact(input);
+  if (!scanOutbound(text, { timeoutMs: 10000 }).ok) return Promise.resolve(unsure);
   env = Object.fromEntries(Object.entries(env).filter(([k]) => ENV_OK.test(k)));
   const args = ["ask", question, "--json", ...(confidence > 0 ? ["--confidence", String(confidence)] : [])];
   return new Promise((resolve) => {
@@ -56,7 +59,7 @@ export function askJev(question, input, config, { env = process.env, timeoutMs =
       const no = code === 1 && ["no", "trusted"].includes(raw?.verdict);
       end({ answer: yes ? "yes" : no ? "no" : "unsure", raw });
     });
-    p.stdin.end(redact(input));
+    p.stdin.end(text);
   });
 }
 

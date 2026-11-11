@@ -118,7 +118,7 @@ test("doctor: a seat whose probe fails is named and the exit is 1", async (t) =>
   assert.match(out, /FAIL\s+seat pi:bad\/model: exit 1: no such model/);
   assert.match(out, /ok\s+seat claude:opus/);
   assert.match(out, /WARN\s+jev: not found/);
-  assert.match(out, /claude mode: --(bare|restricted)/);
+  assert.match(out, /claude mode: --restricted/);
   assert.match(out, /effort low: \d+ children per PR/);
   assert.ok(!out.includes("zz-unknown-key-value"), "unknown config keys are not printed");
   assert.ok(!out.includes("ghp_" + "a".repeat(36)), "child errors are redacted");

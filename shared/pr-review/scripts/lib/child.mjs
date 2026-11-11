@@ -116,10 +116,13 @@ function runOnce(script, args, env, cwd, timeoutMs) {
 
 // retries = extra attempts after the first.
 // The pi harness has no turn limit: there the timeout is the only bound on a long tool loop.
-export async function runChild({ seat, tools = "read", promptFile, outFile, worktree, ctxDir, schema, timeoutMs = (seat.timeout_minutes ?? 10) * 60000, retries = 2, routerUp, droppable = false }) {
+export async function runChild({ seat, tools = "read", promptFile, outFile, worktree, ctxDir, schema, timeoutMs = (seat.timeout_minutes ?? 10) * 60000, retries = 2, routerUp, droppable = false, trusted = false }) {
   const fake = process.env.PR_REVIEW_FAKE;
   let harness = seat.harness;
   if (!fake && harness === "auto") harness = resolveHarness(seat, routerUp ?? (await probeRouter()));
+  // pi has no file sandbox (no add-dir confinement or deny rules): a prompt injection in an untrusted PR could
+  // read any local file into a finding, so pi seats run only for trusted authors; fail closed otherwise.
+  if (!fake && harness === "pi" && !trusted) throw new ChildFailed(`${seat.harness}:${seat.model}: the pi harness has no file sandbox and runs only for trusted authors`);
   const script = join(HARNESS_DIR, `${fake ? "fake" : harness}.sh`);
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => ENV_OK.test(k)));
   if (worktree) env.SEAT_WORKTREE = worktree;

@@ -4,12 +4,9 @@ set -eu
 model=$1 thinking=$2 tools=$3 prompt=$4 out=$5
 list="Read,Grep,Glob"
 [ "$tools" = shell ] && list="$list,Bash"
-# --bare drops the login unless a token is set; prompt goes on stdin because --tools swallows a trailing arg.
-if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
-  set -- --bare --strict-mcp-config
-else
-  set -- --restricted --strict-mcp-config
-fi
+# Always --restricted: it keeps the file tools confined (--bare does not). A CLAUDE_CODE_OAUTH_TOKEN in the env
+# still logs in. The prompt goes on stdin because --tools swallows a trailing arg.
+set -- --restricted --strict-mcp-config
 # --restricted confines the file tools to the cwd (the stage folder) and these folders.
 [ -n "${SEAT_WORKTREE:-}" ] && set -- "$@" --add-dir "$SEAT_WORKTREE"
 [ -n "${SEAT_CTX:-}" ] && set -- "$@" --add-dir "$SEAT_CTX"

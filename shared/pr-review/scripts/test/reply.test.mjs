@@ -245,6 +245,8 @@ test("askJev: settles only when the verdict matches the exit code; missing jev -
   make("yes", 0);
   assert.equal((await askJev("Q?", "text ghp_" + "a".repeat(36), config, { env, skillDir })).answer, "yes");
   assert.ok(!readFileSync(join(dir, "in"), "utf8").includes("ghp_"), "payload is redacted");
+  assert.equal((await askJev("Q?", "key sk-ant-api03-" + "Z".repeat(30), config, { env, skillDir })).answer, "yes");
+  assert.ok(!readFileSync(join(dir, "in"), "utf8").includes("sk-ant-"), "an Anthropic key never reaches jev");
   assert.match(readFileSync(join(dir, "argv"), "utf8"), /^ask Q\? --json$/m);
   make("no", 1);
   assert.equal((await askJev("Q?", "t", config, { env, skillDir })).answer, "no");

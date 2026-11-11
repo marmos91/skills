@@ -15,6 +15,10 @@ const PATTERNS = [
   ["jwt", new RegExp(`${L}eyJ[A-Za-z0-9_-]{8,}\\.eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}`, "g")],
   ["age-secret-key", /AGE-SECRET-KEY-1[0-9A-Z]{58}/g],
   ["bearer", new RegExp(`${L}bearer\\s+[A-Za-z0-9._~+/-]{20,}=*`, "gi")],
+  ["anthropic-key", new RegExp(`${L}sk-ant-[A-Za-z0-9_-]{20,}`, "g")],
+  ["openai-key", new RegExp(`${L}sk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{32,}`, "g")],
+  ["stripe-key", new RegExp(`${L}[rs]k_live_[A-Za-z0-9]{16,}`, "g")],
+  ["slack-webhook", /https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/_-]{20,}/g],
 ];
 
 const mask = (s) => `${String(s).slice(0, 4)}…`;

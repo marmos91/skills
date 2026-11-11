@@ -130,7 +130,7 @@ async function doctor(v, { runChild = realRunChild, askJev = realAskJev, findJev
     const results = await Promise.allSettled([...seats.values()].map((seat, i) => {
       const promptFile = join(dir, `${i}.prompt`);
       writeFileSync(promptFile, 'Reply with exactly this JSON and nothing else: {"ok": true}\n');
-      return runChild({ seat, promptFile, outFile: join(dir, `${i}.json`), timeoutMs: 60000, retries: 0 });
+      return runChild({ seat, trusted: true, promptFile, outFile: join(dir, `${i}.json`), timeoutMs: 60000, retries: 0 }); // a probe reads no PR
     }));
     [...seats.keys()].forEach((id, i) => results[i].status === "fulfilled" ? line("ok", `seat ${id}`) : line("FAIL", `seat ${id}: ${redact(String(results[i].reason?.message))}`));
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -146,7 +146,7 @@ async function doctor(v, { runChild = realRunChild, askJev = realAskJev, findJev
     line(a === "unsure" ? "WARN" : "ok", `jev: found at ${bin}, ${a === "unsure" ? "not answering" : "answering"}`);
   }
   line(...gitleaksProbe(gitleaks));
-  console.log(`claude mode: ${process.env.CLAUDE_CODE_OAUTH_TOKEN ? "--bare" : "--restricted"}`);
+  console.log(`claude mode: --restricted (${process.env.CLAUDE_CODE_OAUTH_TOKEN ? "CLAUDE_CODE_OAUTH_TOKEN" : "login"})`);
   const lenses = LENSES.filter((l) => config.lenses[l].enabled);
   for (const e of EFFORTS) console.log(`effort ${e}: ${plannedChildren(applyEffort(config, e), lenses)} children per PR`);
   return fail ? 1 : 0;
