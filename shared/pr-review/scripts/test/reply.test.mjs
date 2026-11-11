@@ -132,7 +132,10 @@ test("disagreement -> jev settles: yes means accept", async () => {
   const jev = async (q, text) => { asked.push({ q, text }); return "yes"; };
   const { out, run } = await go({ t, jev, answers: { draft: pos("push_back"), challenge: pos("accept"), compose: pos("accept", "Agreed, the handle leaks.") } });
   assert.equal(out.action, "replied");
-  assert.equal(asked[0].q, "The reviewer's comment is correct about this code.");
+  assert.equal(asked[0].q, "The last comment in this thread, by the other party, is correct about this code.");
+  assert.match(asked[0].text, /^The other party is bob, the PR author\. We are marmos91\./);
+  assert.match(asked[0].text, /<<<PR-DATA-[0-9a-f]{8}\n/, "thread goes in the nonce wrapper");
+  assert.doesNotMatch(asked[0].text, /<thread>/);
   assert.match(run.calls[2].prompt, /"position": "accept"/);
 });
 
@@ -205,8 +208,7 @@ test("accepted point on own PR -> reply + todo.md, stays open", async () => {
   const { out, gh } = await go({ t, frame: { ownPr: true }, answers: { draft: pos("accept"), challenge: pos("accept"), compose: pos("accept", "Agreed, I will change this.") } });
   assert.deepEqual([out.action, out.resolved, gh.calls.resolve], ["replied", false, []]);
   const todo = readFileSync(join(stateRoot(REPO), "todo.md"), "utf8");
-  assert.match(todo, /^- \[ \] PR #5 src\/a\.js:10 \(thread T1\): Agreed, I will change this\.$/m);
-  assert.ok(!todo.includes("leaks the handle"), "reviewer text stays out of engine text");
+  assert.equal(todo, "- [ ] PR #5 src/a.js:10: accepted review point, change pending. https://github.com/o/r/pull/5#discussion_r112\n");
 });
 
 test("default queue records to the returned object", async () => {
@@ -245,4 +247,78 @@ test("askJev: settles only when the verdict matches the exit code; missing jev -
   assert.equal(await askJev("Q?", "t", config, { env, skillDir }), "unsure");
   assert.equal(await askJev("Q?", "t", config, { env: { PATH: "/nonexistent" }, skillDir }), "unsure");
   assert.equal(await askJev("Q?", "t", { ...config, decider: { kind: "off", confidence: 0.5 } }, { env, skillDir }), "unsure");
+});
+
+test("jev roles: own PR names the reviewer; others' PR: Marco's finding stands unless jev says the author is right", async () => {
+  const split = { draft: pos("push_back"), challenge: pos("accept"), compose: pos("x", "Reply.") };
+  let asked = [];
+  const jevSays = (v) => async (q, text) => { asked.push(text); return v; };
+  let r = await go({ t: thread([human(112, "rev")]), frame: { ownPr: true }, jev: jevSays("no"), answers: split });
+  assert.match(asked[0], /^The other party is rev, the reviewer\./);
+  assert.match(r.run.calls[2].prompt, /"position": "push_back"/);
+  const finding = () => thread([human(111, ME, "**must:** leak"), human(112, "alice", "Not a leak.")]);
+  r = await go({ t: finding(), jev: jevSays("no"), answers: split });
+  assert.match(asked[1], /^The other party is alice, the PR author\./);
+  assert.match(r.run.calls[2].prompt, /"position": "push_back"/);
+  assert.deepEqual([r.out.resolved, r.gh.calls.resolve], [false, []], "Marco's finding is not conceded");
+  r = await go({ t: finding(), jev: jevSays("yes"), answers: split });
+  assert.match(r.run.calls[2].prompt, /"position": "accept"/);
+  assert.deepEqual([r.out.resolved, r.gh.calls.resolve], [true, ["T1"]]);
+});
+
+test("jev picks a side no seat drafted -> queued as unsure", async () => {
+  const { out, gh, queued } = await go({ t: thread([human(112)]), jev: async () => "yes", answers: { draft: pos("push_back"), challenge: pos("ask") } });
+  assert.equal(out.action, "queued");
+  assert.equal(gh.calls.reply.length, 0);
+  assert.equal(queued[0].reason, "unsure");
+});
+
+test("never resolve a mention thread between other people", async () => {
+  const agree = { draft: pos("accept"), challenge: pos("accept"), compose: pos("accept", "Right.") };
+  const r = await go({ t: thread([human(111, "bob"), human(112, "carol")]), answers: agree });
+  assert.deepEqual([r.out.action, r.out.resolved, r.gh.calls.resolve], ["replied", false, []]);
+});
+
+test("SKIP is normalised before the check", async () => {
+  for (const b of ["`SKIP`", "skip.", " Skip! "]) {
+    const { out, gh } = await go({ t: thread([human(112)]), answers: { draft: pos("ask"), challenge: pos("ask"), compose: pos("ask", b) } });
+    assert.deepEqual([out.action, gh.calls.reply.length], ["skipped", 0], b);
+  }
+});
+
+test("budget queue item carries the last comment of each side", async () => {
+  const { runDir, frame } = setup();
+  savePrState(stateRoot(REPO), N, { ...prState(stateRoot(REPO), N), replies: { T1: 2 } });
+  const t = thread([human(111, ME, "**must:** leak"), human(112, "bob", "no"), human(113, ME, "yes it is"), human(114, "bob", "still no")]);
+  const out = await reply({ repo: REPO, n: N, threadId: "T1", mode: "loop", frame, config, runDir, gh: fakeGh(t), runChild: fakeRun({}) });
+  assert.deepEqual(out.queued[0].positions, [
+    { side: "ours", commentId: 113, body: "yes it is" },
+    { side: "theirs", author: "bob", commentId: 114, body: "still no" },
+  ]);
+});
+
+test("resolved thread: a new comment counts only after our reply", async () => {
+  const agree = { draft: pos("ask"), challenge: pos("ask"), compose: pos("ask", "Which caller?") };
+  let r = await go({ t: thread([human(111, "bob"), human(112, "carol")], { isResolved: true }), answers: agree });
+  assert.equal(r.out.action, "skipped");
+  r = await go({ t: thread([human(111, ME), human(112, "bob")], { isResolved: true }), answers: agree });
+  assert.equal(r.out.action, "replied");
+});
+
+test("crash after the post: the next run finishes the bookkeeping without posting again", async () => {
+  const { runDir, frame } = setup();
+  const t = thread([human(111, ME, "**must:** leak"), human(112)]);
+  const gh = fakeGh(t);
+  gh.reply = async () => { throw new Error("crash after the post landed"); };
+  const answers = { draft: pos("accept"), challenge: pos("accept"), compose: pos("accept", "Right, a.js:4 guards it.") };
+  const args = { repo: REPO, n: N, threadId: "T1", mode: "loop", frame, config, runDir, runChild: fakeRun(answers), jev: async () => "unsure" };
+  await assert.rejects(reply({ ...args, gh }), /crash/);
+  assert.ok(prState(stateRoot(REPO), N).pending.T1, "pending record written before the post");
+  const after = thread([...t.comments, human(113, ME, "Right, a.js:4 guards it.")]);
+  const gh2 = fakeGh(after, { marker: true });
+  const run2 = fakeRun({});
+  const out = await reply({ ...args, gh: gh2, runChild: run2 });
+  assert.deepEqual([out.action, out.resolved, gh2.calls.reply.length, run2.calls.length, gh2.calls.resolve], ["replied", true, 0, 0, ["T1"]]);
+  const s = prState(stateRoot(REPO), N);
+  assert.deepEqual([s.replies.T1, s.pending.T1], [1, undefined]);
 });

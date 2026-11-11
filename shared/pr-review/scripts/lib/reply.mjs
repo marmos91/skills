@@ -7,11 +7,11 @@ import { fileURLToPath } from "node:url";
 import * as github from "./github.mjs";
 import { runChild as realRunChild, ENV_OK } from "./child.mjs";
 import { budgetLeft } from "./convergence.mjs";
-import { replyPrompt } from "./prompts.mjs";
+import { prData, replyPrompt, seatData } from "./prompts.mjs";
 import { redact, scanOutbound } from "./secrets.mjs";
 import { prState, savePrState, stateRoot } from "./state.mjs";
 
-const CORRECT = "The reviewer's comment is correct about this code.";
+const CORRECT = "The last comment in this thread, by the other party, is correct about this code.";
 const NEW_ARG = "This reply adds a new argument or new evidence.";
 // On public repos every user has "read" (Task 8 note).
 const COLLABORATOR = new Set(["write", "admin"]);
@@ -49,14 +49,14 @@ export function askJev(question, text, config, { env = process.env, timeoutMs = 
   });
 }
 
-const tag = (t, body) => `<${t}>\n${body}\n</${t}>`;
-const threadText = (t) => tag("thread", JSON.stringify(t.comments.map((c) => ({ author: c.author, body: c.body })), null, 2));
 const family = (s) => `${s.harness}|${s.model.split("/")[0]}`;
+const threadData = (t) => prData(JSON.stringify(t.comments.map((c) => ({ author: c.author, body: c.body })), null, 2), "the PR and its commenters");
+const isSkip = (b) => b.replace(/[`\p{P}\s]/gu, "").toUpperCase() === "SKIP";
 
 /**
  * Answer the newest human comment of one review thread.
  * Extra inputs: frame (from frame()), config, runDir; injectable gh, runChild, jev, queue; routerUp (R1).
- * queue(item) gets { kind: "reply", reason, pr, sha, threadId, commentId, path, line, mode, positions?, reply?, hits? }.
+ * queue(item) gets { kind: "reply", reason, pr, sha, threadId, commentId, path, line, mode, positions?, hits? }.
  * -> { action: "replied"|"queued"|"skipped", resolved, queued: [items] }
  */
 export async function reply({ repo, n, threadId, mode, frame, config, runDir, gh = github, runChild = realRunChild, jev, queue = () => {}, routerUp }) {
@@ -73,12 +73,29 @@ export async function reply({ repo, n, threadId, mode, frame, config, runDir, gh
     queue(item);
     return result("queued");
   };
+  const repoState = stateRoot(repo);
+
+  // Crash after the post, before the bookkeeping: GitHub has the reply, so only finish the state.
+  const pending = prState(repoState, n).pending?.[threadId];
+  if (pending) {
+    if (await gh.findMarker(repo, n, pending.key)) return result("replied", await finish(pending));
+    const s = prState(repoState, n);
+    delete s.pending[threadId];
+    savePrState(repoState, n, s);
+  }
 
   // Rule 7.3: only a new human comment gets an answer; our own last comment means it was answered.
   if (!last || last.author === me || last.authorType === "Bot" || config.loop.authors_ignore.includes(last.author)) return result("skipped");
+  // A resolved thread reopens for us only when someone answers our reply.
+  const mine = t.comments.findLast((x) => x.author === me);
+  if (t.isResolved && !mine) return result("skipped");
   if (!COLLABORATOR.has(await gh.permission(repo, last.author))) return enqueue("not-collaborator");
-  const repoState = stateRoot(repo);
-  if (!budgetLeft(prState(repoState, n), config).replies(threadId)) return enqueue("budget");
+  if (!budgetLeft(prState(repoState, n), config).replies(threadId)) {
+    return enqueue("budget", { positions: [
+      { side: "ours", commentId: mine?.id ?? null, body: mine?.body ?? null },
+      { side: "theirs", author: last.author, commentId: last.id, body: last.body },
+    ] });
+  }
 
   const dir = join(runDir, "reply", encodeURIComponent(threadId), String(last.id));
   mkdirSync(dir, { recursive: true });
@@ -95,15 +112,20 @@ export async function reply({ repo, n, threadId, mode, frame, config, runDir, gh
   const c = await seat("challenge", challenger, { position: d.position, body: d.body });
   let position = d.position;
   if (c.position !== d.position) {
-    // Own PR: a split never concedes; only jev or Marco settles it.
-    const v = await jev(CORRECT, [threadText(t), tag("position", JSON.stringify(d)), tag("position", JSON.stringify(c))].join("\n"));
-    if (v === "unsure") return enqueue("unsure", { positions: [d, c] });
-    position = v === "yes" ? "accept" : "push_back";
+    // The question is about the other party's comment, so yes = accept for our side on any PR.
+    const role = frame.ownPr ? "the reviewer" : "the PR author";
+    const v = await jev(CORRECT, [
+      `The other party is ${last.author}, ${role}. We are ${me}. The last comment in the thread below is by the other party.`,
+      threadData(t), seatData(JSON.stringify([d, c], null, 2)),
+    ].join("\n"));
+    position = v === "yes" ? "accept" : v === "no" ? "push_back" : null;
+    // Own PR: a split never concedes by default; jev must pick a side a seat argued, else Marco decides.
+    if (!position || ![d, c].some((x) => x.position === position)) return enqueue("unsure", { positions: [d, c] });
   }
-  const agreed = [d, c].find((x) => x.position === position) ?? { ...c, position };
+  const agreed = [d, c].find((x) => x.position === position);
   const body = (await seat("compose", config.judge, { position, body: agreed.body })).body.trim();
   // The judge (SKIP) or jev finds a repeat: it goes to Marco, not to the thread (7.5 rule 7).
-  if (body === "SKIP" || (t.comments.some((x) => x.author === me) && (await jev(NEW_ARG, `${threadText(t)}\n${tag("reply", body)}`)) === "no")) {
+  if (isSkip(body) || (mine && (await jev(NEW_ARG, `${threadData(t)}\n${seatData(body)}`)) === "no")) {
     enqueue("repeat", { positions: [d, c] });
     return result("skipped");
   }
@@ -112,22 +134,37 @@ export async function reply({ repo, n, threadId, mode, frame, config, runDir, gh
   const full = `${body}\n\n<!-- pr-review run=${basename(runDir)} sha=${frame.headSha} ${key} -->`;
   const scan = scanOutbound(full);
   if (!scan.ok) return enqueue("secret", { hits: scan.hits });
+
+  const rec = {
+    key, position,
+    // Engine text only: no model or reviewer words in todo.md.
+    todo: position === "accept" && frame.ownPr ? `- [ ] PR #${n} ${t.path}:${t.line ?? t.originalLine}: accepted review point, change pending. https://github.com/${repo}/pull/${n}#discussion_r${last.id}\n` : null,
+    // Resolve only threads Marco started; an accept on his own PR waits for the fix in the head.
+    resolve: position === "accept" && !frame.ownPr && t.comments[0].author === me && !t.isResolved,
+  };
+  const s = prState(repoState, n);
+  s.pending = { ...s.pending, [threadId]: rec };
+  savePrState(repoState, n, s);
   // GitHub has no replies to replies: answer on the first comment.
   if (!(await gh.findMarker(repo, n, key))) await gh.reply(repo, n, t.comments[0].id, full);
+  return result("replied", await finish(rec));
 
-  const s = prState(repoState, n);
-  s.replies = { ...s.replies, [threadId]: (s.replies[threadId] ?? 0) + 1 };
-  let resolved = false;
-  if (position === "accept" && frame.ownPr) {
-    // The fix is not in the head yet: the thread stays open.
-    mkdirSync(repoState, { recursive: true });
-    appendFileSync(join(repoState, "todo.md"), `- [ ] PR #${n} ${t.path}:${t.line ?? t.originalLine} (thread ${threadId}): ${body.split("\n")[0]}\n`);
-  } else if (position === "accept" && t.viewerCanResolve && !(s.resolved ?? []).includes(threadId)) {
-    // A thread in s.resolved that is open again was reopened by a human: leave it.
-    await gh.resolve(threadId);
-    s.resolved = [...(s.resolved ?? []), threadId];
-    resolved = true;
+  async function finish(p) {
+    const st = prState(repoState, n);
+    st.replies = { ...st.replies, [threadId]: (st.replies[threadId] ?? 0) + 1 };
+    if (p.todo) {
+      mkdirSync(repoState, { recursive: true });
+      appendFileSync(join(repoState, "todo.md"), p.todo);
+    }
+    let resolved = false;
+    // A thread in st.resolved that is open again was reopened by a human: leave it.
+    if (p.resolve && t.viewerCanResolve && !(st.resolved ?? []).includes(threadId)) {
+      await gh.resolve(threadId);
+      st.resolved = [...(st.resolved ?? []), threadId];
+      resolved = true;
+    }
+    delete st.pending[threadId];
+    savePrState(repoState, n, st);
+    return resolved;
   }
-  savePrState(repoState, n, s);
-  return result("replied", resolved);
 }
