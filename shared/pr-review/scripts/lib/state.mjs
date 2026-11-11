@@ -11,7 +11,7 @@ export function stateRoot(repo) {
   return join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "pr-review", repo.replace("/", "__"));
 }
 
-function writeAtomic(file, text) {
+export function writeAtomic(file, text) {
   mkdirSync(dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
   writeFileSync(tmp, text);
