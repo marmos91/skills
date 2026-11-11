@@ -410,9 +410,9 @@ The `reply` flow: one seat drafts a position (accept, push back, or ask),
 following the rules of `receiving-code-review`. It accepts only when the
 code shows that the reviewer is right. A seat of a different model family
 challenges the draft. When both seats agree, the judge writes the reply. When
-they disagree, jev decides (`The reviewer's comment is correct about this
-code.`); when jev is unsure or missing, the thread becomes a question and gets
-no reply yet.
+they disagree, jev decides (`The last comment in this thread, by the other
+party, is correct about this code.`); when jev is unsure or missing, the
+thread becomes a question and gets no reply yet.
 
 Thread rules:
 
