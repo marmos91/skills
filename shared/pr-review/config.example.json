@@ -1,0 +1,27 @@
+{
+  // Default council. Each seat runs every lens that has no override.
+  "seats": [
+    { "harness": "claude", "model": "opus",             "thinking": "high" },
+    { "harness": "auto",   "model": "cubbit/mimir-pro", "thinking": "high" },
+    { "harness": "auto",   "model": "cubbit/mimir",     "thinking": "high" }
+  ],
+  // "per-seat" = 1 child per seat runs all its lenses; "per-lens" = 1 child per seat and lens.
+  "round1": "per-seat",
+  // Per-lens override. A lens with "seats" uses only those seats. A lens needs 2 or more seats.
+  "lenses": {
+    "security": { "seats": [
+      { "harness": "claude", "model": "claude-fable-5-1", "thinking": "max" },
+      { "harness": "pi",     "model": "cubbit/mimir-pro", "thinking": "high" }
+    ]}
+  },
+  // Clusters findings and writes the final review text.
+  "judge": { "harness": "claude", "model": "opus", "thinking": "high" },
+  // Settles split votes. "auto" = use jev when the jev CLI is on PATH.
+  "decider": { "kind": "auto", "confidence": 0.8 },
+  "loop": {
+    "authors_ignore": ["dependabot[bot]", "renovate[bot]"],
+    "max_prs_per_run": 10,
+    "max_review_rounds": 3,
+    "max_replies_per_thread": 2
+  }
+}
