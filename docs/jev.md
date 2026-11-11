@@ -52,7 +52,7 @@ Never read exit `2` as "no".
 1. Write the question so that "yes" is the answer you act on.
 2. Branch on exit `0` and `1` only. Treat `2` as "jev has no answer".
 3. Never send secrets: tokens, keys, credentials, `.env` contents. The text leaves the machine.
-4. `confidence` does not predict correctness. In the benchmark (148 labeled cases, 3 repeats) it was about 0.92 on "no" answers and 0.48 on "yes" answers, and it separated right from wrong answers no better than chance (AUC 0.53). The verdict was the same on every repeat. See `shared/jev/bench/RESULTS.md`.
+4. `confidence` does not predict correctness. In the benchmark (148 labeled cases, 3 repeats) it was about 0.92 on "no" answers and 0.48 on "yes" answers, and it separated right from wrong answers no better than chance (AUC 0.53). The verdict was the same on every repeat. See `bench/jev/RESULTS.md`.
 
 ## How the skills use jev
 

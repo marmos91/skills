@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Analyze results.jsonl (from run.py) against dataset.jsonl. No network.
 
-  python3 shared/jev/bench/analyze.py   # prints markdown tables
+  python3 bench/jev/analyze.py   # prints markdown tables
 """
 import json
 import statistics

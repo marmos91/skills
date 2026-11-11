@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Hand-written, hand-labeled jev benchmark cases -> dataset.jsonl.
 
-Run `python3 shared/jev/bench/cases.py` after editing; dataset.jsonl is the
+Run `python3 bench/jev/cases.py` after editing; dataset.jsonl is the
 committed output that run.py reads.
 
 Fields: id, cat, cmd (ask|doubt), label (yes|no: the expected P(yes) >= 0.5

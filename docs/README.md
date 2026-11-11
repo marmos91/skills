@@ -151,7 +151,7 @@ jev doubt "Water boils at 100 degrees Celsius at sea level." --json
 1. Write the question so that "yes" is the answer you act on.
 2. Branch on the exit code: `0` = yes, `1` = no, `2` = no answer.
 3. Never treat exit `2` as "no".
-4. `--confidence MIN` gives exit `2` ("unsure") below that confidence. The benchmark shows confidence does not predict correctness, so use it only with your own data (see `shared/jev/bench/RESULTS.md`).
+4. `--confidence MIN` gives exit `2` ("unsure") below that confidence. The benchmark shows confidence does not predict correctness, so use it only with your own data (see `bench/jev/RESULTS.md`).
 5. Never send secrets. The text goes to an external API.
 
 Tests: `python3 -m unittest discover shared/jev`. Set `JEV_LIVE=1` to add a test against the real endpoint.

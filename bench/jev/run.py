@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the jev benchmark against the live endpoint through the real CLI.
 
-  python3 shared/jev/bench/run.py [--reps 3] [--workers 4] [--only VARIANT]
+  python3 bench/jev/run.py [--reps 3] [--workers 4] [--only VARIANT]
 
 Each (case, variant, rep) is one `jev ... --json` subprocess. Rows append to
 results.jsonl; rows already there are skipped, so a rerun only fills gaps and
@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-JEV = HERE.parent / "bin" / "jev"
+JEV = HERE.parent.parent / "shared" / "jev" / "bin" / "jev"
 DATASET = HERE / "dataset.jsonl"
 RESULTS = HERE / "results.jsonl"
 

@@ -9,7 +9,10 @@ description: "Ask Mimir SystemOne (Jev) typed yes/no questions and get calibrate
 returns a probability and a confidence, not prose. The exit code is the
 decision, so scripts and playbooks branch without parsing output.
 
-`install.sh` links `bin/jev` into `~/.local/bin`. Credentials come from the
+`install.sh` links `bin/jev` into `~/.local/bin`. Those links point at the
+working tree, so a fix is live at once. A nix-managed copy under
+`~/.agents/skills` is pinned to the flake revision and changes only after
+`nix flake update` and a rebuild. Credentials come from the
 sops-provisioned `~/.config/mimir/api-key` and `~/.config/mimir/base-url`
 (ends in `/v1`).
 
@@ -59,7 +62,7 @@ jev doubt "Water boils at 100 degrees Celsius at sea level." --json
 - `confidence` does not predict whether the answer is right (it runs high on
   "no" and low on "yes"), so a `--confidence` bar mostly drops right answers.
   Wording the question well matters far more. Benchmark:
-  `bench/RESULTS.md`.
+  `bench/jev/RESULTS.md` in the skills repo.
 - Not for open-ended questions, code generation, or anything that needs prose.
 - Never send secrets (tokens, keys, credentials, `.env` contents): the text
   leaves the machine and goes to an external model API.

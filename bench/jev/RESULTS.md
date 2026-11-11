@@ -119,9 +119,9 @@ text), which it judged covered.
 ## Rerun
 
 ```sh
-python3 shared/jev/bench/cases.py     # only after editing cases
-python3 shared/jev/bench/run.py       # fills missing rows in results.jsonl
-python3 shared/jev/bench/analyze.py   # offline
+python3 bench/jev/cases.py     # only after editing cases
+python3 bench/jev/run.py       # fills missing rows in results.jsonl
+python3 bench/jev/analyze.py   # offline
 ```
 
 Delete `results.jsonl` to measure from scratch, for example after the endpoint
