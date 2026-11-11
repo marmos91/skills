@@ -1,7 +1,7 @@
 // Reply flow for one review thread (spec 7.2, 7.3, 7.5 rule 6).
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { accessSync, appendFileSync, constants, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as github from "./github.mjs";
@@ -154,7 +154,9 @@ export async function reply({ repo, n, threadId, mode, frame, config, runDir, gh
     st.replies = { ...st.replies, [threadId]: (st.replies[threadId] ?? 0) + 1 };
     if (p.todo) {
       mkdirSync(repoState, { recursive: true });
-      appendFileSync(join(repoState, "todo.md"), p.todo);
+      const file = join(repoState, "todo.md");
+      // a crash after the append re-runs finish(); the line is unique by its URL
+      if (!(existsSync(file) && readFileSync(file, "utf8").includes(p.todo))) appendFileSync(file, p.todo);
     }
     let resolved = false;
     // A thread in st.resolved that is open again was reopened by a human: leave it.

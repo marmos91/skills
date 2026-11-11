@@ -322,3 +322,18 @@ test("crash after the post: the next run finishes the bookkeeping without postin
   const s = prState(stateRoot(REPO), N);
   assert.deepEqual([s.replies.T1, s.pending.T1], [1, undefined]);
 });
+
+test("crash during bookkeeping: finishing twice keeps one todo line", async () => {
+  const t = thread([human(112, "alice")]);
+  const answers = { draft: pos("accept"), challenge: pos("accept"), compose: pos("accept", "Agreed.") };
+  await go({ t, frame: { ownPr: true }, answers });
+  const file = join(stateRoot(REPO), "todo.md");
+  const line = readFileSync(file, "utf8");
+  // simulate a crash after the append but before the state save: pending survives
+  const s = prState(stateRoot(REPO), N);
+  savePrState(stateRoot(REPO), N, { ...s, replies: {}, pending: { T1: { position: "accept", todo: line, resolve: false } } });
+  const after = thread([human(112, "alice"), human(113, ME, "Agreed.")]);
+  const { runDir, frame } = setup();
+  await reply({ repo: REPO, n: N, threadId: "T1", mode: "loop", frame: { ...frame, ownPr: true }, config, runDir, gh: fakeGh(after, { marker: true }), runChild: fakeRun({}), jev: async () => "unsure" });
+  assert.equal(readFileSync(file, "utf8"), line);
+});
