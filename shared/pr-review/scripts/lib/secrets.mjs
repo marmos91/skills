@@ -33,7 +33,7 @@ function gitleaksHits(text, timeoutMs) {
   try {
     const res = spawnSync(
       "gitleaks",
-      ["detect", "--no-git", "--pipe", "--redact", "--report-format", "json", "--report-path", report],
+      ["stdin", "--redact", "--report-format", "json", "--report-path", report],
       { input: text, encoding: "utf8", timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 },
     );
     if (res.error?.code === "ENOENT") return [];

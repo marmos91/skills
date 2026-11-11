@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, chmodSync } from "node:fs";
@@ -120,4 +122,15 @@ test("deterministic, redact-then-scan clean, multiple secrets all hit", () => {
   assert.deepEqual(scanOutbound(text), a);
   assert.equal(a.hits.length, 3);
   assert.deepEqual(scanOutbound(redact(text)), { ok: true, hits: [] });
+});
+
+const hasGitleaks = spawnSync("gitleaks", ["version"]).status === 0;
+test("real gitleaks flags a random token and passes clean text", { skip: !hasGitleaks && "gitleaks not on PATH" }, () => {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const rand = Array.from(randomBytes(36), (b) => chars[b % chars.length]).join("");
+  const res = scanOutbound(`leaked ghp_${rand} here`);
+  assert.equal(res.ok, false);
+  assert.ok(res.hits.length >= 2, `expected gitleaks plus built-in hit, got ${res.hits}`);
+  assert.ok(res.hits.every((h) => !h.includes(rand)));
+  assert.deepEqual(scanOutbound("Looks fine, but check GH_TOKEN handling."), { ok: true, hits: [] });
 });
