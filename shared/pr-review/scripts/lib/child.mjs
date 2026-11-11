@@ -12,7 +12,9 @@ import { ENV_OK } from "./env.mjs";
 // Live child process groups: seats must not outlive the engine.
 const live = new Set();
 const killAll = (sig) => { for (const pid of live) try { process.kill(-pid, sig); } catch {} };
-let handlersInstalled = false, stopping = false;
+let handlersInstalled = false;
+/** True once a signal arrived: callers must not save results that a killed child produced. */
+export let stopping = false;
 // The engine's one signal path: stop the children, then exit once; the "exit" listeners (lock release) run then.
 export function installSignalHandlers() {
   if (handlersInstalled) return;

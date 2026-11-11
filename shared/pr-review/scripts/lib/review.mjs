@@ -1,19 +1,19 @@
 // Review pipeline (spec 6): frame -> round1 -> merge -> round2 -> tally -> decide -> compose -> post.
 // Every child output and stage gets a marker (spec 8), so a rerun continues where the last run stopped.
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
 import * as github from "./github.mjs";
-import { runChild as realRunChild, ChildFailed } from "./child.mjs";
+import { runChild as realRunChild, ChildFailed, stopping } from "./child.mjs";
 import { LENSES, applyEffort, loadConfig, pickEffort, plannedChildren, seatId, seatsForLens } from "./config.mjs";
 import { frame as realFrame, HeadMoved, DiffTooLarge } from "./frame.mjs";
 import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.mjs";
 import { tally } from "./tally.mjs";
-import { filterNew, fingerprint } from "./convergence.mjs";
+import { allowedSeverities, filterNew, fingerprint } from "./convergence.mjs";
 import { parseHunks, place } from "./hunks.mjs";
 import { verdict } from "./verdict.mjs";
-import { scanOutbound } from "./secrets.mjs";
+import { redact, scanOutbound } from "./secrets.mjs";
 import { hygiene as realHygiene } from "./hygiene.mjs";
 import { decide as realDecide } from "./decider.mjs";
 import { appliedAnswer, pendingAnswers, queueQuestion } from "./questions.mjs";
@@ -26,7 +26,15 @@ const readJson = (f) => JSON.parse(readFileSync(f, "utf8"));
 const save = (f, v) => writeAtomic(f, JSON.stringify(v, null, 2) + "\n");
 const marker = (runId, sha, key) => `<!-- pr-review run=${runId} sha=${sha} key=${key} -->`;
 // Fields the seats and the judge see; engine bookkeeping stays out of prompts.
-const view = ({ seats, fp, ...c }) => c;
+const view = ({ seats, fp, answered, ...c }) => c;
+// GitHub text that the engine puts into a posted body: no markup, no mentions, no marker look-alikes.
+export const safeText = (s) => String(s ?? "").replace(/[<>@`]/g, "").replace(/\s+/g, " ").trim().slice(0, 80);
+const ruleIds = (hits) => [...new Set(hits.map((h) => h.split(":")[0]))].join(", ");
+const MARKER_KEY = /<!-- pr-review run=\S+ sha=\S+ key=([0-9a-f]{40}) -->/;
+
+/** Config, flag or state problems: exit 1, not a failed stage. */
+export class SetupError extends Error { constructor(m) { super(m); this.name = "SetupError"; } }
+const config0 = (o) => { try { return loadConfig(o); } catch (e) { throw new SetupError(e.message); } };
 
 /**
  * Review one PR. -> { exit: 0|3|4, summary, runDir?, url?, event?, questions?, planned? }
@@ -35,11 +43,11 @@ const view = ({ seats, fp, ...c }) => c;
  */
 export async function review(opts) {
   const { repo, n, mode = "interactive", lock = true } = opts;
-  if (!["interactive", "loop"].includes(mode)) throw new Error(`mode must be interactive or loop, got ${mode}`);
-  if (opts.until && !STAGES.includes(opts.until)) throw new Error(`--until must be one of ${STAGES.join("|")}`);
+  if (!["interactive", "loop"].includes(mode)) throw new SetupError(`mode must be interactive or loop, got ${mode}`);
+  if (opts.until && !STAGES.includes(opts.until)) throw new SetupError(`--until must be one of ${STAGES.join("|")}`);
   const repoState = stateRoot(repo);
   const o = {
-    gh: github, runChild: realRunChild, decide: realDecide, frame: realFrame, hygiene: realHygiene, log: () => {},
+    gh: github, runChild: realRunChild, decide: realDecide, stopping: () => stopping, frame: realFrame, hygiene: realHygiene, log: () => {},
     queue: (note) => { mkdirSync(repoState, { recursive: true }); appendFileSync(join(repoState, "queue.jsonl"), JSON.stringify(note) + "\n"); },
     ...opts, mode, repoState,
   };
@@ -93,8 +101,12 @@ function readTree(dir) {
 
 // Code around a finding, for jev and questions. The path comes from a model: it must stay in the worktree.
 function hunk(f, c) {
-  const file = resolve(f.worktree, c.file);
-  if (!file.startsWith(f.worktree + sep)) return "";
+  let file;
+  try {
+    const wt = realpathSync(f.worktree);
+    file = realpathSync(resolve(wt, String(c.file))); // a symlink in the PR must not lead outside
+    if (!file.startsWith(wt + sep)) return "";
+  } catch { return ""; }
   try { return readFileSync(file, "utf8").split("\n").slice(Math.max(0, c.line - 6), c.line + 5).join("\n"); } catch { return ""; }
 }
 
@@ -111,25 +123,35 @@ function ciOf(f) {
   const c = readJson(file);
   // A stale sha means the checks belong to another commit: CI of the pinned head is unknown (blocks APPROVE).
   if (c.stale) return { state: "unknown", line: "The CI state of this commit is unknown." };
-  if (c.state === "red") return { state: "red", line: `Failed checks: ${c.items.filter((i) => i.state === "fail" || i.state === "cancel").map((i) => i.name).join(", ")}.` };
+  if (c.state === "red") return { state: "red", line: `Failed checks: ${c.items.filter((i) => i.state === "fail" || i.state === "cancel").map((i) => safeText(i.name)).join(", ")}.` };
   return { state: c.state, line: null };
 }
 
 async function once(o, restart) {
   const { repo, n, mode, gh, log, repoState } = o;
   const userPath = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "pr-review", "config.json");
-  let config = loadConfig({ userPath, cliPath: o.configPath });
-  const runDir = pickRunDir(repoState, n, (await gh.pr(repo, n)).headSha, { restart });
+  const userConfig = config0({ userPath, cliPath: o.configPath });
+  let config = userConfig;
+  const head = (await gh.pr(repo, n)).headSha;
+  const runDir = pickRunDir(repoState, n, head, { restart });
   const runId = basename(runDir);
+  const pst0 = prState(repoState, n);
+  // Same sha, posted before: nothing new to say. Exceptions: --restart, answers that wait for a run, and the
+  // posted run itself when it crashed before its bookkeeping ended (lastRunId).
+  if (!restart && pst0.lastReviewedSha === head && pst0.lastRunId !== runId && !pendingAnswers(repoState).some((q) => q.pr === n && !q.finding?.kind)) {
+    return { exit: 0, runDir, skipped: true, summary: `already reviewed ${head}; use --restart to review it again` };
+  }
   const f = await o.frame({ repo, n, repoDir: o.repoDir ?? process.cwd(), runDir, config, gh, prState: prState(repoState, n) });
-  config = loadConfig({ userPath, cliPath: o.configPath, repoText: f.repoConfigText ?? undefined });
+  config = config0({ userPath, cliPath: o.configPath, repoText: f.repoConfigText ?? undefined });
 
   // A resumed run keeps its effort and lenses: its finished children depend on them.
   const runFile = join(runDir, "run.json");
   if (!existsSync(runFile)) {
     let effort = o.effort ?? (mode === "loop" ? config.loop.effort : config.effort);
     if (effort === "auto") effort = pickEffort(f.changedPaths, config);
-    save(runFile, { effort, lenses: LENSES.filter((l) => config.lenses[l].enabled && (!o.lenses || o.lenses.includes(l))) });
+    const lenses = LENSES.filter((l) => config.lenses[l].enabled && (!o.lenses || o.lenses.includes(l)));
+    // A lens the user runs but this run skips (--lens, or off in the repo config) counts as failed: no APPROVE.
+    save(runFile, { effort, lenses, missing: LENSES.filter((l) => userConfig.lenses[l].enabled && !lenses.includes(l)) });
   }
   const run = readJson(runFile);
   config = applyEffort(config, run.effort);
@@ -164,13 +186,18 @@ async function once(o, restart) {
   if (o.until === "round1") return finish("round1");
 
   // Merge (spec 6.4). R17: a cluster that reverses an earlier agreed finding is dropped and recorded.
-  const pst = prState(repoState, n);
+  const pst = pst0;
   const raw = Object.values(bySeat).some((x) => x.length)
     ? await child(ctx, "merge", "merge", { seat: config.judge, schema: "merge", prompt: () => mergePrompt(f, bySeat, pst.agreed ?? []) })
     : [];
   const threads = readJson(join(f.ctxDir, "threads.json"));
-  // shortcut: a cluster links to a thread by path and line only, and only a resolved thread drops it; text matching and "evidence against it" need a judge call.
-  const resolvedThread = (c) => threads.some((t) => t.isResolved && t.path === c.file && (t.line ?? t.originalLine) === c.line);
+  // Spec 6.4: a cluster repeats a thread of ours on the same line whose finding was agreed or settled before.
+  // An outdated thread has no current line (originalLine is the old file), so it never matches.
+  // shortcut: other reviewers' threads never drop a cluster; "a reviewer gave evidence against it" needs a judge call.
+  const me = await gh.viewer();
+  const known = new Set([...pst.settled, ...(pst.agreed ?? []).map((a) => a.id)]);
+  const ours = threads.filter((t) => t.comments[0]?.author === me && t.line != null).map((t) => ({ t, key: MARKER_KEY.exec(t.comments[0].body ?? "")?.[1] }));
+  const resolvedThread = (c) => ours.some(({ t, key }) => t.path === c.file && t.line === c.line && key && (known.has(key) || key === c.fp));
   const all = raw.filter((c) => run.lenses.includes(c.lens)).map((c) => {
     const seats = [...new Set(seatsForLens(config, c.lens).map(seatId))];
     return { ...c, found: [...new Set(c.found)].filter((s) => seats.includes(s)), seats, fp: fingerprint(c) };
@@ -207,7 +234,7 @@ async function once(o, restart) {
     answers.delete(q.fingerprint);
     applied.push(q.id);
     if (q.answer === "drop") rejected.push(c);
-    else agreed.push({ ...c, ask_author: q.answer === "ask-author" });
+    else agreed.push({ ...c, ask_author: q.answer === "ask-author", answered: q.answer });
   };
   for (const { c, votes, status } of tallied) {
     if (answers.has(c.fp)) { take(answers.get(c.fp), c); continue; }
@@ -217,6 +244,8 @@ async function once(o, restart) {
     if (!existsSync(dfile)) {
       const snippet = hunk(f, c);
       const r = await o.decide(view(c), votes, snippet, config);
+      // A signal killed jev: its "unsure" is not an answer. Save nothing; the rerun asks again.
+      if (o.stopping()) throw new ChildFailed("engine is stopping on a signal");
       const d = { decision: r.decision, raw: r.raw ?? null };
       if (d.decision === "unsure") {
         d.question = queueQuestion(repoState, {
@@ -233,7 +262,9 @@ async function once(o, restart) {
     else open.push(d.question);
   }
   // An answered finding that this run did not find again is posted from the question record.
-  [...answers.values()].forEach((q, i) => take(q, { ...q.finding, id: `q${i + 1}`, found: [], seats: [], fp: q.fingerprint }));
+  // A held comment that was not found again has no text to post: its answer is closed.
+  for (const q of [...answers.values()].filter((x) => x.finding?.secret)) { answers.delete(q.fingerprint); applied.push(q.id); }
+  [...answers.values()].filter((q) => !q.finding?.kind).forEach((q, i) => take(q, { ...q.finding, id: `q${i + 1}`, found: [], seats: [], fp: q.fingerprint }));
   const questionFiles = () => open.map((id) => join(repoState, "questions", `${id}.md`));
   if (open.length && mode === "interactive") {
     return { exit: 3, runDir, planned, questions: questionFiles(), summary: `${open.length} question(s) wait for an answer: pr-review answer <id> post|drop|ask-author` };
@@ -242,14 +273,22 @@ async function once(o, restart) {
   if (o.until === "decide") return finish("decide");
 
   // Compose (spec 6.8, 5.1): drop findings outside the effort's severities and above its limit, lowest severity first.
+  // A finding Marco answered "post" or "ask-author" is posted at any effort: he decided (it is not marked applied unposted).
   const allowed = new Set(config.post.severities);
-  const ranked = agreed.filter((c) => allowed.has(c.severity)).sort((a, b) => RANK[a.severity] - RANK[b.severity]);
-  const posted = ranked.slice(0, config.post.maxFindings ?? Infinity);
+  const forced = agreed.filter((c) => c.answered);
+  const ranked = agreed.filter((c) => !c.answered && allowed.has(c.severity)).sort((a, b) => RANK[a.severity] - RANK[b.severity]);
+  const posted = [...forced, ...ranked.slice(0, Math.max(0, (config.post.maxFindings ?? Infinity) - forced.length))];
   const leftOut = agreed.length - posted.length;
-  const hygItems = hyg.findings.filter((h) => allowed.has(h.severity)).map((h, i) => ({ ...h, id: `h${i + 1}` }));
+  // Hygiene obeys the same severity floor and settled list as council findings (spec 7.5).
+  const hygNew = filterNew(hyg.findings.map((h) => ({ ...h, file: "", line: null })), { reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: new Map() }).keep;
+  const hygItems = hygNew.filter((h) => allowed.has(h.severity)).map((h, i) => ({ ...h, id: `h${i + 1}`, fp: fingerprint(h) }));
+  if (!restart && (pst.summaryBlocked?.[f.headSha] ?? 0) >= 2) {
+    return { exit: 4, runDir, planned, summary: `the review summary was blocked by the secret scan twice at ${f.headSha}; see the question, or use --restart` };
+  }
+  // The held line is engine text, written at post time, so it also counts comments that the secret scan holds back.
   const composed = await child(ctx, "compose", "compose", {
     seat: config.judge, schema: "compose",
-    prompt: () => composePrompt(f, [...posted, ...hygItems].map(view), readTree(join(f.ctxDir, "guidance")), { held: open.length, noTracking }),
+    prompt: () => composePrompt(f, [...posted, ...hygItems].map(view), readTree(join(f.ctxDir, "guidance")), { noTracking }),
   });
   markDone(runDir, "compose");
   if (o.until === "compose") return finish("compose");
@@ -261,12 +300,14 @@ async function once(o, restart) {
   const ci = ciOf(f);
   const v = () => verdict({
     agreed: [...agreed, ...hygItems], earlierMustOpen: earlierAll.filter((e) => e.severity === "must" && !fixed.includes(e)).length,
-    openQuestions: open.length, splits: 0, failedLenses: 0, ci: ci.state, mode, trustedAuthor: f.trusted, unanimousZero, ownPr: f.ownPr,
+    openQuestions: open.length, splits: 0, failedLenses: run.missing?.length ?? 0, ci: ci.state, mode, trustedAuthor: f.trusted, unanimousZero, ownPr: f.ownPr,
   });
   const bodyOf = (outside, key) => [
     composed.body.trim(),
     outside.length ? `Outside the diff:\n${outside.map((l) => `- ${l}`).join("\n")}` : "",
+    open.length ? `${open.length} ${open.length === 1 ? "point is" : "points are"} still open with the reviewer.` : "",
     leftOut ? `${leftOut} ${leftOut === 1 ? "finding was" : "findings were"} left out by the effort limit.` : "",
+    run.missing?.length ? `Lenses not run: ${run.missing.join(", ")}.` : "",
     ci.line ?? "", marker(runId, f.headSha, key),
   ].filter(Boolean).join("\n\n");
   const hunks = parseHunks(readFileSync(join(f.ctxDir, "diff.patch"), "utf8"));
@@ -284,21 +325,41 @@ async function once(o, restart) {
   if (now !== f.headSha) throw new HeadMoved(f.headSha, now);
   const clean = [];
   for (const x of items) {
-    const s = scanOutbound(x.body);
-    if (s.ok) { clean.push(x); continue; }
-    // The comment is held back; Marco decides on the finding. Hits are masked.
+    // Marco answered "post" on a held comment: post it with the secret redacted. If it still hits, it stays out.
+    const text = x.answered ? redact(x.body) : x.body;
+    const s = scanOutbound(text);
+    if (s.ok) { clean.push({ ...x, body: text }); continue; }
+    if (x.answered) continue;
+    // Held back. The question keeps the fingerprint and the rule ids only: never the text, which holds the secret.
     open.push(queueQuestion(repoState, {
-      pr: n, sha: f.headSha, fingerprint: x.fp, file: x.file, line: x.line, snippet: hunk(f, x), finding: view(x),
-      sides: { keep: x.evidence || x.case, drop: `The comment text matched a secret pattern, so it was not posted: ${s.hits.join(", ")}` }, failure: x.case,
+      pr: n, sha: f.headSha, fingerprint: x.fp, file: x.file, line: x.line, snippet: "",
+      finding: { lens: x.lens, severity: x.severity, file: x.file, line: x.line, title: "Comment held by the secret scan", case: `Secret rules: ${ruleIds(s.hits)}`, fix: "", secret: true },
+      sides: { keep: "post: post the comment with the secret redacted.", drop: "drop: do not post this finding." }, failure: `Secret rules: ${ruleIds(s.hits)}`,
     }));
   }
-  const p = place(clean.map((x) => ({ file: x.file, line: x.line, body: `${x.body}\n\n${marker(runId, f.headSha, x.fp)}` })), hunks, permalink);
+  // Step 6 per finding: a key per sha and finding, so a crash, a --restart or a re-frame never posts a finding twice.
+  const inlineKey = (x) => sha1(`inline\0${f.headSha}\0${x.fp}`);
+  const fresh = [];
+  for (const x of clean) if (!(await gh.findMarker(repo, n, inlineKey(x)))) fresh.push(x);
+  const p = place(fresh.map((x) => ({ file: x.file, line: x.line, body: `${x.body}\n\n${marker(runId, f.headSha, inlineKey(x))}` })), hunks, permalink);
   const key = sha1(`review\0${runId}`);
   const body = bodyOf(p.body, key);
   const scan = scanOutbound(body);
   if (!scan.ok) {
-    o.queue({ kind: "review", reason: "secret", pr: n, sha: f.headSha, hits: scan.hits });
-    return { exit: 4, runDir, planned, summary: `review body blocked by the secret scan: ${scan.hits.join(", ")}` };
+    const st = prState(repoState, n);
+    const tries = (st.summaryBlocked?.[f.headSha] ?? 0) + 1;
+    savePrState(repoState, n, { ...st, summaryBlocked: { ...st.summaryBlocked, [f.headSha]: tries } });
+    // Drop the cached summary so a rerun composes again; after 2 tries Marco decides.
+    rmSync(join(runDir, "compose"), { recursive: true, force: true });
+    rmSync(join(runDir, "compose.done"), { force: true });
+    if (tries >= 2) {
+      queueQuestion(repoState, {
+        pr: n, sha: f.headSha, fingerprint: sha1(`summary\0${n}\0${f.headSha}`), file: "(review summary)", line: 0, snippet: "",
+        finding: { kind: "summary-secret", title: "Review summary held by the secret scan", case: `Secret rules: ${ruleIds(scan.hits)}. Composed ${tries} times.` },
+        sides: { keep: "post: not possible; run again with --restart after you check the PR text.", drop: "drop: skip this review." }, failure: "No review is posted at this commit.",
+      });
+    }
+    return { exit: 4, runDir, planned, summary: `review summary blocked by the secret scan (${ruleIds(scan.hits)}), try ${tries}` };
   }
   const { event, queueApprove, reasons } = v();
   let url = null;
@@ -310,11 +371,19 @@ async function once(o, restart) {
     }
     url = (await gh.postReview(repo, n, { commitOID: f.headSha, event, body, threads: p.inline })).url;
   }
-  if (queueApprove) o.queue({ kind: "review", reason: "approve?", pr: n, sha: f.headSha });
+  // Same fingerprint and record as tick.mjs: a rerun (or the tick after it) finds the question and adds nothing.
+  if (queueApprove) {
+    queueQuestion(repoState, {
+      pr: n, sha: f.headSha, fingerprint: sha1(`approve:${n}:${f.headSha}`), file: "(whole PR)", line: 0, snippet: "",
+      finding: { kind: "approve", title: "Approve this PR?", case: `The review at ${f.headSha} has no agreed finding. The loop approves only a trusted author with a unanimous zero-finding vote. Reasons: ${reasons.join("; ")}.` },
+      sides: { keep: "post: approve the PR at this commit.", drop: "drop: keep the review as a comment." },
+      failure: "The PR waits for a human approval.",
+    });
+  }
 
   let st = prState(repoState, n);
   if (st.lastRunId !== runId) { // a rerun after a crash here must not count the review twice
-    const fps = [...clean, ...rejected].map((c) => c.fp);
+    const fps = [...clean, ...rejected, ...hygItems].map((c) => c.fp);
     Object.assign(st, {
       reviews: st.reviews + 1, lastReviewedSha: f.headSha, lastRunId: runId, settled: [...new Set([...st.settled, ...fps])],
       agreed: [...(st.agreed ?? []), ...clean.map((c) => ({ id: c.fp, lens: c.lens, severity: c.severity, file: c.file, line: c.line, title: c.title }))],

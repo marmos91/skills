@@ -3,16 +3,15 @@
 import { execFileSync } from "node:child_process";
 import { parseArgs } from "node:util";
 import { installSignalHandlers } from "./lib/child.mjs";
-import { GhError } from "./lib/github.mjs";
 import { LENSES } from "./lib/config.mjs";
-import { review, STAGES } from "./lib/review.mjs";
+import { review, SetupError, STAGES } from "./lib/review.mjs";
 import { answer } from "./lib/questions.mjs";
-import { stateRoot } from "./lib/state.mjs";
+import { Locked, stateRoot } from "./lib/state.mjs";
 
 // The one signal path: stop the children, then exit; the lock is released on exit.
 installSignalHandlers();
 
-const USAGE = `usage: pr-review review <n|url> [--repo owner/repo] [--dry-run] [--lens a,b] [--until ${STAGES.join("|")}]
+const USAGE = `usage: pr-review review [<n|url>] [--repo owner/repo] [--dry-run] [--lens a,b] [--until ${STAGES.join("|")}]
                  [--config <file>] [--effort low|medium|high|max|auto] [--restart] [--loop]
        pr-review answer <question-id> post|drop|ask-author [--repo owner/repo]
        pr-review tick [--repo owner/repo]`;
@@ -22,7 +21,14 @@ const remotes = () => {
   try { return execFileSync("git", ["config", "--get-regexp", "^remote\\..*\\.url$"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).split("\n").map((l) => GH_URL.exec(l.split(" ")[1] ?? "")?.[1]).filter(Boolean); } catch { return []; }
 };
 
+// No number: the PR of the current branch.
+function currentPr() {
+  try { return String(JSON.parse(execFileSync(process.env.GH_BIN || "gh", ["pr", "view", "--json", "number"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })).number); }
+  catch { throw new Usage("no PR number given and the current branch has no PR"); }
+}
+
 function target(arg, repoFlag) {
+  arg ??= currentPr();
   const url = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/.exec(arg ?? "");
   const repo = url?.[1] ?? repoFlag ?? remotes()[0];
   const n = url ? Number(url[2]) : Number(arg);
@@ -48,7 +54,7 @@ async function main(argv) {
     const [id, option] = rest;
     const repo = v.repo ?? remotes()[0];
     if (!id || !option || !repo) throw new Usage(USAGE);
-    answer(stateRoot(repo), id, option);
+    try { answer(stateRoot(repo), id, option); } catch (e) { throw new Usage(e.message); }
     console.log(`${id}: ${option}`);
     return 0;
   }
@@ -57,7 +63,7 @@ async function main(argv) {
     const r = await tick({ repo: v.repo ?? remotes()[0] });
     return r?.exit ?? 0;
   }
-  if (cmd !== "review" || rest.length !== 1) throw new Usage(USAGE);
+  if (cmd !== "review" || rest.length > 1) throw new Usage(USAGE);
   if (v.effort && !["low", "medium", "high", "max", "auto"].includes(v.effort)) throw new Usage(`--effort must be low|medium|high|max|auto`);
   if (v.until && !STAGES.includes(v.until)) throw new Usage(`--until must be one of ${STAGES.join("|")}`);
   const lenses = v.lens?.split(",").map((s) => s.trim()).filter(Boolean);
@@ -74,6 +80,6 @@ async function main(argv) {
 
 main(process.argv.slice(2)).then((code) => { process.exitCode = code; }, (e) => {
   console.error(`pr-review: ${e.message}`);
-  // gh failing mid-run is a failed stage; a bad flag, config or lock is a setup error.
-  process.exitCode = e instanceof GhError ? 4 : 1;
+  // A bad flag, config or lock is a setup error (1); anything else broke a stage (4).
+  process.exitCode = e instanceof Usage || e instanceof SetupError || e instanceof Locked || String(e?.code).startsWith("ERR_PARSE_ARGS") ? 1 : 4;
 });

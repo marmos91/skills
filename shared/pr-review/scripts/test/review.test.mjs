@@ -226,7 +226,8 @@ test("split + jev missing + loop -> question queued, review posted without it, e
   const p = posts(fx);
   assert.equal(p[0].event, "COMMENT");
   assert.deepEqual(p[0].threads.map((t) => t.line), [3]);
-  assert.match(run.calls.find((c) => c.k === "compose").prompt, /1 point is still open with the reviewer/);
+  assert.match(p[0].body, /1 point is still open with the reviewer\./);
+  assert.ok(run.calls.find((c) => c.k === "compose"));
 });
 
 test("secret in a finding -> that post blocked, question queued", async () => {
@@ -239,8 +240,19 @@ test("secret in a finding -> that post blocked, question queued", async () => {
   assert.ok(!JSON.stringify(mutations(fx)).includes(token));
   const q = openQuestions(fx.state);
   assert.equal(q.length, 1);
-  assert.match(q[0].sides.drop, /secret pattern/);
-  assert.ok(!JSON.stringify(q).includes(token));
+  assert.equal(q[0].fingerprint, fingerprint(F()));
+  assert.match(q[0].finding.case, /^Secret rules: .*github-token/);
+  assert.ok(!JSON.stringify(q).includes("leaks"), "no comment text in the question");
+  assert.ok(!readFileSync(join(fx.state, "questions", `${q[0].id}.md`), "utf8").includes("leaks"));
+  assert.match(p[0].body, /1 point is still open with the reviewer\./);
+  // answer post -> the comment is composed again and posted with the secret redacted
+  answer(fx.state, q[0].id, "post");
+  const again = await go(fx, happy({ compose: { body: "Summary.", comments: [{ id: "c1", body: `**must:** token ${token} leaks` }] } }));
+  assert.equal(again.r.exit, 0, again.r.summary);
+  const t = posts(fx)[1].threads;
+  assert.equal(t.length, 1);
+  assert.match(t[0].body, /\[REDACTED:github-token\] leaks/);
+  assert.ok(!JSON.stringify(mutations(fx)).includes(token));
 });
 
 test("own pending review not owned by the run -> skip and queue a note", async () => {
@@ -410,4 +422,187 @@ test("SIGTERM during round 1, then rerun: finished children are not started agai
   const q = cli(["--until", "round1"]);
   assert.equal(await new Promise((res) => q.on("close", res)), 0);
   assert.deepEqual(starts().sort(), ["all~0.json", "all~1.json", "all~1.json"], "all~0 ran once");
+});
+
+const R = (fx) => JSON.parse(readFileSync(join(fx.stubDir, "routes.json"), "utf8"));
+const W = (fx, r) => writeFileSync(join(fx.stubDir, "routes.json"), JSON.stringify(r));
+const composePromptOf = (run) => run.calls.find((c) => c.k === "compose").prompt;
+
+test("same sha after a finished review -> 'already reviewed', nothing posted; loop too; --restart reviews again", async () => {
+  const fx = fixture(); routes(fx);
+  await go(fx, happy());
+  for (const mode of ["interactive", "loop"]) {
+    const { r, run } = await go(fx, happy(), { mode, effort: "medium" });
+    assert.equal(r.exit, 0);
+    assert.match(r.summary, new RegExp(`already reviewed ${fx.head}`));
+    assert.equal(run.calls.length, 0);
+  }
+  assert.equal(posts(fx).length, 1);
+  const { r } = await go(fx, happy(), { restart: true });
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(posts(fx).length, 2);
+});
+
+test("a --lens subset never approves: missing lenses count as failed", async () => {
+  const fx = fixture(); routes(fx);
+  const { r } = await go(fx, { all: { findings: [] }, compose: { body: "Fine.", comments: [] } }, { lenses: ["security"] });
+  assert.equal(r.exit, 0, r.summary);
+  const p = posts(fx)[0];
+  assert.equal(p.event, "COMMENT");
+  assert.ok(r.reasons.includes("failed lenses"));
+  assert.match(p.body, /Lenses not run: adversarial, correctness, simplification, architecture\./);
+});
+
+test("hygiene findings obey the severity floor and the settled list", async () => {
+  const fx = fixture(); routes(fx, { body: "" });
+  const empty = { lens: "hygiene", severity: "should", title: "PR body is empty", file: "", line: null };
+  savePrState(fx.state, N, { ...prState(fx.state, N), reviews: 1, lastReviewedSha: fx.base, settled: [fingerprint(empty)] });
+  const { run } = await go(fx, happy());
+  assert.ok(!composePromptOf(run).includes("PR body is empty"), "settled");
+  const fx2 = fixture(); routes(fx2, { body: "" });
+  savePrState(fx2.state, N, { ...prState(fx2.state, N), reviews: 2, lastReviewedSha: fx2.base });
+  const b = await go(fx2, happy());
+  assert.ok(!composePromptOf(b.run).includes("PR body is empty"), "review 3 posts only must");
+});
+
+test("a signal during decide saves nothing: no decide file, no question; the rerun asks jev again", async () => {
+  const fx = fixture(); routes(fx);
+  let stop = false, asked = 0;
+  const decide = async () => { asked++; stop = true; return { decision: "unsure", raw: null }; };
+  const { r } = await go(fx, split(), { decide, stopping: () => stop });
+  assert.equal(r.exit, 4);
+  const runs = join(fx.state, "pr", "5", "runs");
+  assert.ok(readdirSync(runs).every((d) => !existsSync(join(runs, d, "decide"))));
+  assert.equal(openQuestions(fx.state).length, 0);
+  stop = false;
+  const again = await go(fx, split(), { decide: async () => { asked++; return { decision: "unsure" }; } });
+  assert.equal(again.r.exit, 3);
+  assert.equal(asked, 2);
+});
+
+const thread = (id, author, body, over = {}) => ({ id, isResolved: true, isOutdated: false, viewerCanResolve: true, path: "a.js", line: 2, originalLine: 2,
+  comments: { nodes: [{ databaseId: 11, author: { login: author, __typename: "User" }, body, createdAt: "x" }] }, ...over });
+
+test("thread linking: only our own thread with an agreed finding drops a cluster; others and outdated threads do not", async () => {
+  const agreedId = "a".repeat(40);
+  const mk = `<!-- pr-review run=r sha=s key=${agreedId} -->`;
+  for (const [threads, kept] of [
+    [[thread("T1", "bob", "**must:** same line, other reviewer")], true],
+    [[thread("T1", ME, `**must:** ours\n\n${mk}`, { isOutdated: true, line: null })], true],
+    [[thread("T1", ME, `**must:** ours\n\n${mk}`)], false],
+  ]) {
+    const fx = fixture(); routes(fx, { threads });
+    savePrState(fx.state, N, { ...prState(fx.state, N), agreed: [{ id: agreedId, lens: "correctness", severity: "must", file: "a.js", line: 2, title: "older words" }] });
+    const { r } = await go(fx, happy());
+    const rec = JSON.parse(readFileSync(join(r.runDir, "clusters.json"), "utf8"));
+    assert.equal(rec.clusters.length === 1, kept, JSON.stringify(threads[0].comments.nodes[0].author));
+    assert.equal(rec.linked.length === 1, !kept);
+  }
+});
+
+test("check names in the summary lose markup, mentions and marker look-alikes", async () => {
+  const fx = fixture(); routes(fx);
+  const r0 = R(fx);
+  const name = "build <!-- pr-review run=x sha=y key=" + "b".repeat(40) + " --> @alice `x`" + " pad".repeat(40);
+  r0["pr checks 5 -R o/r --json name,state,link,bucket,startedAt"] = { stdout: [{ name, state: "FAILURE", link: "https://github.com/o/r/actions/runs/9/job/1", bucket: "fail", startedAt: "2026-11-11T00:00:00Z" }], exit: 1 };
+  r0["run view 9 -R o/r --log-failed"] = { stdout: "boom" };
+  W(fx, r0);
+  const { r } = await go(fx, happy());
+  assert.equal(r.exit, 0, r.summary);
+  const body = posts(fx)[0].body;
+  const line = body.split("\n").find((l) => l.startsWith("Failed checks:"));
+  assert.ok(line, body);
+  assert.doesNotMatch(line, /[<>@`]/);
+  assert.ok(line.length <= "Failed checks: ".length + 81);
+  assert.equal(body.match(/<!-- pr-review/g).length, 1, "only the engine marker");
+});
+
+test("a secret in the summary: compose again on the rerun; after 2 tries a question, then no compose", async () => {
+  const fx = fixture(); routes(fx);
+  const token = "ghp_" + "B".repeat(36);
+  const answers = happy({ compose: { body: `Summary ${token}`, comments: [{ id: "c1", body: "**must:** x" }] } });
+  const a = await go(fx, answers);
+  assert.equal(a.r.exit, 4);
+  assert.equal(existsSync(join(a.r.runDir, "compose", "compose.json")), false);
+  const b = await go(fx, answers);
+  assert.equal(b.r.exit, 4);
+  assert.deepEqual(b.run.calls.map((c) => c.k), ["compose"], "composed again without --restart");
+  const q = openQuestions(fx.state);
+  assert.equal(q.length, 1);
+  assert.equal(q[0].finding.kind, "summary-secret");
+  assert.ok(!JSON.stringify(q).includes(token));
+  const c = await go(fx, answers);
+  assert.equal(c.r.exit, 4);
+  assert.equal(c.run.calls.length, 0);
+  assert.equal(posts(fx).length, 0);
+});
+
+test("a 'post' answer is posted even when the effort would filter it out", async () => {
+  const fx = fixture(); routes(fx);
+  const nit = split({ merge: [C("c1", { found: [S0], severity: "nit" })], "v~1": [keep("c1")], "v~2": undefined,
+    compose: { body: "Summary.", comments: [{ id: "c1", body: "**nit:** off by one" }] } });
+  delete nit["v~2"];
+  // effort low: 2 seats; S1 keeps, nobody else votes -> 1 find + 1 keep = agreed? no: make S1 drop
+  nit["v~1"] = [drop("c1")];
+  const first = await go(fx, nit, { effort: "low" });
+  assert.equal(first.r.exit, 3, first.r.summary);
+  answer(fx.state, basename(first.r.questions[0], ".md"), "post");
+  const { r } = await go(fx, nit, { effort: "low" });
+  assert.equal(r.exit, 0, r.summary);
+  assert.deepEqual(posts(fx)[0].threads.map((t) => t.body.split("\n")[0]), ["**nit:** off by one"]);
+});
+
+test("loop rerun after a crash with the marker found queues 'approve?' once", async () => {
+  const fx = fixture(); routes(fx);
+  const answers = { all: { findings: [] }, compose: { body: "Fine.", comments: [] } };
+  const a = await go(fx, answers, { mode: "loop", effort: "medium" });
+  assert.equal(a.r.queueApprove, true);
+  rmSync(join(a.r.runDir, "post.done"));
+  routes(fx, { reviews: [{ body: posts(fx)[0].body, author: { login: ME }, comments: { nodes: [] } }] });
+  const b = await go(fx, answers, { mode: "loop", effort: "medium" });
+  assert.equal(b.r.exit, 0, b.r.summary);
+  assert.equal(posts(fx).length, 1);
+  assert.equal(openQuestions(fx.state).filter((q) => q.finding.kind === "approve").length, 1);
+});
+
+test("a symlink in the worktree to a file outside it gives jev no snippet", async () => {
+  const fx = fixture(); routes(fx);
+  const outside = join(fx.root, "outside.txt");
+  writeFileSync(outside, "TOP-SECRET-OUTSIDE\n".repeat(20));
+  let snippet = null;
+  const all = async (o) => { try { (await import("node:fs")).symlinkSync(outside, join(o.worktree, "link.js")); } catch {} return { findings: [F({ file: "link.js" })] }; };
+  await go(fx, split({ all, merge: [C("c1", { found: [S0], file: "link.js" })] }), { decide: async (c, v, h) => { snippet = h; return { decision: "unsure" }; } });
+  assert.equal(snippet, "");
+  assert.ok(!readdirSync(join(fx.state, "questions")).map((f) => readFileSync(join(fx.state, "questions", f), "utf8")).join("").includes("TOP-SECRET"));
+});
+
+test("a finding whose inline marker is already on GitHub is not posted again", async () => {
+  const fx = fixture();
+  const { createHash } = await import("node:crypto");
+  const key = createHash("sha1").update(`inline\0${fx.head}\0${fingerprint(F())}`).digest("hex");
+  routes(fx, { reviews: [{ body: "older", author: { login: ME }, comments: { nodes: [{ body: `x <!-- pr-review run=r sha=s key=${key} -->`, author: { login: ME } }] } }] });
+  const second = C("c2", { line: 3, title: "Second" });
+  const { r } = await go(fx, happy({ merge: [C("c1"), second], "v~2": [keep("c1"), keep("c2")],
+    compose: { body: "S.", comments: [{ id: "c1", body: "**must:** one" }, { id: "c2", body: "**must:** two" }] } }));
+  assert.equal(r.exit, 0, r.summary);
+  assert.deepEqual(posts(fx)[0].threads.map((t) => t.line), [3]);
+});
+
+test("CLI: no number uses the current branch's PR; none is a usage error; an unexpected error exits 4", async () => {
+  const fx = fixture(); routes(fx);
+  const cli = (args) => new Promise((res) => {
+    const p = spawn(process.execPath, [join(here, "..", "main.mjs"), "review", ...args], { cwd: fx.repoDir, env: process.env, stdio: ["ignore", "ignore", "pipe"] });
+    let err = ""; p.stderr.on("data", (d) => (err += d));
+    p.on("close", (code) => res({ code, err }));
+  });
+  const r0 = R(fx);
+  r0["pr view --json number"] = { stdout: { number: 5 } };
+  W(fx, r0);
+  assert.equal((await cli(["--repo", REPO, "--until", "frame"])).code, 0);
+  delete r0["pr view --json number"]; W(fx, r0);
+  const none = await cli(["--repo", REPO]);
+  assert.equal(none.code, 1);
+  assert.match(none.err, /current branch has no PR/);
+  W(fx, {}); // gh fails on the first call: not a usage error
+  assert.equal((await cli(["5", "--repo", REPO])).code, 4);
 });
