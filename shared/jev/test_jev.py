@@ -150,6 +150,23 @@ class JevCLI(unittest.TestCase):
         self.assertEqual(out["confidence"], 0.6)
         self.assertEqual(out["probabilities"], {"yes": 0.25, "no": 0.75})
 
+    def test_doubt_json(self):
+        res = self.jev("doubt", "claim", "--json")
+        self.assertEqual(res.returncode, 0)
+        self.assertEqual(json.loads(res.stdout)["verdict"], "doubted")
+
+    def test_confidence_gate_answers_unsure_with_exit_2(self):
+        self.server.reply = {"body": answer(0.9, 0.1, 0.5)}
+        for args in (["ask", "q?", "-t", "text"], ["doubt", "claim"]):
+            with self.subTest(cmd=args[0]):
+                res = self.jev(*args, "--confidence", "0.6")
+                self.assertEqual(res.returncode, 2)
+                self.assertEqual(res.stdout.split()[0], "unsure")
+                res = self.jev(*args, "--confidence", "0.6", "--json")
+                self.assertEqual(res.returncode, 2)
+                self.assertEqual(json.loads(res.stdout)["verdict"], "unsure")
+                self.assertEqual(self.jev(*args, "--confidence", "0.5").returncode, 0)
+
     def test_bad_responses_are_no_answer(self):
         for name, reply in [
             ("http 500", {"status": 500, "body": b"internal error"}),
@@ -159,10 +176,16 @@ class JevCLI(unittest.TestCase):
             ("no confidence", {"body": {"answers": {"q": {"probabilities": {"yes": 0.9, "no": 0.1}}}}}),
             ("non-numeric", {"body": answer("high", "low", 0.8)}),
             ("answers is a list", {"body": {"answers": []}}),
+            ("probability above 1", {"body": answer(1.5, -0.5, 0.8)}),
+            ("truncated body", {"body": b'{"answers": {', "length": 100}),
         ]:
             with self.subTest(name):
                 self.server.reply = reply
                 self.assertNoAnswer(self.jev("ask", "q?", "-t", "text", "--json"))
+
+    def test_slow_api_times_out_as_no_answer(self):
+        self.server.reply = {"body": answer(0.9, 0.1, 0.8), "delay": 2}
+        self.assertNoAnswer(self.jev("ask", "q?", "-t", "text", timeout=0.5))
 
     def test_unreachable_api_is_no_answer(self):
         with socket.socket() as s:
@@ -180,7 +203,8 @@ class JevCLI(unittest.TestCase):
                 self.assertEqual(self.server.requests, [])
 
     def test_usage_errors_are_no_answer(self):
-        for args in ([], ["ask"], ["doubt"], ["frobnicate", "x"]):
+        for args in ([], ["ask"], ["doubt"], ["frobnicate", "x"], ["ask", "q?", "-t", " \n"],
+                     ["doubt", ""], ["ask", "q?", "--confidence", "high", "-t", "text"]):
             with self.subTest(args=args):
                 res = self.jev(*args)
                 self.assertEqual(res.returncode, 2)

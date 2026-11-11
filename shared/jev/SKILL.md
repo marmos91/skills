@@ -5,55 +5,60 @@ description: "Ask Mimir SystemOne (Jev) typed yes/no questions and get calibrate
 
 # jev — typed yes/no questions with calibrated probabilities
 
-`jev` is one standard CLI both pi and Claude Code call from bash. It asks
-Mimir's SystemOne endpoint (the Jev-style structured-decision API) typed
-questions about text and returns calibrated probabilities, not prose. Exit
-codes encode the decision so playbooks can branch without parsing output.
+`jev` asks Mimir's SystemOne endpoint a yes/no question about some text and
+returns a probability and a confidence, not prose. The exit code is the
+decision, so scripts and playbooks branch without parsing output.
 
-## Install
-
-The skill lives in `shared/` and installs via `install.sh` into both
-`~/.pi/agent/skills/jev/` and `~/.claude/skills/jev/`. Credentials are read
-from the sops-provisioned `~/.config/mimir/api-key` and `~/.config/mimir/base-url`
-(the latter ends in `/v1`); on the provisioned machine they already exist.
+`install.sh` links `bin/jev` into `~/.local/bin`. Credentials come from the
+sops-provisioned `~/.config/mimir/api-key` and `~/.config/mimir/base-url`
+(ends in `/v1`).
 
 ## Usage
 
 ```sh
-# Ask a yes/no question about text. exit 0 = yes, 1 = no
-echo "git log excerpt..." | jev ask "These commits touch only the docs directory."
-jev ask "The config sets ssl to false." -t "$(cat nginx.conf)" && echo safe || echo investigate
+# Ask about text from -t or stdin. Phrase the question so yes is what you act on.
+jev ask "The sky is blue." -t "A clear summer day at noon."
+# yes  (p_yes=100.0%, confidence=25.6%)                        exit 0
+git diff --name-only main | jev ask "Every changed path is under docs/."
+# no  (p_yes=0.0%, confidence=26.9%)                           exit 1
 
-# Raw JSON (probabilities, confidence) for scripts that want the distribution
-jev ask "This JWT is expired." -t "$TOKEN" --json
+# Is a claim doubtful? The claim is judged on its own, without context.
+jev doubt "The Earth is flat."
+# doubted  (p_yes=100.0%, confidence=9.2%)                     exit 0
 
-# Gate a step on confidence: exit 1 instead of guessing when confidence < 0.7
-jev ask "The error output shows an out-of-memory condition." -t "$LOGS" -e --confidence 0.7
+# Gate on confidence: below MIN the verdict is "unsure" and the exit is 2.
+jev ask "The service ran out of memory." -t "$LOGS" --confidence 0.9
+# unsure  (p_yes=100.0%, confidence=59.2%)                     exit 2
 
-# Doubt: is this claim worth doubting? exit 0 = doubted, 1 = trusted
-jev doubt "This function has no side effects."
+# One JSON object for scripts that want the numbers.
+jev doubt "Water boils at 100 degrees Celsius at sea level." --json
+# {"verdict": "trusted", "probabilities": {"yes": 1.96e-17, "no": 1.0}, "confidence": 0.998}  (shortened)
 ```
 
 ## Semantics
 
-- The question goes to the API as `criteria.true.text`; phrase it so
-  **yes** is the answer you'd act on. The answer is `P(yes)` with a
-  `confidence` (the model's own calibration).
-- Exit codes: `ask` exits 0 for yes and 1 for no; with `-e` it also exits 1
-  when confidence is below `--confidence` (default 0.5) instead of guessing.
-  `doubt` exits 0 when the claim is doubted, 1 when trusted.
-  Both exit **2** when there is no answer (missing credentials, API down,
-  malformed response, usage error). Gate on 0/1 only; treat 2 as "jev
-  unavailable", never as "no".
-- `--json` prints the full answer object (`noul`, `probabilities`,
-  `confidence`, plus the verdict flag) for workflows that need the numbers.
+- The answer is `P(yes)` plus `confidence`, the model's own calibration.
+  Both are in `[0, 1]`. The verdict is yes (`ask`) or doubted (`doubt`)
+  when `P(yes) >= 0.5`; `doubt` asks "This claim is doubtful or likely
+  false." about the claim.
+- Exit codes are the same for both subcommands:
+  `0` = yes / doubted, `1` = no / trusted, `2` = no answer. No answer means
+  missing credentials, API down or timed out (30 s), a malformed response,
+  a usage error, empty text, or confidence below `--confidence MIN`
+  (default `0`, no gate). Gate on 0/1 only and treat 2 as "jev has no
+  answer", never as "no".
+- `--json` prints `{"verdict", "probabilities": {"yes", "no"}, "confidence"}`.
+  `verdict` is `yes`/`no`, `doubted`/`trusted`, or `unsure` under the gate.
+  Nothing goes to stdout on a failure; the reason goes to stderr.
 
-## When to use jev (guidelines for agents)
+## When to use jev
 
-- Reaching for a fast, calibrated yes/no about provided text — verifying a
-  claim, classifying a log, gating a playbook step — use `jev ask` rather
-  than asking a full model and parsing its prose.
-- When a decision matters and you want to know *how sure*, use `--json` and
-  report the confidence; don't present a low-confidence yes as a verdict.
-- Don't use jev for open-ended questions, code generation, or anything where
-  you need prose — it only returns typed distributions.
+- A fast, calibrated yes/no about text you have (verify a claim, classify a
+  log, gate a playbook step): use `jev ask` instead of asking a model and
+  parsing its prose.
+- When the decision matters, gate with `--confidence` or report the
+  confidence from `--json`. Don't present a low-confidence yes as a verdict.
+- Not for open-ended questions, code generation, or anything that needs prose.
+
+Tests: `python3 -m unittest discover shared/jev` (stub server, no network).
+`JEV_LIVE=1` adds a smoke test against the real endpoint.
