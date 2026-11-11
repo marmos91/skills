@@ -100,6 +100,12 @@ def main():
         code, _ = run_main(["doubt", "claim"])
         assert code == 2, code
 
+    # doubt: the claim goes in as state, a fixed doubt question as the criterion
+    with patch.object(jev, "ask_noul", side_effect=fake_ask):
+        run_main(["doubt", "The earth is flat."])
+        assert captured["question"] == jev.DOUBT_QUESTION, captured
+        assert captured["state_text"] == "The earth is flat."
+
     print("test_jev: all assertions passed")
 
 

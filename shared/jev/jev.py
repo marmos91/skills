@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import NoReturn
 
 MIMIR_DIR = Path.home() / ".config" / "mimir"
+DOUBT_QUESTION = "This claim is doubtful or likely false."
 
 
 def die(msg: str) -> NoReturn:
@@ -130,7 +131,7 @@ def main() -> None:
         "doubt",
         help="is this claim worth doubting? exit 0 = trusted, 1 = doubted",
     )
-    doubt.add_argument("claim", help="the claim, stated so yes = doubted")
+    doubt.add_argument("claim", help="the claim to check, stated plainly")
     doubt.add_argument(
         "--threshold",
         type=float,
@@ -164,7 +165,8 @@ def main() -> None:
         sys.exit(code)
 
     else:  # doubt
-        ans = ask_noul(args.claim, args.claim)
+        # the claim is the state; the fixed question makes P(yes) = P(doubtful)
+        ans = ask_noul(DOUBT_QUESTION, args.claim)
         doubted = ans["probabilities"]["yes"] >= args.threshold
         if args.json:
             print(json.dumps({**ans, "doubted": doubted}))

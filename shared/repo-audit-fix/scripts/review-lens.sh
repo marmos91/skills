@@ -78,14 +78,4 @@ grep -Eq '^[[:space:]]*[-*][[:space:]]*\**BLOCKING' "$OUT" && exit 1
 grep -q "VERDICT: PASS" "$OUT" && exit 0
 # FAIL with only NIT findings is a pass; FAIL with untagged findings is not
 grep -Eq '^[[:space:]]*[-*][[:space:]]*\**NIT' "$OUT" && exit 0
-# Untagged findings: ask jev (shared/jev) whether they are all minor. Only a
-# confident yes passes; jev off/missing/down/unsure keeps the old fail.
-if [ "${JEV:-auto}" != off ] && command -v jev >/dev/null 2>&1; then
-    _j="$(jev ask "The review lists at least one finding, and every finding is a minor style or taste remark, not a defect that makes the change wrong or unsafe to merge." --json <"$OUT" 2>/dev/null)"
-    printf '%s' "$_j" | node -e '
-let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
-  try { const a=JSON.parse(s); process.exit(a.verdict==="yes" && a.confidence>=Number(process.argv[1]) ? 0 : 1); }
-  catch { process.exit(1); }
-});' "${JEV_CONFIDENCE:-0.8}" && { echo "review-lens: untagged findings judged minor by jev" >&2; exit 0; }
-fi
 exit 1
