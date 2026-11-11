@@ -33,7 +33,7 @@ const DEFAULTS = {
   judge: seat("claude", "opus"),
   decider: { kind: "auto", confidence: 0.5 },
   loop: { authors_ignore: [], max_prs_per_run: 10, max_review_rounds: 3, max_replies_per_thread: 2, effort: "auto" },
-  review: { guidance: [] },
+  review: { guidance: [], ci: "use", max_diff_lines: 3000 },
 };
 
 // Repo level may set only these paths; "*" matches one lens name.
@@ -132,6 +132,8 @@ function validate(c) {
   need(isObj(c.effort_auto), "effort_auto", "an object");
   for (const k of ["high_paths", "low_paths"]) need(strList(c.effort_auto[k]), `effort_auto.${k}`, "an array of strings");
   need(isObj(c.review) && strList(c.review.guidance), "review.guidance", "an array of strings");
+  need(["use", "ignore"].includes(c.review.ci), "review.ci", "use or ignore");
+  need(posInt(c.review.max_diff_lines), "review.max_diff_lines", "a positive integer");
 }
 
 export function loadConfig({ userPath, repoText, cliPath } = {}) {

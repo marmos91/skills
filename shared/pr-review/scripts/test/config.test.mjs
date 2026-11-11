@@ -18,6 +18,7 @@ test("defaults match spec §5", () => {
   assert.deepEqual(c.seats.map(seatId), ["claude:opus", "auto:cubbit/mimir-pro", "auto:cubbit/mimir"]);
   assert.equal(c.round1, "per-seat");
   assert.equal(c.loop.max_review_rounds, 3);
+  assert.deepEqual([c.review.ci, c.review.max_diff_lines], ["use", 3000]);
   assert.equal(c.loop.max_replies_per_thread, 2);
   assert.equal(c.loop.max_prs_per_run, 10);
   assert.deepEqual(c.decider, { kind: "auto", confidence: 0.5 });
@@ -98,6 +99,8 @@ test("allowed values are type-checked, with the key path in the error", () => {
     ['{"decider":{"kind":"x"}}', /decider.kind must be/],
     ['{"round1":"x"}', /round1 must be/],
     ['{"review":{"guidance":"G.md"}}', /review.guidance must be an array of strings/],
+    ['{"review":{"ci":"maybe"}}', /review.ci must be use or ignore/],
+    ['{"review":{"max_diff_lines":0}}', /review.max_diff_lines must be a positive integer/],
     ['{"seats":[{"harness":"pi","model":3,"thinking":"low"}]}', /seats\[0\].model must be/],
     ['{"seats":[{"harness":"pi","model":"m","thinking":"low","provider":1}]}', /seats\[0\].provider must be a string/],
     ['{"seats":["x"]}', /seats\[0\] must be an object/],
