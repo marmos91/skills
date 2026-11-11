@@ -214,6 +214,9 @@ test("a finished frame is not redone on resume: same Frame, same ctx, no GitHub 
   const again = await frame({ repo: "o/r", n: 5, repoDir: fx.repoDir, runDir: dir, config: loadConfig({}), gh });
   assert.deepEqual(again, f);
   assert.equal(ctx(again, "pr.json"), before);
+  rmSync(f.worktree, { recursive: true, force: true }); // wt/ lost: recreated at the persisted sha
+  await frame({ repo: "o/r", n: 5, repoDir: fx.repoDir, runDir: dir, config: loadConfig({}), gh });
+  assert.equal(git(f.worktree, "rev-parse", "HEAD"), fx.head);
 });
 
 test("head moved between pr() and fetch -> HeadMoved; bad PR number -> error", async () => {

@@ -1,11 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, rmSync, utimesSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stateRoot, acquireLock, Locked, runDir, done, markDone, prState, savePrState } from "../lib/state.mjs";
 
+const deadPid = () => spawnSync("true").pid;
 const tmp = () => mkdtempSync(join(tmpdir(), "prr-state-"));
 
 test("stateRoot follows XDG_STATE_HOME and rejects odd repo names", () => {
@@ -26,7 +27,7 @@ test("second lock holder gets Locked; stale pid lock is taken", () => {
   release();
   assert.equal(existsSync(join(s, "lock")), false);
 
-  const dead = spawnSync("true").pid; // exited: its pid is not alive
+  const dead = deadPid(); // exited: its pid is not alive
   mkdirSync(join(s, "lock"));
   writeFileSync(join(s, "lock", "pid"), String(dead));
   const r2 = acquireLock(s);
@@ -76,19 +77,71 @@ const stateUrl = new URL("../lib/state.mjs", import.meta.url).href;
 const child = (code, s) => spawn(process.execPath, ["--input-type=module", "-e", code, s], { stdio: ["ignore", "pipe", "inherit"] });
 const output = (p) => new Promise((res) => { let out = ""; p.stdout.on("data", (d) => (out += d)); p.on("close", (code) => res({ out, code })); });
 
-test("racers on a stale lock: at most one wins", async () => {
-  const code = `import { acquireLock } from ${JSON.stringify(stateUrl)};
-    try { acquireLock(process.argv[1]); console.log("WIN"); setTimeout(() => {}, 1500); }
-    catch (e) { console.log(e.name); }`;
-  for (let round = 0; round < 5; round++) {
-    const s = tmp();
-    mkdirSync(join(s, "lock"));
-    writeFileSync(join(s, "lock", "pid"), String(spawnSync("true").pid));
-    const results = await Promise.all(Array.from({ length: 8 }, () => output(child(code, s))));
-    const outs = results.map((r) => r.out.trim());
-    assert.equal(outs.filter((o) => o === "WIN").length, 1, outs.join(","));
-    assert.ok(outs.every((o) => o === "WIN" || o === "Locked"), outs.join(","));
-    assert.deepEqual(readdirSync(s), []); // winner released on exit; no stale or mutex dirs left
+const RACER = `import { acquireLock } from ${JSON.stringify(stateUrl)};
+  try { acquireLock(process.argv[1]); console.log("WIN"); setTimeout(() => {}, 1500); }
+  catch (e) { console.log(e.name); }`;
+
+test("racers on a stale lock: exactly one wins (dead pid, or a legacy lock with no pid file older than 60 s)", async () => {
+  const seeds = {
+    deadPid: (s) => { mkdirSync(join(s, "lock")); writeFileSync(join(s, "lock", "pid"), String(deadPid())); },
+    legacyEmpty: (s) => { mkdirSync(join(s, "lock")); const t = new Date(Date.now() - 120000); utimesSync(join(s, "lock"), t, t); },
+    deadMutex: (s) => { // a takeover that crashed: stale lock and a dead mutex
+      seeds.deadPid(s);
+      mkdirSync(join(s, "lock.takeover"));
+      writeFileSync(join(s, "lock.takeover", "pid"), String(deadPid()));
+    },
+  };
+  for (const [name, seed] of Object.entries(seeds)) {
+    for (let round = 0; round < 5; round++) {
+      const s = tmp();
+      seed(s);
+      const outs = (await Promise.all(Array.from({ length: 8 }, () => output(child(RACER, s))))).map((r) => r.out.trim());
+      assert.equal(outs.filter((o) => o === "WIN").length, 1, `${name}: ${outs.join(",")}`);
+      assert.ok(outs.every((o) => o === "WIN" || o === "Locked"), `${name}: ${outs.join(",")}`);
+      assert.deepEqual(readdirSync(s), [], name); // winner released on exit; no temp, stale or mutex dirs left
+    }
+  }
+});
+
+test("a young lock with no pid file is held; dead temp and stale leftovers are swept", () => {
+  const s = tmp();
+  mkdirSync(join(s, "lock"));
+  assert.throws(() => acquireLock(s), Locked);
+  const dead = deadPid();
+  for (const f of [`lock.tmp.${dead}.aa`, `lock.stale.${dead}.bb`, `lock.takeover.tmp.${dead}.cc`]) mkdirSync(join(s, f));
+  mkdirSync(join(s, `lock.tmp.${process.pid}.dd`)); // ours: kept
+  rmSync(join(s, "lock"), { recursive: true });
+  acquireLock(s)();
+  assert.deepEqual(readdirSync(s), [`lock.tmp.${process.pid}.dd`]);
+});
+
+test("a stalled holder (SIGSTOP) keeps the lock and the takeover mutex; no time-based expiry", async () => {
+  const s = tmp();
+  const holder = child(`import { acquireLock } from ${JSON.stringify(stateUrl)};
+    acquireLock(process.argv[1]); console.log("HELD"); setInterval(() => {}, 1000);`, s);
+  await new Promise((res) => holder.stdout.once("data", res));
+  // A second stopped process owns an old-looking takeover mutex.
+  const sleeper = spawn("sleep", ["60"]);
+  mkdirSync(join(s, "lock.takeover"));
+  writeFileSync(join(s, "lock.takeover", "pid"), String(sleeper.pid));
+  const old = new Date(Date.now() - 3600000);
+  utimesSync(join(s, "lock"), old, old);
+  utimesSync(join(s, "lock.takeover"), old, old);
+  holder.kill("SIGSTOP");
+  sleeper.kill("SIGSTOP");
+  try {
+    const retry = `import { acquireLock } from ${JSON.stringify(stateUrl)};
+      const end = Date.now() + 12000; let won = 0;
+      while (Date.now() < end) { try { acquireLock(process.argv[1]); won++; break; } catch {} await new Promise((r) => setTimeout(r, 250)); }
+      console.log(won ? "WIN" : "Locked");`;
+    const outs = (await Promise.all(Array.from({ length: 4 }, () => output(child(retry, s))))).map((r) => r.out.trim());
+    assert.deepEqual(outs, ["Locked", "Locked", "Locked", "Locked"]);
+    holder.kill("SIGCONT");
+    assert.equal(readFileSync(join(s, "lock", "pid"), "utf8"), String(holder.pid)); // still the holder
+    assert.equal(readFileSync(join(s, "lock.takeover", "pid"), "utf8"), String(sleeper.pid));
+  } finally {
+    holder.kill("SIGKILL");
+    sleeper.kill("SIGKILL");
   }
 });
 

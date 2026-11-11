@@ -50,46 +50,74 @@ export function installSignalHandlers() {
 }
 
 const rawPid = (dir) => { try { return readFileSync(join(dir, "pid"), "utf8"); } catch { return ""; } };
+const rand = () => randomBytes(4).toString("hex");
 
-// Moves a stale lock aside and takes its place. A mutex serializes takeovers, so a live lock is never moved.
+// Creates `dir` with our pid already inside: renaming a temp dir onto a non-empty dir fails, so there is never a lock without a pid.
+function claim(dir) {
+  const tmp = `${dir}.tmp.${process.pid}.${rand()}`;
+  mkdirSync(tmp);
+  writeFileSync(join(tmp, "pid"), String(process.pid));
+  try { renameSync(tmp, dir); return true; } catch (e) {
+    rmSync(tmp, { recursive: true, force: true });
+    if (["EEXIST", "ENOTEMPTY"].includes(e.code)) return false;
+    throw e;
+  }
+}
+
+// Renames a dead holder's dir aside and deletes it; puts it back when it is no longer the dead holder's.
+function moveAside(dir, deadRaw) {
+  const stale = `${dir}.stale.${process.pid}.${rand()}`;
+  try { renameSync(dir, stale); } catch { return false; }
+  if (rawPid(stale) === deadRaw) { rmSync(stale, { recursive: true, force: true }); return true; }
+  try { renameSync(stale, dir); } catch (e) { process.stderr.write(`pr-review: could not put back ${dir} (moved to ${stale}): ${e.message}\n`); }
+  return false;
+}
+
+// Best effort: temp and moved-aside dirs whose named pid is dead.
+function sweep(repoState) {
+  try {
+    for (const f of readdirSync(repoState)) {
+      const pid = Number(/^lock(?:\.takeover)?\.(?:tmp|stale)\.(\d+)\./.exec(f)?.[1]);
+      if (pid && pid !== process.pid && !alive(pid)) rmSync(join(repoState, f), { recursive: true, force: true });
+    }
+  } catch {}
+}
+
+// A takeover holds a mutex (claimed the same way), so only one process at a time moves a stale lock aside.
+// shortcut: if a process crashes inside this short critical section and a racer clears its dead mutex while another
+// racer takes over, two holders are possible; the second guard is that every post first checks GitHub for its marker (spec 6.10 step 6).
 function takeOver(repoState, dir, deadRaw) {
   const mutex = join(repoState, "lock.takeover");
-  try { mkdirSync(mutex); } catch (e) {
-    if (e.code !== "EEXIST") throw e;
-    // shortcut: a mutex left by a crash mid-takeover is cleared after 10 s; a racer that clears a live one could double-take, only after such a crash.
-    try { if (Date.now() - statSync(mutex).mtimeMs > 10000) rmSync(mutex, { recursive: true, force: true }); } catch {}
-    return false;
+  if (!claim(mutex)) {
+    const m = rawPid(mutex);
+    if (!m || alive(Number(m)) || !moveAside(mutex, m) || !claim(mutex)) return false;
   }
   try {
-    if (rawPid(dir) !== deadRaw) return false; // replaced since we read it
-    const stale = `${dir}.stale.${process.pid}.${randomBytes(4).toString("hex")}`;
-    try { renameSync(dir, stale); } catch { return false; }
-    if (rawPid(stale) !== deadRaw) { try { renameSync(stale, dir); } catch {} return false; }
-    rmSync(stale, { recursive: true, force: true });
-    try { mkdirSync(dir); } catch (e) { if (e.code === "EEXIST") return false; throw e; }
-    return true;
+    return rawPid(dir) === deadRaw && moveAside(dir, deadRaw) && claim(dir);
   } finally {
-    rmSync(mutex, { recursive: true, force: true });
+    release(mutex);
   }
 }
 
 export function acquireLock(repoState) {
   const dir = join(repoState, "lock");
   mkdirSync(repoState, { recursive: true });
-  let got = false, raw = "";
-  for (let attempt = 0; attempt < 2 && !got; attempt++) {
-    try { mkdirSync(dir); got = true; break; } catch (e) { if (e.code !== "EEXIST") throw e; }
-    raw = rawPid(dir);
+  sweep(repoState);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (!existsSync(dir) && claim(dir)) return own(dir);
+    const raw = rawPid(dir);
     let age;
     try { age = Date.now() - statSync(dir).mtimeMs; } catch (e) { if (e.code === "ENOENT") continue; throw e; } // released meanwhile: retry once
-    const pid = Number(raw);
-    // No pid file yet: a fresh lock is still being written; treat it as live for a few seconds.
-    if (raw && Number.isInteger(pid) && pid > 0 ? alive(pid) : age < 5000) throw new Locked(raw ? pid : null);
-    got = takeOver(repoState, dir, raw);
-    if (!got) throw new Locked(null);
+    // Stale = its pid is dead. A lock dir with no pid file only comes from an older version or a manual mkdir:
+    // the one time-based rule treats it as stale after 60 s.
+    if (raw ? alive(Number(raw)) : age < 60000) throw new Locked(raw ? Number(raw) : null);
+    if (takeOver(repoState, dir, raw)) return own(dir);
+    throw new Locked(null);
   }
-  if (!got) throw new Locked(Number(raw) || null);
-  writeFileSync(join(dir, "pid"), String(process.pid));
+  throw new Locked(null);
+}
+
+function own(dir) {
   held.add(dir);
   installSignalHandlers();
   return () => release(dir);

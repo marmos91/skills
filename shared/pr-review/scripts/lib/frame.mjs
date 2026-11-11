@@ -52,6 +52,7 @@ function worktreeAt(repoDir, wt, sha) {
     if (gitOk(wt, ["rev-parse", "--is-inside-work-tree"]) && git(wt, ["rev-parse", "HEAD"]).trim() === sha) return;
     cleanupWorktree(dirname(wt));
   }
+  gitOk(repoDir, ["worktree", "prune"]); // a wt/ deleted by hand is still registered
   git(repoDir, ["worktree", "add", "--detach", wt, sha]);
 }
 
@@ -68,7 +69,11 @@ export function cleanupWorktree(runDir) {
 export async function frame({ repo, n, repoDir, runDir, config, gh = github, prState = {} }) {
   if (!Number.isInteger(n) || n <= 0) throw new Error(`PR number must be a positive integer, got ${n}`);
   // Resume: later stages must see the same context as the finished children did.
-  if (done(runDir, "frame")) return JSON.parse(readFileSync(join(runDir, "frame.json"), "utf8"));
+  if (done(runDir, "frame")) {
+    const f = JSON.parse(readFileSync(join(runDir, "frame.json"), "utf8"));
+    if (!existsSync(f.worktree)) worktreeAt(repoDir, f.worktree, f.headSha); // cleaned up or lost since
+    return f;
+  }
   const nonce = randomBytes(4).toString("hex"), wrap = wrapper(nonce);
   const p = await gh.pr(repo, n);
   const viewer = await gh.viewer();
