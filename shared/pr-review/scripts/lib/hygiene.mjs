@@ -1,7 +1,7 @@
 // PR hygiene check (spec 6.3.1): code checks plus one cheap judge-seat child.
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { EFFORT_AUTO_DEFAULTS, globMatch } from "./config.mjs";
+import { EFFORT_AUTO_DEFAULTS, globMatch, withLimits } from "./config.mjs";
 import { PR_DATA_NOTE, git, gitOk, readTree } from "./frame.mjs";
 import { hygienePrompt } from "./prompts.mjs";
 import { runChild } from "./child.mjs";
@@ -58,7 +58,7 @@ export async function hygiene(frame, config, effort, { routerUp } = {}) {
       try { diffSummary = git(frame.worktree, ["diff", "--stat", `${base}...${frame.headSha}`]).slice(0, 8000); } catch {}
       writeFileSync(promptFile, hygienePrompt(frame, { diffSummary }));
       const j = config.judge;
-      const seat = ["off", "minimal", "low"].includes(j.thinking) ? j : { ...j, thinking: "low" };
+      const seat = withLimits(config, ["off", "minimal", "low"].includes(j.thinking) ? j : { ...j, thinking: "low" });
       const r = await runChild({ seat, tools: "read", promptFile, outFile: join(runDir, "hygiene.json"), worktree: frame.worktree, schema: "hygiene", routerUp });
       findings.push(...r.findings.map((x) => ({ ...x, ask_author: true })));
     } catch {

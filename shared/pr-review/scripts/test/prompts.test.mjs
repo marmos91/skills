@@ -132,3 +132,11 @@ test("reply: role decides the task; compose adds writing.md; thread is data", ()
   assert.ok(compose.includes(read("writing.md").trim()));
   assert.throws(() => replyPrompt(frame(), thread, "vote"), /role/);
 });
+
+test("round 1, vote and merge carry the tool budget line", async () => {
+  const { round1Prompt, votePrompt, mergePrompt, composePrompt } = await import("../lib/prompts.mjs");
+  const f = { headSha: "a".repeat(40), baseRef: "main", ctxDir: "/ctx", worktree: "/wt", trusted: false, reviewNumber: 1, delta: {} };
+  const line = "Budget: at most 25 tool calls. Never run the same command twice. Run code only to confirm a specific suspected defect. When the budget is used, stop and output the JSON.";
+  for (const p of [round1Prompt(f, ["correctness"]), votePrompt(f, []), mergePrompt(f, {}, [])]) assert.ok(p.includes(line));
+  assert.ok(!composePrompt(f, [], "").includes(line));
+});

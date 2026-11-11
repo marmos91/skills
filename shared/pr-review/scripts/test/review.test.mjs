@@ -804,3 +804,16 @@ test("hygiene warnings are in the run summary; run.json keeps the planned child 
   assert.equal(JSON.parse(readFileSync(join(r.runDir, "run.json"), "utf8")).planned, r.planned);
   assert.ok(r.planned > 0);
 });
+
+test("round-1 children carry the lens max_turns; other children the global one", async () => {
+  const fx = fixture(); routes(fx);
+  mkdirSync(join(process.env.XDG_CONFIG_HOME, "pr-review"), { recursive: true });
+  writeFileSync(join(process.env.XDG_CONFIG_HOME, "pr-review", "config.json"), JSON.stringify({ review: { max_turns: 25 }, lenses: { security: { enabled: true, max_turns: 12 } } }));
+  const { r, run } = await go(fx, { all: { findings: [] }, security: { findings: [] }, correctness: { findings: [] }, adversarial: { findings: [] }, simplification: { findings: [] }, architecture: { findings: [] }, compose: { body: "Fine.", comments: [] } }, { effort: "high" });
+  assert.equal(r.exit, 0, r.summary);
+  const turns = (k) => run.calls.filter((c) => c.k.startsWith(k)).map((c) => c.seat.max_turns);
+  assert.deepEqual([...new Set(turns("security~"))], [12]);
+  assert.deepEqual([...new Set(turns("correctness~"))], [25]);
+  assert.deepEqual(turns("compose"), [25]);
+  assert.ok(run.calls.every((c) => c.seat.timeout_minutes === 10));
+});

@@ -99,13 +99,15 @@ function runOnce(script, args, env, cwd, timeoutMs) {
 }
 
 // retries = extra attempts after the first.
-export async function runChild({ seat, tools = "read", promptFile, outFile, worktree, schema, timeoutMs = 600000, retries = 2, routerUp }) {
+// The pi harness has no turn limit: there the timeout is the only bound on a long tool loop.
+export async function runChild({ seat, tools = "read", promptFile, outFile, worktree, schema, timeoutMs = (seat.timeout_minutes ?? 10) * 60000, retries = 2, routerUp }) {
   const fake = process.env.PR_REVIEW_FAKE;
   let harness = seat.harness;
   if (!fake && harness === "auto") harness = resolveHarness(seat, routerUp ?? (await probeRouter()));
   const script = join(HARNESS_DIR, `${fake ? "fake" : harness}.sh`);
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => ENV_OK.test(k)));
   if (worktree) env.SEAT_WORKTREE = worktree;
+  if (seat.max_turns) env.SEAT_MAX_TURNS = String(seat.max_turns);
   // an auto seat that resolved to claude is a router model: point claude at the router, as claude-mimir does
   if (seat.harness === "auto" && harness === "claude") {
     env.ANTHROPIC_BASE_URL = new URL(ROUTER_HEALTH()).origin;

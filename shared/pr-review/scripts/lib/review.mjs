@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSyn
 import { basename, join, resolve, sep } from "node:path";
 import * as github from "./github.mjs";
 import { runChild as realRunChild, ChildFailed, stopping } from "./child.mjs";
-import { LENSES, applyEffort, loadConfig, pickEffort, plannedChildren, seatId, seatsForLens, userConfigPath } from "./config.mjs";
+import { LENSES, applyEffort, loadConfig, pickEffort, plannedChildren, seatId, seatsForLens, userConfigPath, withLimits } from "./config.mjs";
 import { frame as realFrame, git, readTree, HeadMoved, DiffTooLarge } from "./frame.mjs";
 import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.mjs";
 import { tally } from "./tally.mjs";
@@ -75,13 +75,14 @@ export async function review(opts) {
 }
 
 // One child: a marker means its output is reused, never paid for twice (spec 8).
-async function child(ctx, stage, key, { seat, prompt, schema, tools = "read" }) {
+// lens: the one lens of a round-1 child, for a lens-level max_turns.
+async function child(ctx, stage, key, { seat, prompt, schema, tools = "read", lens }) {
   const dir = join(ctx.runDir, stage), outFile = join(dir, `${key}.json`);
   if (done(ctx.runDir, stage, key)) return readJson(outFile);
   mkdirSync(dir, { recursive: true });
   const promptFile = join(dir, `${key}.prompt`);
   writeFileSync(promptFile, prompt());
-  const v = await ctx.runChild({ seat, tools, promptFile, outFile, worktree: ctx.frame.worktree, schema, routerUp: ctx.routerUp });
+  const v = await ctx.runChild({ seat: withLimits(ctx.config, seat, lens), tools, promptFile, outFile, worktree: ctx.frame.worktree, schema, routerUp: ctx.routerUp });
   save(outFile, v);
   markDone(ctx.runDir, stage, key);
   return v;
@@ -187,12 +188,12 @@ async function once(o, restart) {
   if (o.until === "frame") return finish("frame");
 
   // Round 1 (spec 6.2) and the hygiene check (6.3.1) run side by side.
-  const ctx = { runDir, frame: f, runChild: o.runChild, routerUp: o.routerUp };
+  const ctx = { runDir, frame: f, runChild: o.runChild, routerUp: o.routerUp, config };
   const tools = f.trusted ? "shell" : "read";
   const jobs = round1Jobs(config, run.lenses);
   const hygFile = join(runDir, "hygiene-result.json");
   const [outs, hyg] = await settled([
-    settled(jobs.map((j) => child(ctx, "round1", j.key, { seat: j.seat, tools, schema: "round1", prompt: () => round1Prompt(f, j.lenses) }).then((v) => ({ ...j, v })))),
+    settled(jobs.map((j) => child(ctx, "round1", j.key, { seat: j.seat, tools, schema: "round1", lens: j.lenses.length === 1 ? j.lenses[0] : undefined, prompt: () => round1Prompt(f, j.lenses) }).then((v) => ({ ...j, v })))),
     existsSync(hygFile) ? readJson(hygFile) : o.hygiene(f, config, run.effort, { routerUp: o.routerUp }).then((h) => { save(hygFile, h); return h; }),
   ]);
   markDone(runDir, "round1");

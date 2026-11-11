@@ -6,6 +6,7 @@
     { "harness": "auto",   "model": "cubbit/mimir",     "thinking": "high" }
   ],
   // "per-seat" = 1 child per seat runs all its lenses; "per-lens" = 1 child per seat and lens.
+  // The effort level overrides this: low and medium run per-seat, high and max per-lens.
   "round1": "per-seat",
   // Per-lens override. A lens with "seats" uses only those seats. A lens needs 2 or more seats.
   "lenses": {
@@ -24,6 +25,9 @@
     "max_review_rounds": 3,
     "max_replies_per_thread": 2
   },
+  // Limits per child: a seat may set its own "max_turns" and "timeout_minutes", a lens its own "max_turns".
+  // max_turns reaches claude seats only (--max-turns); pi has no such flag, so the timeout bounds it.
+  "review": { "max_turns": 30, "timeout_minutes": 10 },
   // PR hygiene check (title, body, linked issue, changelog). Repo level may set it too.
   "hygiene": { "enabled": true }
 }

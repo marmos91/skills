@@ -165,3 +165,33 @@ test("claude adapter: read seats may use only Read, Grep, Glob; shell seats get 
   a = readFileSync(join(dir, "argv"), "utf8");
   assert.match(a, /--tools Read,Grep,Glob,Bash --allowedTools Read,Grep,Glob,Bash(\s|$)/);
 });
+
+test("max_turns: claude gets --max-turns; pi has no such flag", async () => {
+  stub("claude", `echo "$@" >"${dir}/argv"; printf '%s' '${OK}'`);
+  await runChild(base({ ...claudeSeat, max_turns: 7 }));
+  assert.match(readFileSync(join(dir, "argv"), "utf8"), /--max-turns 7(\s|$)/);
+  await runChild(base(claudeSeat));
+  assert.doesNotMatch(readFileSync(join(dir, "argv"), "utf8"), /--max-turns/);
+  stub("pi", `echo "$@" >"${dir}/argv"; printf '%s' '${OK}'`);
+  await runChild(base({ ...piSeat, max_turns: 7 }));
+  assert.doesNotMatch(readFileSync(join(dir, "argv"), "utf8"), /max-turns/);
+});
+
+test("timeout_minutes sets the child timeout (default 10 minutes)", async (t) => {
+  stub("claude", "sleep 300");
+  const realSetTimeout = globalThis.setTimeout;
+  const wait = (ms) => new Promise((r) => realSetTimeout(r, ms));
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  for (const [seat, ms] of [[{ ...claudeSeat, timeout_minutes: 2 }, 120000], [claudeSeat, 600000]]) {
+    let msg;
+    const p = runChild({ seat, promptFile: prompt, outFile: join(dir, "to.json"), retries: 0 }).then(() => "ok", (e) => e.message).then((m) => (msg = m));
+    t.mock.timers.tick(ms - 1);
+    await wait(300);
+    assert.equal(msg, undefined, "not before the timeout");
+    t.mock.timers.tick(1);
+    for (let i = 0; i < 50 && msg === undefined; i++) await wait(100);
+    if (msg === undefined) t.mock.timers.tick(3600000); // a wrong timeout must not hang the suite
+    await p;
+    assert.match(msg, new RegExp(`timed out after ${ms}ms`));
+  }
+});

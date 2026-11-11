@@ -6,6 +6,7 @@ import * as github from "./github.mjs";
 import { runChild as realRunChild, ChildFailed, stopping } from "./child.mjs";
 import { askJev } from "./decider.mjs";
 import { budgetLeft } from "./convergence.mjs";
+import { withLimits } from "./config.mjs";
 import { prData, replyPrompt, seatData } from "./prompts.mjs";
 import { scanOutbound } from "./secrets.mjs";
 import { prState, savePrState, stateRoot } from "./state.mjs";
@@ -75,7 +76,7 @@ export async function reply({ repo, n, threadId, mode, frame, config, runDir, gh
   const seat = async (role, s, draft) => {
     const promptFile = join(dir, `${role}.prompt`);
     writeFileSync(promptFile, replyPrompt(frame, t, role, draft));
-    return runChild({ seat: s, promptFile, outFile: join(dir, `${role}.json`), worktree: frame.worktree, schema: "reply", routerUp });
+    return runChild({ seat: withLimits(config, s), promptFile, outFile: join(dir, `${role}.json`), worktree: frame.worktree, schema: "reply", routerUp });
   };
 
   const drafter = config.seats[0];

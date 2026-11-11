@@ -10,6 +10,8 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const read = (p) => readFileSync(join(ROOT, p), "utf8").trim();
 const json = (v) => JSON.stringify(v, null, 2);
 const OUT = "Print only this JSON value. No prose and no code fence before or after it.";
+// Seats on long tool loops repeat commands; the engine's turn limit is the backstop (review.max_turns).
+const BUDGET = "Budget: at most 25 tool calls. Never run the same command twice. Run code only to confirm a specific suspected defect. When the budget is used, stop and output the JSON.";
 
 // Untrusted text must not close its own block early (spec 4 rule 5): a random tag per block,
 // and look-alike tags inside the text are broken as a second layer.
@@ -79,6 +81,8 @@ export function round1Prompt(frame, lenses) {
       : []),
     "",
     ...lenses.flatMap((l) => [`## Lens: ${l}`, "", lens(l, frame.trusted), ""]),
+    BUDGET,
+    "",
     "## Output",
     OUT,
     `{"findings": [${finding(sev.join("|"))}]${n > 1 ? ', "earlier": [{"thread_id": "...", "status": "fixed|open", "evidence": "..."}]' : ""}${tracking ? ', "no_tracking": false' : ""}}`,
@@ -104,6 +108,8 @@ export function votePrompt(frame, clusters) {
       ? "- `evidence_run`: true only when you ran a command in the worktree that proves your vote. Put the command and its output in `counter_case` for a drop."
       : "- You have no shell. Set `evidence_run` to false.",
     "- Vote on each finding one time.",
+    "",
+    BUDGET,
     "",
     "## Output",
     OUT,
@@ -132,6 +138,8 @@ export function mergePrompt(frame, findingsBySeat, earlierAgreed = []) {
     "- Mark each cluster that reverses an earlier agreed finding: it asks for the opposite of that finding, for example to add back what it asked to remove. Keep the cluster, and set `reverses` to the id of the earlier finding. The engine drops and records it. Leave `reverses` out on other clusters.",
     "- Do not add findings. Do not judge if a finding is real; the vote does that.",
     "- Number the clusters c1, c2, c3, and so on.",
+    "",
+    BUDGET,
     "",
     "## Output",
     OUT,

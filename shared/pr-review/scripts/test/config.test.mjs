@@ -119,3 +119,23 @@ test("__proto__ keys cannot pollute prototypes", () => {
   assert.equal(c.polluted, undefined);
   assert.equal(c.loop.polluted, undefined);
 });
+
+test("turn and time limits: seat, then lens, then review.* (defaults 30 turns, 10 minutes); validated", async () => {
+  const { withLimits } = await import("../lib/config.mjs");
+  const c = loadConfig({ userPath: tmp(JSON.stringify({
+    seats: [{ harness: "claude", model: "opus", thinking: "high", max_turns: 12, timeout_minutes: 4 }, { harness: "pi", model: "m", thinking: "high" }],
+    lenses: { security: { enabled: true, max_turns: 20 } },
+  })) });
+  assert.deepEqual([c.review.max_turns, c.review.timeout_minutes], [30, 10]);
+  const [a, b] = c.seats;
+  assert.deepEqual([withLimits(c, a, "security").max_turns, withLimits(c, a).timeout_minutes], [12, 4]);
+  assert.deepEqual([withLimits(c, b, "security").max_turns, withLimits(c, b, "correctness").max_turns, withLimits(c, b).timeout_minutes], [20, 30, 10]);
+  for (const [text, re] of [
+    ['{"seats":[{"harness":"pi","model":"m","thinking":"low","max_turns":0}]}', /seats\[0\].max_turns must be a positive integer/],
+    ['{"seats":[{"harness":"pi","model":"m","thinking":"low","timeout_minutes":"5"}]}', /seats\[0\].timeout_minutes must be a positive integer/],
+    ['{"judge":{"harness":"claude","model":"opus","thinking":"high","max_turns":1.5}}', /judge.max_turns must be a positive integer/],
+    ['{"lenses":{"security":{"enabled":true,"max_turns":-1}}}', /lenses.security.max_turns must be a positive integer/],
+    ['{"review":{"max_turns":0}}', /review.max_turns must be a positive integer/],
+    ['{"review":{"timeout_minutes":0}}', /review.timeout_minutes must be a positive integer/],
+  ]) assert.throws(() => loadConfig({ userPath: tmp(text) }), re, text);
+});

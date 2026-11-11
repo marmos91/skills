@@ -38,7 +38,8 @@ export const DEFAULTS = {
   judge: seat("claude", "opus"),
   decider: { kind: "auto", confidence: 0 },
   loop: { authors_ignore: [], max_prs_per_run: 10, max_review_rounds: 3, max_replies_per_thread: 2, effort: "auto", ci_wait_minutes: 30 },
-  review: { guidance: [], ci: "use", max_diff_lines: 3000 },
+  // max_turns and timeout_minutes: defaults for every child; a seat or a lens may set its own.
+  review: { guidance: [], ci: "use", max_diff_lines: 3000, max_turns: 30, timeout_minutes: 10 },
   hygiene: { enabled: true },
 };
 
@@ -111,6 +112,7 @@ function checkSeat(s, where) {
   need(s.provider === undefined || typeof s.provider === "string", `${where}.provider`, "a string");
   const ok = s.harness === "claude" ? CLAUDE_THINKING : PI_THINKING;
   need(ok.includes(s.thinking), `${where}.thinking (${s.harness} seat)`, `one of ${ok.join("|")}`);
+  for (const k of ["max_turns", "timeout_minutes"]) need(s[k] === undefined || posInt(s[k]), `${where}.${k}`, "a positive integer");
 }
 
 function validate(c) {
@@ -123,6 +125,7 @@ function validate(c) {
     need(LENSES.includes(name), `lenses.${name}`, `a known lens (${LENSES.join(", ")})`);
     need(isObj(l), `lenses.${name}`, "an object");
     need(typeof l.enabled === "boolean", `lenses.${name}.enabled`, "a boolean");
+    need(l.max_turns === undefined || posInt(l.max_turns), `lenses.${name}.max_turns`, "a positive integer");
     if (l.seats === undefined) continue;
     if (!Array.isArray(l.seats) || l.seats.length < 2) throw new Error(`lens ${name} needs 2 or more seats`);
     l.seats.forEach((s, i) => checkSeat(s, `lenses.${name}.seats[${i}]`));
@@ -140,7 +143,7 @@ function validate(c) {
   need(isObj(c.review) && strList(c.review.guidance), "review.guidance", "an array of strings");
   need(["use", "ignore"].includes(c.review.ci), "review.ci", "use or ignore");
   need(isObj(c.hygiene) && typeof c.hygiene.enabled === "boolean", "hygiene.enabled", "a boolean");
-  need(posInt(c.review.max_diff_lines), "review.max_diff_lines", "a positive integer");
+  for (const k of ["max_diff_lines", "max_turns", "timeout_minutes"]) need(posInt(c.review[k]), `review.${k}`, "a positive integer");
 }
 
 export function loadConfig({ userPath, repoText, cliPath } = {}) {
@@ -164,6 +167,13 @@ export function loadConfig({ userPath, repoText, cliPath } = {}) {
 }
 
 export const seatId = (s) => `${s.harness}:${s.model}`;
+
+/** The seat with its child limits: the seat's own, then the lens's max_turns, then review.max_turns / review.timeout_minutes. */
+export const withLimits = (config, s, lens) => ({
+  ...s,
+  max_turns: s.max_turns ?? config.lenses[lens]?.max_turns ?? config.review.max_turns,
+  timeout_minutes: s.timeout_minutes ?? config.review.timeout_minutes,
+});
 
 export function seatsForLens(config, lens) {
   return config.lenses[lens]?.seats ?? config.seats;
