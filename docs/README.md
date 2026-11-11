@@ -31,7 +31,7 @@ The skills:
 | `pi/<skill>` | `~/.pi/agent/skills/<skill>` | `PI_DIR` |
 | `claude/<skill>` | `~/.claude/skills/<skill>` | `CLAUDE_DIR` |
 | `shared/<skill>` | both directories above | |
-| `shared/<skill>/bin/*` | `~/.local/bin/` (for example `jev` and `pr-review`) | `BIN_DIR` |
+| `shared/<skill>/bin/*` | `~/.local/bin/` (for example `jev`, `pr-review` and `pr-review-loop`) | `BIN_DIR` |
 
 - You can run `install.sh` again after a pull. It is idempotent.
 - If a real directory has the same name, `install.sh` moves it to `<name>.pre-skills-repo`.

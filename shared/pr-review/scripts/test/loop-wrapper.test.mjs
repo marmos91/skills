@@ -57,3 +57,13 @@ test("tick with a positional repo sees the pause of that repo", () => {
   assert.equal(t.status, 0, t.stderr);
   assert.match(t.stderr, /paused/);
 });
+
+test("the bin link runs the wrapper; pause takes --repo; answer passes --repo", () => {
+  const link = join(dirname(bin), "..", "bin", "pr-review-loop");
+  const env = { ...process.env, XDG_STATE_HOME: mkdtempSync(join(tmpdir(), "loopbin-")) };
+  const paused = join(env.XDG_STATE_HOME, "pr-review", "o__r", "paused");
+  assert.match(execFileSync(link, ["pause", "--repo", "o/r"], { env, encoding: "utf8" }), /paused: o\/r/);
+  assert.ok(existsSync(paused));
+  assert.equal(spawnSync(link, ["pause", "o/r", "EXTRA"], { env }).status, 1);
+  assert.equal(JSON.parse(execFileSync(link, ["answer", "--repo", "o/r"], { env, encoding: "utf8" })).length, 0);
+});

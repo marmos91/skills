@@ -392,7 +392,8 @@ PR head.
 4. List open PRs where you are the author, a requested reviewer (you or one
    of your teams), a past reviewer, or mentioned. Skip drafts and authors in
    `loop.authors_ignore`.
-5. Skip a PR when its head SHA and newest comment did not change.
+5. Skip a PR whose GitHub `updatedAt` did not change. A title or label edit
+   counts as a change, so such a PR is looked at again.
 6. First tick: set a baseline time. Only later activity counts, plus review
    requests that are still open.
 7. Take at most `loop.max_prs_per_run` PRs (default 10), oldest activity

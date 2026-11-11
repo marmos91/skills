@@ -31,13 +31,14 @@ the next run.
 
 ## Answer the questions (`/pr-review-loop answer`)
 
-1. Run `sh "$SKILL_DIR/scripts/pr-review-loop" answer`. It prints the open
+1. Run `sh "$SKILL_DIR/scripts/pr-review-loop" answer --repo owner/repo` (the
+   repo the loop runs on; outside a clone of it the repo is required). It prints the open
    questions as JSON.
 2. Ask the user. Claude Code: `AskUserQuestion`, at most 4 questions per
    call. pi: the `ask_user` tool. Show the finding and both arguments. Do not
    add your own opinion.
 3. For each answer, run
-   `sh "$SKILL_DIR/scripts/pr-review-loop" answer <id> <post|drop|ask-author>`.
+   `sh "$SKILL_DIR/scripts/pr-review-loop" answer <id> <post|drop|ask-author> --repo owner/repo`.
 4. Do not run a tick for this. The next tick applies the answers. It checks
    each finding against the current head first and drops it if the code
    moved.
