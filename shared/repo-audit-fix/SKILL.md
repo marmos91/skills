@@ -86,7 +86,7 @@ its own git worktree** so two agents never touch the same checkout.
 | `EPIC_FILTER` | — | comma list of epics (testing/partial runs) |
 | `DRY_RUN` | 0 | 1 = skip actual `gh pr create` |
 | `JEV` | auto | `auto` = use the `jev` CLI when on PATH: flags findings an approved plan drops (once per finding, never on the last plan round); the first jev outage turns it off for the rest of the run; `off` = never |
-| `JEV_CONFIDENCE` | 0.5 | minimum jev confidence to act on its answer (live confidence is low, so higher values make jev mostly `unsure`) |
+| `JEV_CONFIDENCE` | 0 | minimum jev confidence to act on its answer; 0 = no gate, because confidence does not predict correctness (`shared/jev/bench/RESULTS.md`) |
 | `REPO_CTX` | generic | one-line project context for every child |
 | `LENS` | `$REPO_DIR/scripts/review-lens.sh` | the 3-lens gate script — see *Lens contract*. REQUIRED: set `LENS` if the repo has no such script (e.g. `LENS=<skill>/scripts/review-lens.sh`, the shipped template) — the engine dies rather than fakes a passed review |
 

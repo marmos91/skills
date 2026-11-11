@@ -42,10 +42,10 @@ ISSUE_LABEL="${ISSUE_LABEL:-audit}"
 DRY_RUN="${DRY_RUN:-0}"
 # jev (shared/jev): cheap calibrated yes/no checks. auto = use it when on PATH; off = never.
 JEV="${JEV:-auto}"
-# Live SystemOne confidence is low even on obvious answers (~0.26 for "the sky
-# is blue"), so the bar is 0.5. shortcut: not measured on real plans; tune it
-# once there is data on how often jev's "no" matches a real dropped finding.
-JEV_CONFIDENCE="${JEV_CONFIDENCE:-0.5}"
+# No gate by default: on the plan-coverage benchmark (shared/jev/bench/RESULTS.md)
+# confidence does not predict correctness, and with the question below every
+# "no" was right at any bar while 0.5 dropped 6 of 27 caught gaps.
+JEV_CONFIDENCE="${JEV_CONFIDENCE:-0}"
 # Project context for every child. Generic default; override per project.
 REPO_CTX="${REPO_CTX:-Context: this repo documents its stack, layout and house rules in AGENTS.md (and README) — read it first and follow its conventions: branch/PR workflow, commit style, test and lint commands, code style. Prefer the smallest complete diff; small pure modules; no speculative flexibility.}"
 
@@ -102,7 +102,9 @@ const e=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
 for (const f of e.findings) console.log([f.id, f.title, f.what].map(x=>String(x||"").replace(/[\t\n]/g," ")).join("\t"));' "$_dir/epic.json" |
     while IFS="$(printf '\t')" read -r _id _title _what; do
         grep -qxF "$_id" "$_dir/jev-flagged" && continue
-        _v="$(jev_verdict "This plan fixes finding $_id ($_title: $_what), or states explicitly why that finding is skipped." "$_dir/plan.md")"
+        # wording picked by shared/jev/bench: the old "...or states explicitly why that
+        # finding is skipped" read 6 of 7 explicit skips as gaps
+        _v="$(jev_verdict "The plan has a step that fixes this problem: $_title ($_what); or it marks finding $_id as SKIP and says why." "$_dir/plan.md")"
         if [ "$_v" = no ]; then
             echo "$_id" >>"$_dir/jev-flagged"
             echo "$_id: $_title"

@@ -47,6 +47,6 @@ run under pi, Claude Code, or any agent with the `pi` CLI available.
 ## Conventions
 
 - Skill engines never fake success: a dead/empty child is a failed gate, never "no findings".
-- `jev` only adds signal: engines act on a confident yes/no and keep their old behaviour when jev is missing, down (exit 2) or unsure. `JEV=off` disables it; `JEV_CONFIDENCE` (default 0.5) sets the bar. jev never relaxes a gate: it can only add a finding or a revise round.
+- `jev` only adds signal: engines act on jev's yes/no and keep their old behaviour when jev is missing, down (exit 2) or unsure. `JEV=off` disables it; `JEV_CONFIDENCE` (default 0, no gate; see `shared/jev/bench/RESULTS.md`) sets a confidence bar. jev never relaxes a gate: it can only add a finding or a revise round.
 - Resumable by on-disk markers; crash = retry, never silent skip.
 - Project-specific tuning lives in env vars (REPO_CTX, model routes, paths) — engines default generically.
