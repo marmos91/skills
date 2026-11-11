@@ -32,7 +32,7 @@ const DEFAULTS = {
   lenses: Object.fromEntries(LENSES.map((l) => [l, { enabled: true }])),
   judge: seat("claude", "opus"),
   decider: { kind: "auto", confidence: 0 },
-  loop: { authors_ignore: [], max_prs_per_run: 10, max_review_rounds: 3, max_replies_per_thread: 2, effort: "auto" },
+  loop: { authors_ignore: [], max_prs_per_run: 10, max_review_rounds: 3, max_replies_per_thread: 2, effort: "auto", ci_wait_minutes: 30 },
   review: { guidance: [], ci: "use", max_diff_lines: 3000 },
   hygiene: { enabled: true },
 };
@@ -127,7 +127,7 @@ function validate(c) {
   need(typeof c.decider.confidence === "number" && c.decider.confidence >= 0 && c.decider.confidence <= 1, "decider.confidence", "a number in [0,1]");
   need(isObj(c.loop), "loop", "an object");
   need(strList(c.loop.authors_ignore), "loop.authors_ignore", "an array of strings");
-  for (const k of ["max_prs_per_run", "max_review_rounds", "max_replies_per_thread"]) need(posInt(c.loop[k]), `loop.${k}`, "a positive integer");
+  for (const k of ["max_prs_per_run", "max_review_rounds", "max_replies_per_thread", "ci_wait_minutes"]) need(posInt(c.loop[k]), `loop.${k}`, "a positive integer");
   need(EFFORT_VALUES.includes(c.effort), "effort", `one of ${EFFORT_VALUES.join("|")}`);
   need(EFFORT_VALUES.includes(c.loop.effort), "loop.effort", `one of ${EFFORT_VALUES.join("|")}`);
   need(isObj(c.effort_auto), "effort_auto", "an object");
