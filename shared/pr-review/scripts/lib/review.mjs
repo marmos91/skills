@@ -60,7 +60,6 @@ export async function review(opts) {
   const mine = () => { try { return Number(readFileSync(join(repoState, "lock", "pid"), "utf8")) === process.pid; } catch { return false; } };
   const release = lock && !mine() ? acquireLock(repoState) : () => {};
   try {
-    sweepWorktrees(repoState);
     for (let attempt = 0; ; attempt++) {
       try { return await once(o, o.restart && attempt === 0); } catch (e) {
         if (!(e instanceof HeadMoved) || attempt >= 2) throw e;
@@ -75,17 +74,23 @@ export async function review(opts) {
   } finally { release(); }
 }
 
-/** Removes the worktree of every finished run of the repo; ctx stays (the loop reads it later), and a resume makes it again. */
-export function sweepWorktrees(repoState) {
-  const pr = join(repoState, "pr");
+/**
+ * Removes the worktree of every finished run of the repo, and of every run of PR `n` at a head other than `head`
+ * (never resumed). ctx stays (the loop reads it later); a resume makes the worktree again. Best effort: a folder
+ * that cannot go is tried again on the next sweep, and never fails a review.
+ */
+export function sweepWorktrees(repoState, n, head) {
+  const root = join(repoState, "pr");
   let ls = [];
-  try { ls = readdirSync(pr); } catch { return; }
-  for (const n of ls) {
+  try { ls = readdirSync(root); } catch { return; }
+  for (const p of ls) {
     let runs = [];
-    try { runs = readdirSync(join(pr, n, "runs")); } catch { continue; }
+    try { runs = readdirSync(join(root, p, "runs")); } catch { continue; }
     for (const r of runs) {
-      const dir = join(pr, n, "runs", r);
-      if (done(dir, FINAL_STAGE) && existsSync(join(dir, "wt"))) cleanupWorktree(dir);
+      const dir = join(root, p, "runs", r);
+      if (done(dir, FINAL_STAGE) || (String(n) === p && head && !r.startsWith(`${head}-`))) {
+        try { cleanupWorktree(dir); } catch {}
+      }
     }
   }
 }
@@ -201,6 +206,7 @@ async function once(o, restart) {
   const userConfig = config0({ userPath, cliPath: o.configPath }, o.maxDiffLines);
   let config = userConfig;
   const head = (await gh.pr(repo, n)).headSha;
+  sweepWorktrees(repoState, n, head);
   const runDir = pickRunDir(repoState, n, head, { restart });
   const runId = basename(runDir);
   const pst0 = prState(repoState, n);

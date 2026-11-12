@@ -64,6 +64,8 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
     return { ...out, locked: true };
   }
   try {
+    // reply-only runs end here, not in review(): sweep their worktrees too
+    (await import("./review.mjs")).sweepWorktrees(rs);
     await run();
   } finally { release(); }
   out.questions = openQuestions(rs).length;

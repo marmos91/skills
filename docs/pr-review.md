@@ -74,7 +74,9 @@ every seat reads:
 - Your own open findings from earlier reviews, with their threads.
 - CI state for the head SHA (see [CI](#ci)).
 - A git worktree at the pinned SHA. Seats read callers and tests there. Full
-  files are not copied into the prompt.
+  files are not copied into the prompt. The next review or tick removes the worktree of a
+  finished run, and of a run at an older head; `ctx` stays, and a resumed run
+  makes the worktree again.
 - One patch per diff part (`ctx/chunks/<i>.patch`), made with `git diff -W`:
   each change comes with its whole function. Round 1 puts the patch into the
   prompt when it has 2500 lines or fewer, so seats need fewer reads.
