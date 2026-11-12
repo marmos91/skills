@@ -40,8 +40,8 @@ const ghList = (path) => ghApi(["--paginate", "--slurp", path]).flat();
 function issue(repo, number, wrap) {
   try {
     const i = ghApi([`repos/${repo}/issues/${number}`]);
-    return { number, title: wrap(i.title), body: wrap(String(i.body ?? "").slice(0, 2000)) };
-  } catch { return { number }; }
+    return { number, title: wrap(i.title), body: wrap(String(i.body ?? "").slice(0, 2000)), author: i.user?.login ?? null, association: i.author_association ?? null };
+  } catch { return { number, author: null, association: null }; }
 }
 
 // The repo's own guidance list counts too: frame runs before the caller merges repoConfigText.
@@ -114,6 +114,8 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
     .map((l) => ({ sha: l.slice(0, l.indexOf(" ")), subject: wrap(l.slice(l.indexOf(" ") + 1)) }));
   const issues = p.closingIssues.map((i) => issue(repo, i, wrap));
   json(ctxDir, "pr.json", { number: n, ...p, title: wrap(p.title), body: wrap(p.body), commits, closingIssues: issues });
+  // Text authors in ctx: [login, association]. A seat with a shell reads all of it, so each one must be trusted.
+  const authors = issues.map((i) => [i.author, i.association]);
 
   const repoConfigText = show(repoDir, base, ".pr-review.json");
   const guidance = [...new Set([...GUIDANCE, ...config.review.guidance, ...repoGuidance(repoConfigText ?? "")])].filter(safePath);
@@ -125,10 +127,13 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
   }
 
   const mine = (login, body) => (login === viewer ? body : wrap(body));
-  json(ctxDir, "reviews.json", ghList(`repos/${repo}/pulls/${n}/reviews`).map((r) => ({ author: r.user?.login ?? null, state: r.state, submitted_at: r.submitted_at, body: mine(r.user?.login, r.body) })));
-  json(ctxDir, "comments.json", ghList(`repos/${repo}/issues/${n}/comments`).map((c) => ({ author: c.user?.login ?? null, created_at: c.created_at, body: mine(c.user?.login, c.body) })));
+  const reviews = ghList(`repos/${repo}/pulls/${n}/reviews`), comments = ghList(`repos/${repo}/issues/${n}/comments`);
+  for (const x of [...reviews, ...comments]) authors.push([x.user?.login, x.author_association]);
+  json(ctxDir, "reviews.json", reviews.map((r) => ({ author: r.user?.login ?? null, state: r.state, submitted_at: r.submitted_at, body: mine(r.user?.login, r.body) })));
+  json(ctxDir, "comments.json", comments.map((c) => ({ author: c.user?.login ?? null, created_at: c.created_at, body: mine(c.user?.login, c.body) })));
 
   const threads = await gh.threads(repo, n);
+  for (const t of threads) for (const c of t.comments) authors.push([c.author, c.authorAssociation]);
   json(ctxDir, "threads.json", threads.map((t) => ({ ...t, comments: t.comments.map((c) => ({ ...c, body: mine(c.author, c.body) })) })));
   // The viewer's open earlier findings.
   json(ctxDir, "earlier.json", threads.filter((t) => !t.isResolved && t.comments[0]?.author === viewer).map((t) => ({
@@ -156,8 +161,10 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
   const worktree = join(runDir, "wt");
   worktreeAt(repoDir, worktree, head);
 
+  const trusted = TRUSTED.has(p.authorAssociation);
   const f = {
-    headSha: head, baseRef: p.baseRef, trusted: TRUSTED.has(p.authorAssociation), ownPr: p.author === viewer,
+    headSha: head, baseRef: p.baseRef, trusted, ownPr: p.author === viewer,
+    shellOk: trusted && authors.every(([login, a]) => (login && login === viewer) || TRUSTED.has(a)),
     reviewNumber: (prState.reviews ?? 0) + 1, delta, ctxDir, worktree, changedPaths, ci, repoConfigText, nonce,
   };
   json(runDir, "frame.json", f);

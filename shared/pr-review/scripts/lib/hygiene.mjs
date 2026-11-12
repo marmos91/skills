@@ -59,7 +59,7 @@ export async function hygiene(frame, config, effort, { routerUp } = {}) {
       writeFileSync(promptFile, hygienePrompt(frame, { diffSummary }));
       const j = config.judge;
       const seat = withLimits(config, ["off", "minimal", "low"].includes(j.thinking) ? j : { ...j, thinking: "low" });
-      const r = await runChild({ trusted: frame.trusted, seat, tools: "read", promptFile, outFile: join(runDir, "hygiene.json"), worktree: frame.worktree, ctxDir: frame.ctxDir, schema: "hygiene", routerUp });
+      const r = await runChild({ trusted: frame.shellOk, seat, tools: "read", promptFile, outFile: join(runDir, "hygiene.json"), worktree: frame.worktree, ctxDir: frame.ctxDir, schema: "hygiene", routerUp });
       findings.push(...r.findings.map((x) => ({ ...x, ask_author: true })));
     } catch {
       warnings.push("hygiene child failed"); // the error text may hold model or PR text

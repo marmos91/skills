@@ -110,7 +110,7 @@ mkdirSync(join(ctxDir, "guidance"), { recursive: true });
 writeFileSync(join(ctxDir, "guidance", "CONTRIBUTING.md"), "Please link an issue.");
 const wrap = (s) => `<<<PR-DATA-ab12\nnote\n${s}\nPR-DATA-ab12>>>`;
 writeFileSync(join(ctxDir, "pr.json"), JSON.stringify({ title: wrap("Update stuff"), body: wrap(""), commits: [{ sha: "1", subject: wrap("Update stuff") }], closingIssues: [] }));
-const frame = { headSha: "HEAD", baseRef: "main", trusted: true, ctxDir, worktree: dir, changedPaths: ["src/a.js"], nonce: "ab12", reviewNumber: 1, delta: {} };
+const frame = { headSha: "HEAD", baseRef: "main", trusted: true, shellOk: true, ctxDir, worktree: dir, changedPaths: ["src/a.js"], nonce: "ab12", reviewNumber: 1, delta: {} };
 const fx = join(dir, "fx.json");
 const cfg = loadConfig();
 const model = { findings: [{ lens: "hygiene", severity: "should", title: "Description differs", case: "Body says X, diff does Y", fix: "Update the body" }] };

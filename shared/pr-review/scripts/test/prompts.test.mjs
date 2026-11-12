@@ -9,7 +9,7 @@ import { LENSES } from "../lib/config.mjs";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const read = (p) => readFileSync(join(ROOT, p), "utf8");
 const frame = (over = {}) => ({
-  headSha: "abc123", baseRef: "main", trusted: true, ownPr: false, reviewNumber: 1,
+  headSha: "abc123", baseRef: "main", trusted: true, shellOk: true, ownPr: false, reviewNumber: 1,
   delta: { base: null, isAncestor: false }, ctxDir: "/run/ctx", worktree: "/run/wt",
   changedPaths: ["src/a.js"], ci: "green", ...over,
 });
@@ -42,10 +42,10 @@ test("round1: each requested lens brief, no other lens, data block, absolute pat
   assert.ok(p.includes("/run/ctx/diff.patch") && p.includes("/run/ctx/pr.json") && p.includes("/run/wt"));
 });
 
-test("round1: adversarial variant follows frame.trusted", () => {
+test("round1: adversarial variant follows frame.shellOk", () => {
   const trusted = round1Prompt(frame(), ["adversarial"]);
   assert.ok(trusted.includes(RUN) && !trusted.includes(NO_RUN));
-  const untrusted = round1Prompt(frame({ trusted: false }), ["adversarial"]);
+  const untrusted = round1Prompt(frame({ shellOk: false }), ["adversarial"]);
   assert.ok(untrusted.includes(NO_RUN) && !untrusted.includes(RUN));
   assert.ok(!untrusted.includes("<!--"), "variant markers must be stripped");
 });

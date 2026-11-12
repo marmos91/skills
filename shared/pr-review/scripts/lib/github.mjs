@@ -63,7 +63,7 @@ const THREADS = `query Threads($owner: String!, $name: String!, $n: Int!, $curso
     reviewThreads(first: 100, after: $cursor) {
       pageInfo { hasNextPage endCursor }
       nodes { id isResolved isOutdated viewerCanResolve path line originalLine
-        comments(first: 100) { nodes { databaseId author { login __typename } body createdAt } } }
+        comments(first: 100) { nodes { databaseId author { login __typename } authorAssociation body createdAt } } }
     } } } }`;
 
 export async function threads(repo, n) {
@@ -74,7 +74,7 @@ export async function threads(repo, n) {
     for (const t of rt.nodes) {
       out.push({
         id: t.id, isResolved: t.isResolved, isOutdated: t.isOutdated, viewerCanResolve: t.viewerCanResolve, path: t.path, line: t.line, originalLine: t.originalLine,
-        comments: t.comments.nodes.map((c) => ({ id: c.databaseId, author: c.author?.login ?? null, authorType: c.author?.__typename ?? null, body: c.body, createdAt: c.createdAt })),
+        comments: t.comments.nodes.map((c) => ({ id: c.databaseId, author: c.author?.login ?? null, authorType: c.author?.__typename ?? null, authorAssociation: c.authorAssociation ?? null, body: c.body, createdAt: c.createdAt })),
       });
     }
     if (!rt.pageInfo.hasNextPage) return out;

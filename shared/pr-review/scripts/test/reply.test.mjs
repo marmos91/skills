@@ -18,7 +18,7 @@ function setup() {
   const runDir = join(root, "run-abc123-1");
   mkdirSync(join(runDir, "ctx"), { recursive: true });
   mkdirSync(join(root, "wt"));
-  const frame = { headSha: "abc123", baseRef: "main", trusted: true, ownPr: false, ctxDir: join(runDir, "ctx"), worktree: join(root, "wt") };
+  const frame = { headSha: "abc123", baseRef: "main", trusted: true, shellOk: true, ownPr: false, ctxDir: join(runDir, "ctx"), worktree: join(root, "wt") };
   return { runDir, frame };
 }
 

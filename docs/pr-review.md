@@ -192,7 +192,7 @@ text (`scripts/lib/verdict.mjs`). The first row that matches wins.
 | Your own PR | `COMMENT` (GitHub does not allow more) |
 | 1 or more agreed `must`, or an earlier `must` of yours still open | `REQUEST_CHANGES` |
 | An open question, a split, a failed lens, a dropped seat, any agreed finding, or red or pending CI | `COMMENT` |
-| Loop run, and the author is not trusted or not every seat found zero | `COMMENT`, and an "approve?" question for you |
+| Loop run, and the shell rule (Trust and isolation, item 3) does not hold or not every seat found zero | `COMMENT`, and an "approve?" question for you |
 | None of the above | `APPROVE` |
 
 ### 9. Post
@@ -339,21 +339,27 @@ PR head.
    A pi seat runs
    `pi -p --no-session --no-context-files --no-extensions --no-skills --no-mcp --tools read,grep,find,ls < /dev/null`.
    pi has no file sandbox, so a pi seat (and an `auto` seat that falls back to
-   pi) runs only for a trusted author. For other authors such a seat fails,
+   pi) runs only when the shell rule of item 3 holds. Otherwise such a seat fails,
    and the review stops with exit 4 rather than risk a local file in a post.
    The prompt goes on stdin, never on the command line.
 2. **Children get a clean environment.** The environment is an allowlist.
    `GH_TOKEN`, `GITHUB_PERSONAL_ACCESS_TOKEN` and `AWS_*` never reach a child.
    Only the engine talks to GitHub, and it posts from validated JSON.
-3. **Code runs only for trusted authors.** A trusted author has the
-   association `OWNER`, `MEMBER` or `COLLABORATOR`. Then each round-1 job that runs the adversarial lens
+3. **Code runs only when every author is trusted.** A trusted author has the
+   association `OWNER`, `MEMBER` or `COLLABORATOR`. A shell needs a trusted
+   PR author, and every author of text in the run's `ctx` folder (review
+   threads and their comments, PR comments, reviews and linked issues) must
+   be you or trusted. A linked-issue author whose association is unknown
+   counts as untrusted. One third-party comment makes every seat read-only.
+   Then each round-1 job that runs the adversarial lens
    gets a shell (`Bash` or `bash`) to run a repro in the worktree, with a
    timeout that kills the whole process group. Votes get a shell too, so a
-   keep vote can carry run evidence. For other authors every seat is
+   keep vote can carry run evidence. Otherwise every seat is
    read-only, and the repro command is written into the finding. A shell
    seat (`--allowedTools Bash`) can read any file that you can read: the
    environment allowlist keeps tokens out of its environment, but not files
-   on disk. That is why the shell runs only for trusted authors.
+   on disk. That is why the shell runs only when all of that text comes
+   from trusted authors. The loop APPROVE follows the same rule.
 4. **Config and guidance come from the base branch.** A PR that changes
    `.pr-review.json` or `CLAUDE.md` changes only its own diff, not the review.
 5. **PR text is data.** Prompts wrap the PR text in a delimited block with a

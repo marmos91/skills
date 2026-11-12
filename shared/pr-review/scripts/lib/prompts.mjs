@@ -81,7 +81,7 @@ export function round1Prompt(frame, lenses, maxTurns) {
       ? [`- Earlier findings of this reviewer that are still open are in ${earlier}. Check each one against the head. Report each in \`earlier\` with its \`thread_id\`, \`status\` (fixed or open), and \`evidence\` (the line that fixes it, or the line that still has the defect). Do not repeat them in \`findings\`.`]
       : []),
     "",
-    ...lenses.flatMap((l) => [`## Lens: ${l}`, "", lens(l, frame.trusted), ""]),
+    ...lenses.flatMap((l) => [`## Lens: ${l}`, "", lens(l, frame.shellOk), ""]),
     budget(maxTurns),
     "",
     "## Output",
@@ -106,7 +106,7 @@ export function votePrompt(frame, clusters, maxTurns) {
     "- keep: the case is real. The input or situation leads to the wrong result in the head commit.",
     "- drop: the case is wrong. `counter_case` must show why, with a concrete input or a trace: the guard at file:line, or the caller that never passes the bad value. A drop with no counter-case counts as no vote.",
     "- Do not drop for taste, for severity, or because the fix is hard. For a keep, `counter_case` is \"\".",
-    frame.trusted
+    frame.shellOk
       ? "- `evidence_run`: true only when you ran a command in the worktree that proves your vote. Put the command and its output in `counter_case` for a drop."
       : "- You have no shell. Set `evidence_run` to false.",
     "- Vote on each finding one time.",

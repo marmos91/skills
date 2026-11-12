@@ -76,7 +76,7 @@ export async function reply({ repo, n, threadId, mode, frame, config, runDir, gh
   const seat = async (role, s, draft) => {
     const promptFile = join(dir, `${role}.prompt`);
     writeFileSync(promptFile, replyPrompt(frame, t, role, draft));
-    return runChild({ trusted: frame.trusted, seat: withLimits(config, s), promptFile, outFile: join(dir, `${role}.json`), worktree: frame.worktree, ctxDir: frame.ctxDir, schema: "reply", routerUp });
+    return runChild({ trusted: frame.shellOk, seat: withLimits(config, s), promptFile, outFile: join(dir, `${role}.json`), worktree: frame.worktree, ctxDir: frame.ctxDir, schema: "reply", routerUp });
   };
 
   const drafter = config.seats[0];

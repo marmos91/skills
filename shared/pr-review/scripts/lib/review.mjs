@@ -87,7 +87,7 @@ async function child(ctx, stage, key, { seat, prompt, schema, tools = "read", le
   const limited = withLimits(ctx.config, seat, lens, stage);
   writeFileSync(promptFile, prompt(limited));
   let v;
-  try { v = await ctx.runChild({ trusted: ctx.frame.trusted, seat: limited, tools, promptFile, outFile, worktree: ctx.frame.worktree, ctxDir: ctx.frame.ctxDir, schema, routerUp: ctx.routerUp, droppable: council }); } catch (e) {
+  try { v = await ctx.runChild({ trusted: ctx.frame.shellOk, seat: limited, tools, promptFile, outFile, worktree: ctx.frame.worktree, ctxDir: ctx.frame.ctxDir, schema, routerUp: ctx.routerUp, droppable: council }); } catch (e) {
     if (!(e instanceof SeatDropped) || !council) throw e;
     ctx.drop(seat, e.reason, stage);
     return null;
@@ -214,9 +214,9 @@ async function once(o, restart) {
     }
   };
   const ctx = { runDir, frame: f, runChild: o.runChild, routerUp: o.routerUp, config, dropped: isDropped, drop };
-  // a shell only for a trusted author: in round 1 only in jobs that run the adversarial lens; votes may run a
+  // a shell only when every text author is trusted (frame shellOk): in round 1 only in jobs that run the adversarial lens; votes may run a
   // repro, because a keep with run evidence holds against a majority of drops (tally, spec R2)
-  const toolsFor = (j) => (f.trusted && j.lenses.includes("adversarial") ? "shell" : "read");
+  const toolsFor = (j) => (f.shellOk && j.lenses.includes("adversarial") ? "shell" : "read");
   const jobs = round1Jobs(config, run.lenses);
   const hygFile = join(runDir, "hygiene-result.json");
   const [outs, hyg] = await settled([
@@ -272,7 +272,7 @@ async function once(o, restart) {
   const ballots = await settled(voters.map((seat, i) => {
     const id = seatId(seat), mine = clusters.filter((c) => c.seats.includes(id) && !c.found.includes(id));
     if (!mine.length) return { id, votes: [] };
-    return child(ctx, "round2", `v~${i}`, { seat, tools: f.trusted ? "shell" : "read", schema: "vote", prompt: (s) => votePrompt(f, mine.map(view), s.max_turns) }).then((votes) => ({ id, votes: votes ?? [] }));
+    return child(ctx, "round2", `v~${i}`, { seat, tools: f.shellOk ? "shell" : "read", schema: "vote", prompt: (s) => votePrompt(f, mine.map(view), s.max_turns) }).then((votes) => ({ id, votes: votes ?? [] }));
   }));
   enoughSeats();
   markDone(runDir, "round2");
@@ -373,7 +373,7 @@ async function once(o, restart) {
   let ci = ciOf(f);
   const v = () => verdict({
     agreed: [...agreed, ...hygItems], earlierMustOpen: earlierAll.filter((e) => e.severity === "must" && !fixed.includes(e)).length,
-    openQuestions: open.length, failedLenses: run.missing?.length ?? 0, droppedSeats: run.dropped.length, ci: ci.state, mode, trustedAuthor: f.trusted, unanimousZero, ownPr: f.ownPr,
+    openQuestions: open.length, failedLenses: run.missing?.length ?? 0, droppedSeats: run.dropped.length, ci: ci.state, mode, trustedAuthor: f.shellOk, unanimousZero, ownPr: f.ownPr,
   });
   const bodyOf = (outside, key) => [
     composed.body.trim(),
