@@ -17,7 +17,7 @@ import { hygiene as realHygiene } from "./hygiene.mjs";
 import { limiter } from "./limit.mjs";
 import { decide as realDecide } from "./decider.mjs";
 import { appliedAnswer, pendingAnswers, queueQuestion } from "./questions.mjs";
-import { FINAL_STAGE, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, writeAtomic } from "./state.mjs";
+import { FINAL_STAGE, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, usageByStage, writeAtomic } from "./state.mjs";
 
 export const STAGES = ["frame", "round1", "merge", "round2", "tally", "decide", "compose", "post"];
 const RANK = { must: 0, should: 1, nit: 2 };
@@ -338,7 +338,9 @@ async function once(o, restart) {
   const ballots = await settled(voters.map((seat, i) => {
     const id = seatId(seat), mine = clusters.filter((c) => c.seats.includes(id) && !c.found.includes(id));
     if (!mine.length) return { id, votes: [] };
-    return child(ctx, "round2", `v~${i}`, { seat, tools: f.shellOk ? "shell" : "read", schema: "vote", prompt: (s, fr = f) => votePrompt(fr, mine.map(view), s.max_turns) }).then((votes) => ({ id, votes: votes ?? [] }));
+    // A vote checks given findings, not the whole PR: 10 turns plus 3 per finding, never above the seat's limit.
+    const turns = Math.min(withLimits(config, seat, undefined, "round2").max_turns, 10 + 3 * mine.length);
+    return child(ctx, "round2", `v~${i}`, { seat: { ...seat, max_turns: turns }, tools: f.shellOk ? "shell" : "read", schema: "vote", prompt: (s, fr = f) => votePrompt(fr, mine.map(view), s.max_turns) }).then((votes) => ({ id, votes: votes ?? [] }));
   }));
   enoughSeats();
   markDone(runDir, "round2");
@@ -435,7 +437,8 @@ async function once(o, restart) {
   const blocking = earlierAll.filter((e) => e.severity === "must" && !fixed.includes(e) && !retracted.includes(e));
   const composed = await child(ctx, "compose", "compose", {
     seat: config.judge, schema: "compose",
-    prompt: () => composePrompt(f, [...posted.map((c) => ({ ...view(c), ...(offDiff(c) && { outside: true }) })), ...hygItems.map(view)], readTree(join(f.ctxDir, "guidance")),
+    // Compose writes text: it gets the repo's review guidance, not the whole tree (CONTRIBUTING.md, CLAUDE.md, ...).
+    prompt: () => composePrompt(f, [...posted.map((c) => ({ ...view(c), ...(offDiff(c) && { outside: true }) })), ...hygItems.map(view)], readTree(join(f.ctxDir, "guidance"), (p) => p === "REVIEW.md" || config.review.guidance.includes(p)),
       { retracted: retracted.map((e) => ({ thread_id: e.threadId, file: e.path, line: e.line ?? e.originalLine, finding: e.body, evidence: earlier.get(e.threadId).why })),
         blocking: blocking.map((e) => ({ thread_id: e.threadId, file: e.path, line: e.line ?? e.originalLine, finding: e.body })) }),
   });
@@ -526,7 +529,8 @@ async function once(o, restart) {
     const p = place(items.map((x) => ({ file: x.file, line: x.line, body: x.body })), hunks, permalink);
     const file = join(runDir, "review.md");
     writeFileSync(file, [`event: ${v().event}`, bodyOf(p.body, "dry-run", items.filter((x) => !offDiff(x))), ...p.inline.map((x) => `---\n${x.path}:${x.line}\n${x.body}`)].join("\n\n") + "\n");
-    return finish("compose (dry run)", { dryRun: true, file, ...v(), summary: [`dry run: review written to ${file}; ${planned} children planned`, ...warnings].join("\n") });
+    const tokens = Object.entries(usageByStage(runDir)).map(([st, u]) => `${st} ${["input", "output", "cache_read", "cache_creation"].map((k) => `${k} ${u[k] ?? "?"}`).join(" ")}`);
+    return finish("compose (dry run)", { dryRun: true, file, ...v(), summary: [`dry run: review written to ${file}; ${planned} children planned`, ...(tokens.length ? [`tokens: ${tokens.join("; ")}`] : []), ...warnings].join("\n") });
   }
 
   // Post (spec 6.10). CI may have changed since frame: read it again; a failed read is unknown and blocks APPROVE.

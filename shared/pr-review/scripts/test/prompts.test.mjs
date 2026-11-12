@@ -183,6 +183,32 @@ test("compose: from review 2 on the summary does not describe the PR again", () 
   assert.match(p, /"No new findings\."/);
 });
 
+test("prompt cache: one nonce per frame; two round-1 prompts of a run share the context and the diff", () => {
+  const ctxDir = mkdtempSync(join(tmpdir(), "ctx-"));
+  const diff = "diff --git a/src/a.js b/src/a.js\n" + "+const x = 1;\n".repeat(200);
+  writeFileSync(join(ctxDir, "diff.patch"), diff);
+  writeFileSync(join(ctxDir, "pr.json"), JSON.stringify({ title: "t", body: "b" }));
+  const f = frame({ ctxDir, nonce: "a1b2c3d4", chunks: [{ patch: join(ctxDir, "diff.patch"), files: null }] });
+  const a = round1Prompt(f, ["correctness"], 40, f.chunks[0]), b = round1Prompt(f, ["security"], 30, f.chunks[0]);
+  let i = 0;
+  while (a[i] === b[i]) i++;
+  const shared = a.slice(0, i);
+  assert.ok(shared.includes(diff.trim()) && shared.includes("## Context") && shared.includes("## Rules"), "context, diff and rules come before the lens");
+  assert.ok(i > a.length / 2, `common prefix ${i} of ${a.length}`);
+  assert.ok(shared.includes('"title":"t"'), "a small pr.json is inline");
+  assert.ok(!a.match(/-DATA-([0-9a-f]{8})/g).some((t) => !t.endsWith("a1b2c3d4")), "every block uses the frame nonce");
+  assert.ok(mergePrompt(f, {}).startsWith(composePrompt(f, [], "").slice(0, mergePrompt(f, {}).indexOf("## Task"))), "merge and compose share the context");
+});
+
+test("merge caps evidence and fix; compose caps the guidance", () => {
+  const long = "x".repeat(5000);
+  const p = mergePrompt(frame(), { s1: [{ lens: "correctness", title: "T", evidence: long, fix: long, case: long }] });
+  assert.equal((p.match(/x{1500} \[cut\]/g) ?? []).length, 2, "evidence and fix are cut");
+  assert.ok(p.includes(long), "case is kept whole");
+  const c = composePrompt(frame(), [], "g".repeat(9000));
+  assert.ok(c.includes("g".repeat(8000) + "\n[cut]") && !c.includes("g".repeat(8001)));
+});
+
 test("compose: the author's questions and retracted findings are data blocks; no block when there are none", () => {
   const p0 = composePrompt(frame(), [], "");
   assert.doesNotMatch(p0, /## The author's questions/);

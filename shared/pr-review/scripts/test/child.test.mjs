@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { runChild, salvageJson, ChildFailed } from "../lib/child.mjs";
+import { runChild, salvageJson, ChildFailed, SeatDropped, unwrapOutput } from "../lib/child.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "child-"));
 const bin = join(dir, "bin");
@@ -345,4 +345,33 @@ test("a re-grouped grandchild that holds stderr does not leave the child pending
   stub("claude", `node -e 'const c=require("child_process").spawn("sleep",["60"],{detached:true,stdio:["ignore","ignore","inherit"]});require("fs").writeFileSync(process.argv[1],String(c.pid));c.unref()' "${pidFile}"\nprintf '%s' '${OK}'`);
   try { assert.ok(await runChild(base(claudeSeat, { timeoutMs: 10000 }))); }
   finally { try { process.kill(Number(readFileSync(pidFile, "utf8")), "SIGKILL"); } catch {} }
+});
+
+test("token usage: claude and pi json are unwrapped; each attempt adds to <key>.usage.json", async () => {
+  const env = (result, extra = {}) => JSON.stringify({ type: "result", subtype: "success", result, usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100, cache_creation_input_tokens: 7 }, ...extra });
+  assert.deepEqual(unwrapOutput(env(OK)), { text: OK, maxTurns: false, usage: { input: 10, output: 5, cache_read: 100, cache_creation: 7 } });
+  const ev = (messages) => JSON.stringify({ type: "agent_end", messages });
+  const msg = (text, u) => ({ role: "assistant", content: [{ type: "text", text }], usage: { input: u, output: 1, cacheRead: 2, cacheWrite: 0 } });
+  const pi = [JSON.stringify({ type: "agent_start" }), ev([{ role: "user", content: [] }, msg("reading", 3), msg(OK, 4)])].join("\n");
+  assert.deepEqual(unwrapOutput(pi), { text: OK, maxTurns: false, usage: { input: 7, output: 2, cache_read: 4, cache_creation: 0 } });
+  assert.deepEqual(unwrapOutput(OK), { text: OK, maxTurns: false, usage: null }, "plain text has no usage");
+  // first attempt prints no JSON, the retry succeeds: both count
+  const n = join(dir, "usage-n");
+  stub("claude", `echo x >>"${n}"; [ $(wc -l <"${n}") -ge 2 ] && printf '%s' '${env(OK)}' || printf '%s' '${env("no json")}'`);
+  const outFile = join(dir, "u.json");
+  assert.deepEqual(await runChild(base(claudeSeat, { outFile, retries: 1 })), JSON.parse(OK));
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "u.usage.json"), "utf8")), { input: 20, output: 10, cache_read: 200, cache_creation: 14 });
+  // the fake harness gives no usage: the record says so, and the child still succeeds
+  const fx = join(dir, "fx-u.json");
+  writeFileSync(fx, OK);
+  process.env.PR_REVIEW_FAKE = fx;
+  try { await runChild(base(claudeSeat, { outFile: join(dir, "f.json") })); } finally { delete process.env.PR_REVIEW_FAKE; }
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "f.usage.json"), "utf8")), { input: null, output: null, cache_read: null, cache_creation: null });
+});
+
+test("claude json at max_turns: the seat drops at once", async () => {
+  const count = join(dir, "mt-json");
+  stub("claude", `echo x >>"${count}"; printf '%s' '{"type":"result","subtype":"error_max_turns","is_error":true,"usage":{"input_tokens":1}}'; exit 1`);
+  await assert.rejects(runChild(base({ ...claudeSeat, max_turns: 3 }, { retries: 2, droppable: true })), (e) => e instanceof SeatDropped && e.reason === "turn limit");
+  assert.equal(readFileSync(count, "utf8").trim().split("\n").length, 1);
 });

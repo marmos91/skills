@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { randomBytes } from "node:crypto";
 import { join, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
-import { installSignalHandlers } from "./child.mjs";
+import { addUsage, installSignalHandlers } from "./child.mjs";
 
 // A run is finished once its last stage has a marker.
 export const FINAL_STAGE = "post";
@@ -186,4 +186,18 @@ export function prState(repoState, n) {
 
 export function savePrState(repoState, n, s) {
   writeAtomic(prFile(repoState, n), JSON.stringify(s, null, 2) + "\n");
+}
+
+/** Token usage of a run, summed per stage folder (hygiene at the top level), plus total; {} when none is recorded. */
+export function usageByStage(dir) {
+  const out = {};
+  const add = (stage, file) => { try { out[stage] = addUsage(out[stage], JSON.parse(readFileSync(file, "utf8"))); } catch {} };
+  let ls = [];
+  try { ls = readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  for (const e of ls) {
+    if (e.isFile() && e.name.endsWith(".usage.json")) add(e.name.slice(0, -".usage.json".length), join(dir, e.name));
+    else if (e.isDirectory() && e.name !== "wt" && e.name !== "ctx") try { for (const f of readdirSync(join(dir, e.name)).filter((x) => x.endsWith(".usage.json"))) add(e.name, join(dir, e.name, f)); } catch {}
+  }
+  if (Object.keys(out).length) out.total = Object.values(out).reduce((a, b) => addUsage(a, b));
+  return out;
 }

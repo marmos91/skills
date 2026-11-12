@@ -12,7 +12,7 @@ import { redact } from "./lib/secrets.mjs";
 import { askJev as realAskJev, findJev as realFindJev } from "./lib/decider.mjs";
 import { review, SetupError, STAGES } from "./lib/review.mjs";
 import { answer, markAsked, openQuestions, questionWarnings } from "./lib/questions.mjs";
-import { FINAL_STAGE, Locked, done, holderAlive, prState, stateRoot } from "./lib/state.mjs";
+import { FINAL_STAGE, Locked, done, holderAlive, prState, stateRoot, usageByStage } from "./lib/state.mjs";
 import { remoteRepos } from "./lib/github.mjs";
 
 // The one signal path: stop the children, then exit; the lock is released on exit.
@@ -97,10 +97,10 @@ function status(repo) {
     const runs = ls(runsDir).filter((d) => !done(join(runsDir, d), FINAL_STAGE)).map((d) => {
       const dir = join(runsDir, d), run = readJson(join(dir, "run.json"));
       const childDone = ls(dir).reduce((k, s) => k + ls(join(dir, s)).filter((f) => f.endsWith(".done")).length, 0);
-      return { sha: d.slice(0, d.lastIndexOf("-")), stage: STAGES.find((s) => !done(dir, s)), children: { done: childDone, total: run?.planned ?? null } };
+      return { sha: d.slice(0, d.lastIndexOf("-")), stage: STAGES.find((s) => !done(dir, s)), children: { done: childDone, total: run?.planned ?? null }, tokens: usageByStage(dir) };
     });
     const replies = Object.values(st.replies ?? {}).reduce((a, b) => a + (Number(b) || 0), 0);
-    return { pr: n, lock: lockOf(join(rs, "pr", String(n))), reviews: st.reviews, replies, lastReviewedSha: st.lastReviewedSha, questions: questions.filter((q) => q.pr === n).length, runs };
+    return { pr: n, lock: lockOf(join(rs, "pr", String(n))), reviews: st.reviews, replies, lastReviewedSha: st.lastReviewedSha, lastRunTokens: st.lastRunId ? usageByStage(join(runsDir, st.lastRunId)) : {}, questions: questions.filter((q) => q.pr === n).length, runs };
   });
   return {
     repo, paused: existsSync(join(rs, "paused")), lock, questions, warnings: questionWarnings(rs),

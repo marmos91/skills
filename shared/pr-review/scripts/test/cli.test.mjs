@@ -98,7 +98,7 @@ test("status shows a stale lock, open questions, an unfinished run and the inter
   assert.equal(pr.replies, 3);
   assert.equal(pr.questions, 1);
   // the planned count saved in run.json (the run's own merged config), not one computed from the user config
-  assert.deepEqual(pr.runs, [{ sha: "abc123", stage: "round1", children: { done: 1, total: 9 } }]);
+  assert.deepEqual(pr.runs, [{ sha: "abc123", stage: "round1", children: { done: 1, total: 9 }, tokens: {} }]);
 });
 
 test("doctor: a seat whose probe fails is named and the exit is 1", async (t) => {

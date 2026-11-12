@@ -79,6 +79,8 @@ Anti-goals (the skills fail if these happen, even if they work):
   `run <model> <thinking> <tools> <prompt-file> <out-file>`. A new harness is a
   new file. The adapter sends the prompt through a file or stdin, never as an
   argv argument (macOS `ARG_MAX` and `ps` exposure).
+  The adapter asks the harness for JSON output (`claude --output-format json`,
+  `pi --mode json`). The engine takes the answer and the token usage from it.
 - `thinking` maps to `claude --effort` (`low|medium|high|xhigh|max`) and to
   `pi --thinking`. The config loader rejects a value that the harness does not
   accept.

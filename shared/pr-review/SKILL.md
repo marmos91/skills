@@ -72,7 +72,7 @@ questions.
 ## Other commands
 
 - `pr-review status [owner/repo]`: open questions, to-do items, unfinished
-  runs and the lock holder.
+  runs, tokens per stage, and the lock holder.
 - `pr-review doctor`: merged config, a probe of each seat, `gh` login, jev,
   gitleaks, and the planned child count per effort level. Run it first on a new
   machine.

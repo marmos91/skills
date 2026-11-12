@@ -940,6 +940,31 @@ test("round-1 children carry the lens max_turns; other children the global one",
   assert.ok(run.calls.every((c) => c.seat.timeout_minutes === 10));
 });
 
+test("a vote child gets 10 turns plus 3 per finding, never above its limit", async () => {
+  const fx = fixture(); routes(fx);
+  const { r, run } = await go(fx, happy());
+  assert.equal(r.exit, 0, r.summary);
+  const votes = run.calls.filter((c) => c.k.startsWith("v~"));
+  assert.ok(votes.length > 0);
+  for (const c of votes) {
+    const n = (c.prompt.match(/"id": "c\d+"/g) ?? []).length;
+    assert.equal(c.seat.max_turns, Math.min(40, 10 + 3 * n), c.k);
+    assert.match(c.prompt, new RegExp(`Budget: at most ${c.seat.max_turns - 5} tool calls\\.`));
+  }
+});
+
+test("compose gets the repo's review guidance only; round 1 still sees the whole guidance folder", async () => {
+  const fx = fixture(); routes(fx);
+  git(fx.seed, "checkout", "-q", "main");
+  commit(fx.seed, { "REVIEW.md": "REVIEW-RULE\n", "CONTRIBUTING.md": "CONTRIB-RULE\n" }, "docs: guidance");
+  git(fx.seed, "push", "-q", fx.origin, "main");
+  const { r, run } = await go(fx, happy());
+  assert.equal(r.exit, 0, r.summary);
+  const compose = run.calls.find((c) => c.k === "compose").prompt;
+  assert.ok(compose.includes("REVIEW-RULE") && !compose.includes("CONTRIB-RULE"));
+  assert.ok(existsSync(join(r.runDir, "ctx", "guidance", "CONTRIBUTING.md")));
+});
+
 test("every child gets the ctx folder next to the worktree", async () => {
   const fx = fixture(); routes(fx);
   const { r, run } = await go(fx, happy());
