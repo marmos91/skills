@@ -6,6 +6,7 @@ tgz="$PWD/$(npm pack --ignore-scripts --silent)"
 trap 'rm -rf "$tgz" "$home"' EXIT
 home="$(mktemp -d)"
 export HOME="$home"
+unset CLAUDE_DIR PI_DIR BIN_DIR # overrides beat HOME: they would point the installer at the real install
 npx --yes --package "$tgz" -- skills install --claude
 "$HOME/.local/bin/pr-review" --help
 "$HOME/.local/bin/pr-review-loop" --help
