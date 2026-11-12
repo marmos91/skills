@@ -1232,4 +1232,37 @@ test("sweep: a run at an old head loses its worktree; a folder that cannot go ne
     const { r: r3 } = await go(fx, happy(), { restart: true });
     assert.equal(r3.exit, 0, r3.summary);
   } finally { execFileSync("chmod", ["755", stuck]); }
+||||||| parent of 39b0faf (feat(pr-review): one comment per root cause across lenses)
+
+test("one root cause found by 2 lenses: one comment with both fps; the next run links either lens to it", async () => {
+  const sec = { lens: "security", title: "Total leaks the secret" };
+  const fx0 = fixture(); routes(fx0);
+  const fold = happy({
+    merge: [C("c1"), C("c2", sec)], "v~2": [keep("c1"), keep("c2")],
+    compose: { body: "Changes a.", comments: [{ id: "c1", also: ["c2"], body: "**must:** off by one, and it leaks" }] },
+  });
+  await go(fx0, fold);
+  const t = posts(fx0)[0].threads;
+  assert.equal(t.length, 1);
+  assert.ok(t[0].body.endsWith(` fp=${fingerprint(F())},${fingerprint(F(sec))} -->`), t[0].body);
+  const st = prState(fx0.state, N);
+  assert.ok(st.settled.includes(fingerprint(F(sec))));
+  assert.deepEqual(st.agreed.map((a) => a.lens).sort(), ["correctness", "security"]);
+  // A later review: our thread holds both fps, so a reworded security repeat on that line links to it.
+  const fx = fixture(); routes(fx, { threads: [thread("T1", ME, t[0].body)] });
+  savePrState(fx.state, N, { ...prState(fx.state, N), agreed: st.agreed });
+  const { r } = await go(fx, happy({ merge: [C("c2", { ...sec, title: "Other words" })] }));
+  const rec = JSON.parse(readFileSync(join(r.runDir, "clusters.json"), "utf8"));
+  assert.deepEqual([rec.clusters.length, rec.linked.length], [0, 1]);
+});
+
+test("compose `also` never folds a finding of another file", async () => {
+  const fx = fixture(); routes(fx);
+  await go(fx, happy({
+    merge: [C("c1"), C("c2", { file: "b.js", lens: "security" })], "v~2": [keep("c1"), keep("c2")],
+    compose: { body: "Changes a.", comments: [{ id: "c1", also: ["c2"], body: "**must:** x" }, { id: "c2", body: "**must:** y" }] },
+  }));
+  const all = JSON.stringify(posts(fx)[0]);
+  assert.match(all, /\*\*must:\*\* x/);
+  assert.match(all, /\*\*must:\*\* y/, "c2 keeps its own comment");
 });

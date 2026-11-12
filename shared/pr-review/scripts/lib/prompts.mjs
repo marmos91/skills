@@ -201,6 +201,7 @@ export function composePrompt(frame, agreed, guidance) {
     "",
     "## Rules",
     "- Write 1 inline comment for each finding, with the finding `id` as `id`. Use the inline comment layout of the writing rules.",
+    "- When 2 or more findings have the same root cause and the same fix (for example 2 lenses on one line), write 1 comment for all of them. Use the id of one as `id`, and put the other ids in `also`. An id in `also` gets no comment of its own.",
     "- A `suggestion` block replaces only the commented line. When the fix changes more lines, use a plain code snippet.",
     "- A finding with `ask_author: true` is a question to the author. State each other finding directly.",
     "- Findings with lens `hygiene` get no inline comment. Put them in the summary as one short list.",
@@ -210,7 +211,7 @@ export function composePrompt(frame, agreed, guidance) {
     "",
     "## Output",
     OUT,
-    '{"body": "summary body", "comments": [{"id": "<finding id>", "body": "comment text"}]}',
+    '{"body": "summary body", "comments": [{"id": "<finding id>", "also": [], "body": "comment text"}]}',
   ].join("\n");
 }
 
