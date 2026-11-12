@@ -1232,7 +1232,7 @@ test("sweep: a run at an old head loses its worktree; a folder that cannot go ne
     const { r: r3 } = await go(fx, happy(), { restart: true });
     assert.equal(r3.exit, 0, r3.summary);
   } finally { execFileSync("chmod", ["755", stuck]); }
-||||||| parent of 39b0faf (feat(pr-review): one comment per root cause across lenses)
+});
 
 test("one root cause found by 2 lenses: one comment with both fps; the next run links either lens to it", async () => {
   const sec = { lens: "security", title: "Total leaks the secret" };
