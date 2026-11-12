@@ -282,7 +282,23 @@ test("earlier threads fixed -> 'Fixed in <sha>.' reply + resolve", async () => {
   assert.equal(posts(fx)[0].event, "APPROVE");
   const m = mutations(fx);
   const rep = m.find((x) => x.key.includes("comments/11/replies"));
-  assert.match(rep.input.body, new RegExp(`^Fixed in \`${fx.head}\`\\.\\n\\n<!-- pr-review `));
+  assert.match(rep.input.body, new RegExp(`^Fixed in \\[\`${fx.head.slice(0, 7)}\`\\]\\(https://github\\.com/o/r/commit/${fx.head}\\)\\.\\n\\n<!-- pr-review `));
+  assert.ok(m.some((x) => x.key === "graphql ResolveThread"));
+  assert.deepEqual(prState(fx.state, N).resolved, ["T1"]);
+});
+
+test("a fixed thread whose newest comment is ours is resolved with no second 'Fixed' reply", async () => {
+  const fx = fixture();
+  routes(fx, { threads: [{ id: "T1", isResolved: false, isOutdated: false, viewerCanResolve: true, path: "a.js", line: 1, originalLine: 1,
+    comments: { nodes: [
+      { databaseId: 11, author: { login: ME, __typename: "User" }, body: "**must:** a is wrong", createdAt: "x" },
+      { databaseId: 12, author: { login: ME, __typename: "User" }, body: "Fixed: a is 2 now.", createdAt: "y" },
+    ] } }] });
+  savePrState(fx.state, N, { ...prState(fx.state, N), reviews: 1, lastReviewedSha: fx.base });
+  const { r } = await go(fx, { all: { findings: [], earlier: [{ thread_id: "T1", status: "fixed", evidence: "a.js:1" }] }, compose: { body: "Looks good.", comments: [] } });
+  assert.equal(r.exit, 0, r.summary);
+  const m = mutations(fx);
+  assert.ok(!m.some((x) => x.key.includes("/replies")), "no second reply");
   assert.ok(m.some((x) => x.key === "graphql ResolveThread"));
   assert.deepEqual(prState(fx.state, N).resolved, ["T1"]);
 });
