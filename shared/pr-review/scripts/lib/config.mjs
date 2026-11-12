@@ -45,6 +45,8 @@ export const DEFAULTS = {
   // and max_parallel the round-1 children that run at once.
   review: { guidance: [], ci: "use", max_diff_lines: 6000, chunk_lines: 500, max_children: 60, max_parallel: 9, max_turns: 40, timeout_minutes: 10 },
   hygiene: { enabled: true },
+  // pr-respond: the review rounds on your own PR before it stops and reports
+  respond: { max_rounds: 5 },
 };
 
 // Repo level may set only these paths; "*" matches one lens name.
@@ -161,6 +163,7 @@ function validate(c) {
   need(isObj(c.review) && strList(c.review.guidance), "review.guidance", "an array of strings");
   need(["use", "ignore"].includes(c.review.ci), "review.ci", "use or ignore");
   need(isObj(c.hygiene) && typeof c.hygiene.enabled === "boolean", "hygiene.enabled", "a boolean");
+  need(isObj(c.respond) && posInt(c.respond.max_rounds), "respond.max_rounds", "a positive integer");
   for (const k of ["max_diff_lines", "chunk_lines", "max_children", "max_parallel", "max_turns", "timeout_minutes"]) need(posInt(c.review[k]), `review.${k}`, "a positive integer");
 }
 

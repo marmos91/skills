@@ -1,0 +1,85 @@
+---
+name: pr-respond
+description: "Work through the review findings on your own GitHub PR until a round adds nothing new: jev decides fix, decline or ask for each finding; you fix with a test, push, reply 'Fixed in <commit>', and resolve only when jev confirms the commit fixes it; then start the next review round (council or Copilot). Capped rounds. Use on 'pr-respond', 'fix the review findings', 'address the review on my PR', 'answer Copilot on my PR', 'loop until the review is clean'."
+---
+
+# pr-respond: fix the review findings on your own PR
+
+`pr-review-loop` answers reviewers but never changes code. This skill changes
+the code. You (the agent) edit, test and push. The `pr-respond` commands pick
+the threads, ask jev, post the replies and resolve. `$SKILL_DIR` is the folder
+of this file.
+
+Run every command in a clone of the repo, on the PR branch, at the PR head.
+Each command prints JSON. `--pr <n|url>` selects the PR; without it, the PR of
+the current branch.
+
+```sh
+P="sh $SKILL_DIR/scripts/pr-respond"
+```
+
+## One round
+
+1. Run `$P findings`. It lists each open thread that we did not answer yet:
+   council, Copilot or human. Each one has an `id`, `path`, `line` and the
+   comments.
+   - `"converged": true`: no finding is left. Go to "Done".
+   - Exit `5`: the round cap (`respond.max_rounds`, default 5) stops the
+     loop. Report the open findings to the user and stop.
+2. For each finding, run `$P decide <id>`. jev answers 3 yes/no questions
+   (correct on the head? in scope? one clear fix?) and prints a `decision`:
+   - `fix`: go to step 3.
+   - `decline`: write one or two sentences why, then run
+     `$P decline <id> "<reason>"`. The thread stays open for the reviewer.
+   - `ask`: ask the user (Claude Code: `AskUserQuestion`; pi: `ask_user`).
+     Show the file, the line, the finding and the `reason`. Do not guess a
+     design decision. Then fix or decline as the user says.
+3. Fix the finding. Add a test. Prove that the test guards the fix: revert
+   the fix, see the test fail, put the fix back.
+4. Run the full test suite. Commit signed (`git commit -S`) with a concise
+   message, in the repo's commit style. Do not name an AI or a tool. Push.
+5. For each fixed thread, run `$P fixed <id> <sha>` with the sha of the
+   fixing commit. It replies `Fixed in <commit link>.`, or adds the link to
+   our newest reply when that reply is the newest comment (never a second
+   reply). It resolves the thread only when jev says the commit fixes the
+   case. Else the JSON says why it is open: tell the user.
+6. Answer the review in one PR comment, point by point (below).
+7. Start the next round:
+   - council: `pr-review review <n>` (the pr-review skill);
+   - Copilot: `gh api -X POST repos/<owner>/<repo>/pulls/<n>/requested_reviewers -f 'reviewers[]=copilot-pull-request-reviewer[bot]'`,
+     then wait for its review (`gh pr view <n> --json reviews`);
+   - a human: wait for them. Do not loop on a timer.
+   When the review is in, go to step 1.
+
+## The point-by-point comment
+
+Write a JSON file with one entry per point of the review, in the
+reviewer's numbering (a review without numbers: one point per thread, in
+order):
+
+```json
+[
+  { "n": 1, "status": "done", "sha": "<fixing commit>", "text": "as you wrote it." },
+  { "n": 2, "status": "done", "sha": "<fixing commit>", "text": "a guard instead of the rewrite: the caller already checks." },
+  { "n": 3, "status": "open", "text": "(read src/a.js:10) the API is public; the options are to deprecate it or keep it." }
+]
+```
+
+For a done point, say what changed from the suggestion and why. For an open
+point, give the reason and the options it leaves. Then run
+`$P summary <file>`. It posts one comment that opens with the count ("2
+points are in; point 3 is kept open.") and links each commit. It posts once
+per PR head. Inline threads still get their own short reply (step 5).
+
+## Done
+
+Report to the user: the rounds, the fixed and declined findings, the threads
+left open and why, and the PR URL. Hand off to merge. Never merge yourself.
+
+## Rules
+
+- Write each reply and the summary as `pr-review/writing.md` says.
+- Never resolve a thread yourself: `$P fixed` does it after the jev check.
+  A declined thread stays open for the reviewer.
+- Never force-push, and never rewrite pushed commits: the reply links them.
+- jev missing or down: every `decide` is `ask`, and `fixed` never resolves.

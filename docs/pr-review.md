@@ -26,6 +26,7 @@ attribution.
 | `pr-review-loop [owner/repo]` | One loop run (a tick) |
 | `pr-review-loop pause` / `resume [owner/repo]` | Stop or restart every tick for the repo |
 | `pr-review-loop answer [<id> <option>]` | Same as `pr-review answer` |
+| `pr-respond <action> [--pr <n\|url>]` | The steps of the pr-respond skill (`pr-review respond`); see [pr-respond](#pr-respond) |
 
 Review flags:
 
@@ -705,3 +706,17 @@ and merge stages (`thinking_by_stage`). mimir-pro reasons even at `off`, and
 at `medium` one round 1 took 21 minutes; the default council therefore caps
 it with `max_turns: 40` and `timeout_minutes: 15`, and a seat that hits a cap
 is dropped (the review then never approves).
+
+## pr-respond
+
+The `pr-respond` skill fixes the review findings on your own PR. The agent
+edits, tests, commits and pushes; these commands do the GitHub and jev steps.
+Each prints JSON. Without `--pr`, they act on the PR of the current branch.
+
+| Command | What it does |
+|---|---|
+| `pr-respond findings` | Lists the open threads that we did not answer (a council thread with only its first comment counts). A head not seen before counts one round; past `respond.max_rounds` (default 5) with findings left, it exits `5` |
+| `pr-respond decide <thread>` | jev answers: correct on the head? in scope? one clear fix? Prints `fix`, `decline` (a no to one of the first two) or `ask` (a no to the third, or unsure at any step) |
+| `pr-respond decline <thread> "<reason>"` | Replies with the reason; the thread stays open. Skips when our reply is already the newest comment |
+| `pr-respond fixed <thread> <sha>` | `Fixed in <commit link>.`, or the link added to our newest reply (never a second reply). Resolves only when jev says yes, the commit fixes the case |
+| `pr-respond summary <points.json>` | One PR comment that answers the review point by point and opens with the count. Once per head |

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// CLI: pr-review review|answer|tick|status|doctor. Exit codes: 0 done, 1 usage or setup error, 3 questions wait, 4 a stage failed.
+// CLI: pr-review review|answer|tick|status|doctor|respond. Exit codes: 0 done, 1 usage or setup error, 3 questions wait, 4 a stage failed, 5 respond round cap.
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,7 +24,8 @@ const USAGE = `usage: pr-review review [<n|url>] [--repo owner/repo] [--dry-run]
        pr-review status [owner/repo]
        pr-review doctor [--config <file>]
        pr-review tick [owner/repo]
-       pr-review pause|resume [owner/repo]`;
+       pr-review pause|resume [owner/repo]
+       pr-review respond findings|decide <thread>|decline <thread> <reason>|fixed <thread> <sha>|summary <points.json> [--pr <n|url>]`;
 
 const SKILL_DIR = realpathSync(join(dirname(fileURLToPath(import.meta.url)), ".."));
 
@@ -155,13 +156,49 @@ async function doctor(v, { runChild = realRunChild, askJev = realAskJev, findJev
   return fail ? 1 : 0;
 }
 
+const RESPOND_ARGS = { findings: 0, decide: 1, decline: 2, fixed: 2, summary: 1 };
+
+// pr-respond: JSON on stdout; exit 5 when the round cap stops the loop. deps.gh and deps.askJev for tests.
+async function respondCmd([action, ...args], v, deps) {
+  if (!(action in RESPOND_ARGS) || args.length !== RESPOND_ARGS[action]) throw new Usage(USAGE);
+  const { repo, n } = target(v.pr, v.repo);
+  let config;
+  try { config = loadConfig({ userPath: userConfigPath(), cliPath: v.config }); } catch (e) { throw new Usage(e.message); }
+  const r = await import("./lib/respond.mjs");
+  const gh = deps.gh ?? (await import("./lib/github.mjs"));
+  const ask = deps.askJev ?? realAskJev;
+  const jev = async (q, text) => (await ask(q, text, config)).answer;
+  const diff = (sha) => execFileSync("git", ["show", "--format=%H %s", sha], { encoding: "utf8", maxBuffer: 64 << 20 }).slice(0, 40000);
+  const [a, b] = args;
+  let out;
+  try {
+    if (action === "findings") out = await r.findings({ repo, n, gh, config });
+    else if (action === "decide") out = await r.decide({ repo, n, threadId: a, gh, jev });
+    else if (action === "decline") out = await r.decline({ repo, n, threadId: a, reason: b, gh });
+    else if (action === "fixed") {
+      if (!/^[0-9a-f]{7,40}$/.test(b)) throw new Usage(`not a commit sha: ${b}`);
+      out = await r.fixed({ repo, n, threadId: a, sha: execFileSync("git", ["rev-parse", `${b}^{commit}`], { encoding: "utf8" }).trim(), gh, jev, diff });
+    } else {
+      const points = readJson(a);
+      if (!Array.isArray(points)) throw new Usage(`${a} must hold a JSON array of points`);
+      try { r.summaryText(repo, points); } catch (e) { throw new Usage(e.message); }
+      out = await r.summary({ repo, n, points, gh });
+    }
+  } catch (e) {
+    if (e instanceof r.RoundCap) { console.error(`pr-respond: ${e.message}`); return 5; }
+    throw e;
+  }
+  console.log(JSON.stringify(out, null, 2));
+  return 0;
+}
+
 /** deps (tests): runChild, askJev, findJev, gitleaks (binary) for doctor. */
 export async function main(argv, deps = {}) {
   const { values: v, positionals: [cmd, ...rest] } = parseArgs({
     args: argv, allowPositionals: true,
     options: {
       repo: { type: "string" }, "dry-run": { type: "boolean" }, lens: { type: "string" }, until: { type: "string" },
-      config: { type: "string" }, effort: { type: "string" }, "max-diff-lines": { type: "string" }, restart: { type: "boolean" }, loop: { type: "boolean" }, help: { type: "boolean", short: "h" },
+      config: { type: "string" }, effort: { type: "string" }, "max-diff-lines": { type: "string" }, restart: { type: "boolean" }, loop: { type: "boolean" }, pr: { type: "string" }, help: { type: "boolean", short: "h" },
     },
   });
   if (v.help || !cmd) { console.log(USAGE); return v.help ? 0 : 1; }
@@ -195,6 +232,7 @@ export async function main(argv, deps = {}) {
     const r = await tick({ repo });
     return r?.exit ?? 0;
   }
+  if (cmd === "respond") return respondCmd(rest, v, deps);
   if (cmd !== "review" || rest.length > 1) throw new Usage(USAGE);
   if (v.effort && !["low", "medium", "high", "max", "auto"].includes(v.effort)) throw new Usage(`--effort must be low|medium|high|max|auto`);
   if (v.until && !STAGES.includes(v.until)) throw new Usage(`--until must be one of ${STAGES.join("|")}`);

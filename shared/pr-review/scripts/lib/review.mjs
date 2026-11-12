@@ -16,6 +16,7 @@ import { redact, scanOutbound } from "./secrets.mjs";
 import { hygiene as realHygiene } from "./hygiene.mjs";
 import { limiter } from "./limit.mjs";
 import { decide as realDecide } from "./decider.mjs";
+import { linkFix } from "./reply.mjs";
 import { appliedAnswer, pendingAnswers, queueQuestion } from "./questions.mjs";
 import { FINAL_STAGE, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, writeAtomic } from "./state.mjs";
 
@@ -551,14 +552,7 @@ async function once(o, restart) {
     if ((st.resolved ?? []).includes(e.threadId)) continue;
     const t = liveThreads.find((x) => x.id === e.threadId);
     const k = sha1(`fixed\0${e.threadId}`);
-    const link = `Fixed in [\`${f.headSha.slice(0, 7)}\`](https://github.com/${repo}/commit/${f.headSha}).`;
-    const msg = `${link}\n\n${marker(runId, f.headSha, k)}`;
-    if (!scanOutbound(msg).ok) continue;
-    // a thread longer than the fetched page: its newest comment is unknown, so reply
-    const whole = t && t.comments.length === (t.commentCount ?? t.comments.length);
-    const last = whole && t.comments.length > 1 && t.comments.at(-1).author === me ? t.comments.at(-1) : null;
-    if (last) { if (!String(last.body).includes(`/commit/${f.headSha}`)) await gh.editComment(repo, last.id, `${last.body.trimEnd()}\n\n${link}`); }
-    else if (!seen.has(k)) await gh.reply(repo, n, e.commentId, msg);
+    if (!(await linkFix(gh, repo, n, { t, commentId: e.commentId, sha: f.headSha, me, tail: marker(runId, f.headSha, k), posted: seen.has(k) }))) continue;
     if (t?.viewerCanResolve) await gh.resolve(e.threadId);
     st.resolved = [...(st.resolved ?? []), e.threadId];
     savePrState(repoState, n, st);
