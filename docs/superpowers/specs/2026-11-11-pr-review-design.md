@@ -263,8 +263,9 @@ The engine writes one context folder. All seats read the same folder.
 - The issue or plan that the PR implements: closing issues (GraphQL
   `closingIssuesReferences`), issues named in the PR body, and plan or spec
   files that the PR body or the branch name refers to. If none exists, the
-  correctness lens says "no tracking issue or plan" in the summary and checks
-  the PR against its own description.
+  correctness lens sets `no_tracking: true` and checks the PR against its own
+  description, and the engine adds "No tracking issue or plan." to the
+  summary.
 - Review guidance from the base branch (section 4, rule 4).
 - All earlier reviews, threads (open and resolved) and comments.
 - Marco's own earlier findings on this PR that are still open, with their
@@ -384,8 +385,10 @@ The judge writes the review from the agreed findings, with the rules in
   labels such as `nit:` or Conventional Comments).
 - Inline comments: one finding per comment. Layout: severity label, the case
   in one line, then a code snippet or a GitHub `suggestion` block.
-- Summary body: what the PR does in 2 sentences, then the `must` items. When
-  something is held for Marco: "1 point is still open with the reviewer."
+- Summary body: what the PR does in 2 sentences, then the `must` items. The
+  engine, not the judge, adds the state lines from the real state: "1 point
+  is still open with the reviewer.", dropped seats, lenses not run, findings
+  left out, and "No tracking issue or plan."
 - A finding from a single seat, or one that the author must clarify, is
   phrased as a question to the author.
 

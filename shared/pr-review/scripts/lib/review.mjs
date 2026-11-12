@@ -402,7 +402,7 @@ async function once(o, restart) {
   // The held line is engine text, written at post time, so it also counts comments that the secret scan holds back.
   const composed = await child(ctx, "compose", "compose", {
     seat: config.judge, schema: "compose",
-    prompt: () => composePrompt(f, [...posted, ...hygItems].map(view), readTree(join(f.ctxDir, "guidance")), { noTracking }),
+    prompt: () => composePrompt(f, [...posted, ...hygItems].map(view), readTree(join(f.ctxDir, "guidance"))),
   });
   markDone(runDir, "compose");
   if (o.until === "compose") return finish("compose");
@@ -420,6 +420,7 @@ async function once(o, restart) {
   });
   const bodyOf = (outside, key) => [
     composed.body.trim(),
+    noTracking ? "No tracking issue or plan." : "",
     outside.length ? `Outside the diff:\n${outside.map((l) => `- ${l}`).join("\n")}` : "",
     open.length ? `${open.length} ${open.length === 1 ? "point is" : "points are"} still open with the reviewer.` : "",
     leftOut ? `${leftOut} ${leftOut === 1 ? "finding was" : "findings were"} left out by the effort limit.` : "",
