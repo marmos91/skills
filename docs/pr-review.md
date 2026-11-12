@@ -202,6 +202,10 @@ snippet or a GitHub `suggestion` block, no filler, no praise, no dashes).
 - Summary: what the PR does in 2 sentences, then the `must` items, then the
   hygiene list. When a question is still open: "1 point is still open with
   the reviewer."
+- A later review of the same PR does not describe the PR again. Its summary
+  lists only new `must` items and items that cannot go inline, or says "No
+  new findings." Fixed earlier findings get their link in the thread.
+- A finding off the diff lines is listed once, under "Outside the diff".
 - A finding from a single seat, or one the author must clarify, is written
   as a question to the author.
 - The effort level caps the severities and the count (see

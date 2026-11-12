@@ -175,3 +175,10 @@ test("compose never gets a template for engine lines (open points, dropped seats
   assert.doesNotMatch(p, /still open with the reviewer/);
   assert.doesNotMatch(p, /Add this line to the summary/);
 });
+
+test("compose: from review 2 on the summary does not describe the PR again", () => {
+  assert.doesNotMatch(composePrompt(frame(), [], ""), /do not say it again/);
+  const p = composePrompt(frame({ reviewNumber: 2 }), [], "");
+  assert.match(p, /This is review 2 of this PR\. An earlier review already said what the PR does: do not say it again/);
+  assert.match(p, /"No new findings\."/);
+});

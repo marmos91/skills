@@ -423,9 +423,12 @@ async function once(o, restart) {
     return { exit: 4, runDir, planned, summary: `the review summary was blocked by the secret scan twice at ${f.headSha}; see the question, or use --restart` };
   }
   // The held line is engine text, written at post time, so it also counts comments that the secret scan holds back.
+  // A finding off the diff lines goes under "Outside the diff" (engine text), so the judge must not list it too.
+  const hunks = parseHunks(readFileSync(join(f.ctxDir, "diff.patch"), "utf8"));
+  const offDiff = (c) => c.line == null || !hunks.get(c.file)?.right.get(c.line);
   const composed = await child(ctx, "compose", "compose", {
     seat: config.judge, schema: "compose",
-    prompt: () => composePrompt(f, [...posted, ...hygItems].map(view), readTree(join(f.ctxDir, "guidance"))),
+    prompt: () => composePrompt(f, [...posted.map((c) => ({ ...view(c), ...(offDiff(c) && { outside: true }) })), ...hygItems.map(view)], readTree(join(f.ctxDir, "guidance"))),
   });
   markDone(runDir, "compose");
   if (o.until === "compose") return finish("compose");
@@ -472,7 +475,6 @@ async function once(o, restart) {
     }),
     ci.line ?? "", marker(runId, f.headSha, key),
   ].filter(Boolean).join("\n\n");
-  const hunks = parseHunks(readFileSync(join(f.ctxDir, "diff.patch"), "utf8"));
   const permalink = `https://github.com/${repo}/blob/${f.headSha}`;
 
   const warnings = (hyg.warnings ?? []).map((w) => `warning: ${w}`);
