@@ -148,7 +148,7 @@ function issue(repo, number, wrap) {
 // (12-fix-login). A wrong link can turn the shell off, so dates, years and versions never match.
 export function linkedIssues(p, n) {
   // shortcut: a year-like number (1900-2099) in a branch never links; #2024 in the body still does.
-  const branch = /(?:^|\/)(?:fix|issue|bug|hotfix|gh|closes|fixes|resolves)[-_/](?!(?:19|20)\d\d\b)(\d+)(?=[-_][a-z]|\/|$)|^(?!(?:19|20)\d\d\b)(\d+)(?=[-_][a-z])/gi;
+  const branch = /(?:^|\/)(?:fix|issue|bug|hotfix|gh|closes|fixes|resolves)[-_/](?!(?:19|20)\d\d(?!\d))(\d+)(?=[-_][a-z]|\/|$)|^(?!(?:19|20)\d\d(?!\d))(\d+)(?=[-_][a-z])/gi;
   const nums = [...String(p.body ?? "").matchAll(/(?<![\w/.-])#(\d+)\b/g), ...String(p.headRef ?? "").matchAll(branch)];
   return [...new Set(nums.map((m) => Number(m[1] ?? m[2])))].filter((i) => i !== n && !p.closingIssues.includes(i)).slice(0, 5);
 }
