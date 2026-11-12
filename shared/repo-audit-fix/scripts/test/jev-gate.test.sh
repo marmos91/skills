@@ -3,7 +3,9 @@
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
-STATE="$T/state"; JEV=auto; JEV_CONFIDENCE=0
+STATE="$T/state"
+# shellcheck disable=SC2034 # read by the sourced jev-gate.sh
+JEV=auto JEV_CONFIDENCE=0
 log() { :; }
 epic_dir() { echo "$STATE/$1"; }
 . "$HERE/../lib/jev-gate.sh"

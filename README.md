@@ -12,21 +12,29 @@ Docs: [docs/README.md](docs/README.md) — install, quick start, how jev and the
 ## Install
 
 ```sh
-git clone git@github.com:marmos91/skills.git
-cd skills && ./install.sh          # symlinks everything into place
-./install.sh --rm                   # remove this repo's symlinks
+npx @marmos91/skills install [--claude] [--pi] [--link] [skill...]
+npx @marmos91/skills list         # installed version per skill
+npx @marmos91/skills uninstall
 ```
 
-`install.sh` is idempotent — re-run after pulling. Existing non-symlink skill
-dirs are moved aside to `<name>.pre-skills-repo` rather than deleted.
+For a dev clone, `./install.sh` symlinks the working tree into place
+(`./install.sh --rm` removes the links). Both are idempotent. Existing
+non-symlink skill dirs are moved aside to `<name>.pre-skills-repo` rather
+than deleted.
+
+Releases: release-please reads the conventional commits on `main` and opens a
+release PR with the CHANGELOG. Merging it tags `vX.Y.Z`, bumps
+`metadata.version` in every `SKILL.md`, and publishes to npm with provenance
+(trusted publishing, no token in the repo).
 
 ## Layout per skill
 
 Each skill is a directory with `SKILL.md` (frontmatter: name, description)
 plus whatever scripts/resources it needs. The agent harness discovers skills
 by directory; the description drives automatic routing.
-A shared skill's command-line tools go in `<skill>/bin/`; `install.sh` links
-each one into `~/.local/bin` (`BIN_DIR`).
+A skill's command-line tools are listed in `bin` in `package.json`; the
+installer and `install.sh` link each one into `~/.local/bin` (`BIN_DIR`). Add a new `SKILL.md` to
+`extra-files` in `release-please-config.json` and give it `metadata.version`.
 
 ## Skills
 
@@ -54,3 +62,15 @@ run under pi, Claude Code, or any agent with the `pi` CLI available.
 - `jev` only adds signal: engines act on jev's yes/no and keep their old behaviour when jev is missing, down (exit 2) or unsure. `JEV=off` disables it; `JEV_CONFIDENCE` (default 0, no gate; see `bench/jev/RESULTS.md`) sets a confidence bar. jev never relaxes a gate: it can only add a finding or a revise round.
 - Resumable by on-disk markers; crash = retry, never silent skip.
 - Project-specific tuning lives in env vars (REPO_CTX, model routes, paths) — engines default generically.
+
+## Changelog
+
+The CHANGELOG comes from the PR titles (squash merge). Write each title as a
+conventional commit for a user to read, with the skill as the scope:
+`fix(pr-review): keep the lock when a pid is reused`. `feat` and `fix` show
+in the changelog; `chore`, `test`, `ci` and `refactor` do not. Mark a breaking
+change with `!` (`feat(jev)!: …`). All skills share one version.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

@@ -134,6 +134,7 @@ test("doctor: a seat whose probe fails is named and the exit is 1", async (t) =>
   assert.match(out, /ok\s+seat claude:opus/);
   assert.match(out, /WARN\s+jev: not found/);
   assert.match(out, /claude mode: --restricted/);
+  assert.match(out, /^pr-review \d+\.\d+\.\d+ /m); // the version from SKILL.md
   assert.match(out, /lenses: adversarial, correctness, simplification, architecture, security \(off\), big \(user\) \(off\), perf \(user\)/);
   assert.match(out, /WARN\s+lens file \S+big\.md: over 40 lines or 4000 characters \(the lens is off\)/);
   assert.match(out, /effort low: \d+ children per PR/);

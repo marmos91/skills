@@ -707,8 +707,9 @@ A commented copy is in `shared/pr-review/config.example.json`.
 
 ### Set up a machine
 
-1. Run `./install.sh` in the skills repo. It links `shared/pr-review` and
-   `shared/pr-review-loop` into `~/.claude/skills/` and `~/.pi/agent/skills/`.
+1. Run `npx @marmos91/skills install` (or `./install.sh` in a dev clone).
+   It puts `pr-review` and `pr-review-loop` into `~/.claude/skills/` and
+   `~/.pi/agent/skills/`, and their CLIs into `~/.local/bin`.
 2. Install `gh` and log in. Install `node`. Optional: `gitleaks`, and `jev`
    (installed with this repo).
 3. For an unattended loop: run `claude setup-token`, and export a
