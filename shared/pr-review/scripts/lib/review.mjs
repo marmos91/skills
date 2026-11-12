@@ -518,16 +518,19 @@ async function once(o, restart) {
   }
 
   // Spec 6.9: reply "Fixed in <commit link>." and resolve. prState.resolved is the list reply.mjs reads too.
-  // When the newest comment of the thread is already ours (a reply that said what changed), only resolve.
+  // When the newest comment of the thread is already ours (a reply that said what changed), amend it with the
+  // link instead of a second reply.
   for (const e of fixed) {
     st = prState(repoState, n);
     if ((st.resolved ?? []).includes(e.threadId)) continue;
     const t = threads.find((x) => x.id === e.threadId);
     const k = sha1(`fixed\0${e.threadId}`);
-    const msg = `Fixed in [\`${f.headSha.slice(0, 7)}\`](https://github.com/${repo}/commit/${f.headSha}).\n\n${marker(runId, f.headSha, k)}`;
+    const link = `Fixed in [\`${f.headSha.slice(0, 7)}\`](https://github.com/${repo}/commit/${f.headSha}).`;
+    const msg = `${link}\n\n${marker(runId, f.headSha, k)}`;
     if (!scanOutbound(msg).ok) continue;
-    const answered = (t?.comments.length ?? 0) > 1 && t.comments.at(-1).author === me;
-    if (!answered && !seen.has(k)) await gh.reply(repo, n, e.commentId, msg);
+    const last = (t?.comments.length ?? 0) > 1 && t.comments.at(-1).author === me ? t.comments.at(-1) : null;
+    if (last) { if (!String(last.body).includes(`/commit/${f.headSha}`)) await gh.editComment(repo, last.id, `${last.body.trimEnd()}\n\n${link}`); }
+    else if (!seen.has(k)) await gh.reply(repo, n, e.commentId, msg);
     if (t?.viewerCanResolve) await gh.resolve(e.threadId);
     st.resolved = [...(st.resolved ?? []), e.threadId];
     savePrState(repoState, n, st);

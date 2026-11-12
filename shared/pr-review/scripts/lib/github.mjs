@@ -129,6 +129,11 @@ export async function reply(repo, n, commentId, body) {
   return json(["api", "-X", "POST", `repos/${repo}/pulls/${n}/comments/${commentId}/replies`, "--input", "-"], { input: JSON.stringify({ body }) });
 }
 
+/** Replaces the body of a review comment. */
+export async function editComment(repo, commentId, body) {
+  return json(["api", "-X", "PATCH", `repos/${repo}/pulls/comments/${commentId}`, "--input", "-"], { input: JSON.stringify({ body }) });
+}
+
 const RESOLVE = `mutation ResolveThread($id: ID!) { resolveReviewThread(input: { threadId: $id }) { thread { id isResolved } } }`;
 
 export async function resolve(threadId) {

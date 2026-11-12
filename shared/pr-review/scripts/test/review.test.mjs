@@ -74,6 +74,7 @@ function routes(fx, { head = fx.head, body = "Changes a.", threads = [], pending
     "graphql PendingReview": { stdout: { data: { repository: { pullRequest: { reviews: { nodes: pending ? [pending] : [] } } } } } },
     "graphql PostReview": postExit ? { stderr: "boom", exit: postExit } : { stdout: { data: { addPullRequestReview: { pullRequestReview: { url: "https://github.com/o/r/pull/5#pullrequestreview-1" } } } } },
     "api -X POST repos/o/r/pulls/5/comments/11/replies --input -": { stdout: {} },
+    "api -X PATCH repos/o/r/pulls/comments/12 --input -": { stdout: {} },
     "graphql ResolveThread": { stdout: { data: { resolveReviewThread: { thread: { id: "T1", isResolved: true } } } } },
   };
   writeFileSync(join(fx.stubDir, "routes.json"), JSON.stringify(r));
@@ -287,7 +288,7 @@ test("earlier threads fixed -> 'Fixed in <sha>.' reply + resolve", async () => {
   assert.deepEqual(prState(fx.state, N).resolved, ["T1"]);
 });
 
-test("a fixed thread whose newest comment is ours is resolved with no second 'Fixed' reply", async () => {
+test("a fixed thread whose newest comment is ours: that comment gets the link, no second reply", async () => {
   const fx = fixture();
   routes(fx, { threads: [{ id: "T1", isResolved: false, isOutdated: false, viewerCanResolve: true, path: "a.js", line: 1, originalLine: 1,
     comments: { nodes: [
@@ -299,6 +300,8 @@ test("a fixed thread whose newest comment is ours is resolved with no second 'Fi
   assert.equal(r.exit, 0, r.summary);
   const m = mutations(fx);
   assert.ok(!m.some((x) => x.key.includes("/replies")), "no second reply");
+  const ed = m.find((x) => x.key.startsWith("api -X PATCH repos/o/r/pulls/comments/12"));
+  assert.equal(ed.input.body, `Fixed: a is 2 now.\n\nFixed in [\`${fx.head.slice(0, 7)}\`](https://github.com/o/r/commit/${fx.head}).`);
   assert.ok(m.some((x) => x.key === "graphql ResolveThread"));
   assert.deepEqual(prState(fx.state, N).resolved, ["T1"]);
 });
