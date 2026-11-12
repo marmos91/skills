@@ -226,7 +226,7 @@ text (`scripts/lib/verdict.mjs`). The first row that matches wins.
 
 ### 9. Post
 
-1. Take the repo lock.
+1. Hold the lock of the PR (section Resume and pause).
 2. Read the CI state again, then check the head again. If it moved, drop
    this run and frame again.
 3. Place each inline comment on the diff hunks of the pinned SHA. A
@@ -430,8 +430,8 @@ PR head.
 
 ### One tick
 
-1. Exit at once if the repo is paused. Take the lock; if another run holds
-   it, exit.
+1. Exit at once if the repo is paused. Take the repo lock; if another tick
+   holds it, exit.
 2. Print the open questions and `todo.md`. Apply the answers you gave since
    the last tick. Each answer is checked against the current head first; if
    the code moved, the finding is dropped with a note. The loop never asks
@@ -447,9 +447,10 @@ PR head.
 7. Take at most `loop.max_prs_per_run` PRs (default 10), oldest activity
    first.
    The tick works on up to `loop.max_parallel_prs` PRs at the same time
-   (default 3), in one process under the repo lock. Each review still runs up
-   to `review.max_parallel` round-1 children, so the machine runs up to
-   3 x 9 seats at once. A pause stops the PRs that did not start; running
+   (default 3), in one process. Each PR takes its own lock. A PR that a
+   manual review holds is skipped this tick and tried again on the next.
+   Each review still runs up to `review.max_parallel` round-1 children, so
+   the machine runs up to 3 x 9 seats at once. A pause stops the PRs that did not start; running
    ones finish.
 
 ### What it does per PR
@@ -499,13 +500,17 @@ State root: `${XDG_STATE_HOME:-~/.local/state}/pr-review/<owner>__<repo>/`.
 
 | Path | Content |
 |---|---|
-| `lock/` | PID of the run that holds the repo. A lock with a dead PID is taken over. `review` and the loop share it |
+| `lock/` | PID of the tick that holds the repo. A lock with a dead PID is taken over. Only ticks take it |
+| `pr/<n>/lock/` | PID of the run that holds PR `n`: a review, or the tick while it handles the PR. Reviews of different PRs run at the same time |
 | `pr/<n>/state.json` | Review and reply counts, settled fingerprints, last reviewed SHA, and the cache (`updatedAt`) used to skip unchanged PRs |
 | `pr/<n>/runs/<sha>-<ts>/` | One folder per run: a folder per stage, one output file and `.done` marker per child |
 | `questions/<id>.md`, `.json` | Open and answered questions |
 | `todo.md` | Points you accepted on your own PRs |
 | `tick.json` | Queue of the current tick: PRs done, PRs in progress |
 | `paused` | Present while the loop is paused |
+
+Fetches and worktree changes write the clone's `.git`. They take a short
+lock in the clone (`.git/pr-review/lock`) and wait up to 60 s for it.
 
 - **A review resumes.** `pr-review review <n>` on a PR with an unfinished run
   for the same head SHA continues it. Only children without a `.done` marker
