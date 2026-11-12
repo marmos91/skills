@@ -72,7 +72,7 @@ export function salvageJson(text, ok) {
         if (--depth === 0) {
           const raw = s.slice(i, j + 1);
           // Models write \` and the like; drop the backslash of an invalid escape, keep the valid ones.
-          for (const t of [raw, raw.replace(/\\(["\\/bfnrtu])|\\/g, (m, k) => k ? m : "")]) {
+          for (const t of [raw, raw.replace(/\\(["\\/bfnrt]|u[0-9a-fA-F]{4})|\\/g, (m, k) => k ? m : "")]) {
             try { found.push({ v: JSON.parse(t), size: j + 1 - i }); i = j; break; } catch {}
           }
           break;

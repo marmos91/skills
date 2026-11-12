@@ -160,7 +160,7 @@ test("review exits with Locked while a tick holds the lock", async () => {
 
 test("tick takes the repo as a positional, like status", () => {
   const fx = fixture();
-  const own = join(fx.root, "state", "pr-review", "O__R");
+  const own = join(fx.root, "state", "pr-review", "o__r"); // stateRoot folds case
   mkdirSync(own, { recursive: true });
   writeFileSync(join(own, "paused"), "");
   const r = cli(fx, "tick", "O/R");
@@ -174,6 +174,7 @@ test("tick outside a clone of the repo is a usage error: it fetches PR heads in 
   const r = cli(fx, "tick", "x/y");
   assert.equal(r.status, 1);
   assert.match(r.stderr, /not a clone of x\/y/);
+  assert.doesNotMatch(cli(fx, "tick", "o/r").stderr, /not a clone/, "the clone check folds case like GitHub");
 });
 
 test("--max-diff-lines takes a positive integer", () => {
