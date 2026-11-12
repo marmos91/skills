@@ -78,6 +78,8 @@ test("status shows a stale lock, open questions, an unfinished run and the inter
   writeFileSync(join(run, "frame.done"), "");
   writeFileSync(join(run, "round1", "all~0.done"), "");
   writeFileSync(join(fx.state, "pr", "7", "state.json"), JSON.stringify({ reviews: 2, replies: { t1: 1, t2: 2 } }));
+  mkdirSync(join(fx.state, "pr", "7", "lock"));
+  writeFileSync(join(fx.state, "pr", "7", "lock", "pid"), dead);
   writeFileSync(join(fx.state, "todo.md"), "- [ ] fix x\n- [x] done y\n");
   writeFileSync(join(fx.state, "tick.json"), JSON.stringify({ startedAt: "2026-11-11T10:00:00Z", queue: [{ number: 7 }, { number: 8 }], done: [7], current: 8 }));
   writeFileSync(join(fx.state, "paused"), "");
@@ -91,6 +93,7 @@ test("status shows a stale lock, open questions, an unfinished run and the inter
   assert.equal(s.todos, 1);
   assert.deepEqual(s.tick, { startedAt: "2026-11-11T10:00:00Z", current: 8, left: [8] });
   const pr = s.prs.find((p) => p.pr === 7);
+  assert.deepEqual(pr.lock, { pid: Number(dead), stale: true });
   assert.equal(pr.reviews, 2);
   assert.equal(pr.replies, 3);
   assert.equal(pr.questions, 1);
@@ -145,16 +148,16 @@ test("status: a corrupt state.json and a young pid-less lock", () => {
   assert.match(s.prs.find((p) => p.pr === 9).error, /state.json unreadable/);
 });
 
-test("review exits with Locked while a tick holds the lock", async () => {
+test("review exits with Locked while another run holds that PR", async () => {
   const fx = fixture();
   const holder = spawn(process.execPath, ["--input-type=module", "-e",
-    `const { acquireLock, stateRoot } = await import(${JSON.stringify(join(here, "..", "lib", "state.mjs"))}); acquireLock(stateRoot("o/r")); console.log("held"); setTimeout(() => {}, 30000);`],
+    `const { acquireLock, stateRoot } = await import(${JSON.stringify(join(here, "..", "lib", "state.mjs"))}); acquireLock(stateRoot("o/r") + "/pr/5", " of PR #5"); console.log("held"); setTimeout(() => {}, 30000);`],
   { env: fx.env, stdio: ["ignore", "pipe", "inherit"] });
   try {
     await new Promise((res) => holder.stdout.once("data", res));
     const r = cli(fx, "review", "5", "--repo", "O/R");
     assert.equal(r.status, 1);
-    assert.match(r.stderr, new RegExp(`holds the lock \\(pid ${holder.pid}\\)`));
+    assert.match(r.stderr, new RegExp(`holds the lock of PR #5 \\(pid ${holder.pid}\\)`));
   } finally { holder.kill(); }
 });
 

@@ -2,7 +2,7 @@ import test from "node:test";
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync, existsSync, readdirSync, rmSync } from "node:fs";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -488,11 +488,37 @@ test("SIGTERM during round 1, then rerun: finished children are not started agai
   assert.deepEqual(starts().sort(), ["all~0.json", "all~1.json"]);
   p.kill("SIGTERM");
   assert.equal(await closed, 143);
-  assert.equal(existsSync(join(fx.state, "lock")), false, "lock released");
+  assert.equal(existsSync(join(fx.state, "pr", "5", "lock")), false, "lock released");
   rmSync(join(fake, "all~1.json.hang"));
   const q = cli(["--until", "round1"]);
   assert.equal(await new Promise((res) => q.on("close", res)), 0);
   assert.deepEqual(starts().sort(), ["all~0.json", "all~1.json", "all~1.json"], "all~0 ran once");
+});
+
+test("reviews of two PRs run at the same time in two processes; a second run of the same PR gets Locked", async () => {
+  const fx = fixture(); routes(fx);
+  // Another process reviews PR 6 and is stuck in its frame: it holds PR 6's lock.
+  const other = spawn(process.execPath, ["--input-type=module", "-e", `const { review } = await import(${JSON.stringify(join(here, "..", "lib", "review.mjs"))});
+    setInterval(() => {}, 1000);
+    await review({ repo: "o/r", n: 6, gh: { pr: async () => ({ headSha: "f".repeat(40) }) }, frame: async () => { console.log("HELD"); await new Promise(() => {}); } });`],
+  { cwd: fx.repoDir, env: process.env, stdio: ["ignore", "pipe", "inherit"] });
+  try {
+    await new Promise((res) => other.stdout.once("data", res));
+    const { r } = await go(fx, happy());
+    assert.equal(r.exit, 0, r.summary);
+    assert.equal(posts(fx).length, 1);
+    await assert.rejects(go(fx, happy(), { n: 6 }), { name: "Locked", message: `another pr-review run holds the lock of PR #6 (pid ${other.pid})` });
+  } finally { other.kill(); }
+});
+
+test("a stale PR lock (dead pid) is taken over and released", async () => {
+  const fx = fixture(); routes(fx);
+  const lock = join(fx.state, "pr", "5", "lock");
+  mkdirSync(lock, { recursive: true });
+  writeFileSync(join(lock, "pid"), String(spawnSync("true").pid));
+  const { r } = await go(fx, happy());
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(existsSync(lock), false);
 });
 
 const R = (fx) => JSON.parse(readFileSync(join(fx.stubDir, "routes.json"), "utf8"));

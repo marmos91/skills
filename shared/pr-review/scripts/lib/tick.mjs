@@ -150,8 +150,8 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
     rows.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
     await runQueue({ startedAt: new Date(now()).toISOString(), queue: rows.slice(0, Math.max(0, budget)), done: [], current: [] });
 
-    // Up to loop.max_parallel_prs PRs at once, in one process: git in frame is synchronous, so two reviews
-    // never run git in the clone at the same time, and the repo lock covers them all.
+    // Up to loop.max_parallel_prs PRs at once, in one process. Each PR is handled under its own lock (as review() takes
+    // it): a PR that a manual review holds is skipped this tick. Git writes in frame take the clone's git lock.
     async function runQueue(j) {
       let n = 0, paused = false;
       const running = new Set();
@@ -165,10 +165,15 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
         }
         running.add(r.number);
         save();
-        let res;
-        try { res = await handle(r, forced.get(r.number)); } catch (e) { log(`#${r.number}: ${e.message}`); res = { acted: false, cache: false }; }
+        let res, releasePr;
+        try {
+          releasePr = acquireLock(join(rs, "pr", String(r.number)), ` of PR #${r.number}`);
+          res = await handle(r, forced.get(r.number));
+        } catch (e) { log(`#${r.number}: ${e.message}${e instanceof Locked ? "; skipped this tick" : ""}`); res = { acted: false, cache: false }; }
         // the block marker stays until a review really ran (or a new exit 1 replaces it)
-        if (res.cache) update(r.number, (s) => { const blocked = res.blocked ?? (res.reviewed ? undefined : s.cache?.blocked); s.cache = { updatedAt: r.updatedAt, ...(blocked && { blocked }) }; });
+        try {
+          if (res.cache) update(r.number, (s) => { const blocked = res.blocked ?? (res.reviewed ? undefined : s.cache?.blocked); s.cache = { updatedAt: r.updatedAt, ...(blocked && { blocked }) }; });
+        } finally { releasePr?.(); }
         res.acted ? out.processed++ : out.skipped++;
         j.done.push(r.number);
         running.delete(r.number);
