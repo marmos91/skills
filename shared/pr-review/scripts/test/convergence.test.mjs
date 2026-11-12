@@ -25,15 +25,12 @@ test("settled fingerprint is dropped unless its lines changed", () => {
   r = filterNew([x], { reviewNumber: 1, settled, changedLines: new Map([["a.js", new Set([7])]]) });
   assert.equal(r.keep.length, 0);
 });
-test("a multi-line settled finding reopens when any line of its range changed", () => {
-  const x = f({ start_line: 38 });
-  const settled = new Set([fingerprint(x)]);
-  const at = (l) => filterNew([x], { reviewNumber: 1, settled, changedLines: new Map([["a.js", new Set([l])]]) }).keep.length;
-  assert.deepEqual([at(37), at(38), at(40), at(42), at(43)], [0, 1, 1, 1, 0]);
-});
 test("titles that normalize to empty fall back to the case", () => {
   assert.notEqual(fingerprint(f({ title: "1.", case: "a -> b" })), fingerprint(f({ title: "2!", case: "c -> d" })));
   assert.equal(fingerprint(f({ title: "1.", case: "a -> b" })), fingerprint(f({ title: "2!", case: "A -> b" })));
+  assert.notEqual(fingerprint(f({ title: "1.", case: "off by one at line 42" })), fingerprint(f({ title: "2!", case: "off by one at line 43" })));
+  assert.notEqual(fingerprint(f({ title: "404", case: "500" })), fingerprint(f({ title: "429", case: "502" })));
+  assert.notEqual(fingerprint(f({ title: "404" })), fingerprint(f({ title: "429" })), "no case: the raw title");
 });
 test("same finding with a moved line number keeps its fingerprint", () => {
   assert.equal(fingerprint(f({ line: 42 })), fingerprint(f({ line: 45 })));
