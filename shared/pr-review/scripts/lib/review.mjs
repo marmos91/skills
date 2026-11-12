@@ -1,12 +1,12 @@
 // Review pipeline (spec 6): frame -> round1 -> merge -> round2 -> tally -> decide -> compose -> post.
 // Every child output and stage gets a marker (spec 8), so a rerun continues where the last run stopped.
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import * as github from "./github.mjs";
 import { runChild as realRunChild, ChildFailed, SeatDropped, stopping, harnessFor } from "./child.mjs";
 import { LENSES, WHOLE_PR_LENSES, applyEffort, loadConfig, lowerEffort, pickEffort, plannedChildren, seatId, seatsForLens, userConfigPath, withLimits } from "./config.mjs";
-import { frame as realFrame, git, readTree, HeadMoved, DiffTooLarge } from "./frame.mjs";
+import { frame as realFrame, git, readTree, cleanupWorktree, HeadMoved, DiffTooLarge } from "./frame.mjs";
 import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.mjs";
 import { tally } from "./tally.mjs";
 import { filterNew, fingerprint } from "./convergence.mjs";
@@ -73,6 +73,27 @@ export async function review(opts) {
     if (e instanceof ChildFailed || e instanceof HeadMoved) return { exit: 4, summary: e.message };
     throw e;
   } finally { release(); }
+}
+
+/**
+ * Removes the worktree of every finished run of the repo, and of every run of PR `n` except `keep`, the run
+ * this review resumes or starts (no other run of PR `n` is ever resumed). ctx stays (the loop reads it later); a resume makes the worktree again. Best effort: a folder
+ * that cannot go is tried again on the next sweep, and never fails a review.
+ */
+export function sweepWorktrees(repoState, n, keep) {
+  const root = join(repoState, "pr");
+  let ls = [];
+  try { ls = readdirSync(root); } catch { return; }
+  for (const p of ls) {
+    let runs = [];
+    try { runs = readdirSync(join(root, p, "runs")); } catch { continue; }
+    for (const r of runs) {
+      const dir = join(root, p, "runs", r);
+      if (dir !== keep && (done(dir, FINAL_STAGE) || String(n) === p)) {
+        try { cleanupWorktree(dir); } catch {}
+      }
+    }
+  }
 }
 
 // One child: a marker means its output is reused, never paid for twice (spec 8).
@@ -176,9 +197,11 @@ async function once(o, restart) {
   const runDir = pickRunDir(repoState, n, head, { restart });
   const runId = basename(runDir);
   const pst0 = prState(repoState, n);
+  const skip = !restart && pst0.lastReviewedSha === head && pst0.lastRunId !== runId;
+  sweepWorktrees(repoState, n, skip ? null : runDir); // a skipped review keeps no worktree of this PR
   // Same sha, posted before: nothing new to say. Exceptions: --restart, answers that wait for a run, and the
   // posted run itself when it crashed before its bookkeeping ended (lastRunId).
-  if (!restart && pst0.lastReviewedSha === head && pst0.lastRunId !== runId) {
+  if (skip) {
     const answered = pendingAnswers(repoState).filter((q) => q.pr === n && !q.finding?.kind);
     if (answered.length) return followUp(o, head, pst0, answered);
     return { exit: 0, runDir, skipped: true, summary: `already reviewed ${head}; use --restart to review it again` };

@@ -502,6 +502,17 @@ test("a reply-only tick leaves no unfinished run folder", async () => {
   assert.ok(dirs.every((d) => existsSync(join(runs, d, "post.done"))), "every run folder is final");
 });
 
+test("a tick removes the worktree of a finished run", async () => {
+  const rs = fresh();
+  withBaseline(rs);
+  const dir = join(rs, "pr", "5", "runs", "sha5-1");
+  mkdirSync(join(dir, "wt"), { recursive: true });
+  writeFileSync(join(dir, "post.done"), "x\n");
+  await go({ gh: fakeGh({ rows: [] }) });
+  assert.equal(existsSync(join(dir, "wt")), false);
+  assert.ok(existsSync(dir), "the run folder stays");
+});
+
 test("a reply-only tick keeps an unfinished review run at the same sha open", async () => {
   const rs = fresh();
   withBaseline(rs);
