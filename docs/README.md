@@ -52,7 +52,7 @@ links, run `./install.sh --rm`.
 
 - You can run `install.sh` again after a pull. It is idempotent.
 - If a real directory has the same name, `install.sh` moves it to `<name>.pre-skills-repo`.
-- `--rm` removes only the symlinks that point into this repository.
+- `--rm` runs `skills uninstall`: it removes every skill and CLI that the package installed, links from this clone and copies from npx alike. It never touches a skill that the package did not install.
 
 ## Prerequisites
 
