@@ -1,11 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initRepo, commit, git } from "./repo.mjs";
 import { ghStub } from "./gh.mjs";
 import { Blocked, runTests } from "../lib/counts.mjs";
-import { Usage, buildBody, openPr, parentOf } from "../lib/open.mjs";
+import { buildBody, openPr, parentOf } from "../lib/open.mjs";
+
+// Pin the scanner: a secret-scan on the developer's PATH must not replace the fallback under test.
+const PATH0 = process.env.PATH.split(":").filter((d) => !existsSync(join(d, "secret-scan"))).join(":");
+process.env.PATH = PATH0;
+const TOKEN = "ghp_" + "A1b2C3d4".repeat(5); // built at runtime: no token literal in the repo
 
 // main <- feat/a (pushed, PR #7) <- feat/b (current, tested)
 async function stack({ test = true } = {}) {
@@ -43,6 +49,8 @@ test("buildBody: the tests line comes from the record and replaces an agent-writ
   assert.doesNotMatch(out, /99 passed/);
   assert.match(out, /## Breaking changes\n\nNone\./);
   assert.match(out, /## Tests\n\n`npm test` at abcdef1: 5 passed, 0 failed, 1 skipped\./);
+  const fenced = buildBody({ body: "Template:\n\n```md\n## Tests\n\nEdit me.\n```\n\n## Why\n\nBecause.\n", record });
+  assert.match(fenced, /```md\n## Tests\n\nEdit me\.\n```\n\n## Why\n\nBecause\./);
   const none = buildBody({ body: "x", record: { ...record, counts: null } });
   assert.match(none, /`npm test` at abcdef1: counts not found in the output\./);
 });
@@ -79,6 +87,7 @@ test("a base with no open PR is a plain base: no marker, no stack line", async (
   const gh = ghStub(routes({ "pr list --head feat/a": { stdout: [] } }));
   const r = await openPr(dir, { title: "feat: b", bodyFile, base: "feat/a" });
   assert.equal(r.base, "feat/a"); assert.equal(r.parent, null);
+  assert.ok(r.warnings.includes("feat/a has no open PR: opened as a plain base, no parent marker"));
   const body = bodyOf(created(gh));
   assert.equal(parentOf(body), null);
   assert.doesNotMatch(body, /Stacked on/);
@@ -173,6 +182,35 @@ test("a secret in the test command would reach the body: blocked", async () => {
   const gh = ghStub(routes());
   await assert.rejects(openPr(dir, { title: "feat: b", bodyFile, base: "feat/a" }), (e) => e instanceof Blocked && e.detail.hits.length > 0);
   assert.equal(created(gh), undefined);
+});
+
+test("a secret in the title: blocked, no PR", async () => {
+  const { dir, bodyFile } = await stack();
+  const gh = ghStub(routes());
+  await assert.rejects(openPr(dir, { title: `feat: use ${TOKEN}`, bodyFile, base: "feat/a" }), (e) => e instanceof Blocked && e.detail.hits.length > 0);
+  assert.equal(created(gh), undefined);
+});
+
+test("secret-scan on PATH is used, and its hit blocks", async (t) => {
+  const { dir, bodyFile } = await stack();
+  const bin = mkdtempSync(join(tmpdir(), "pr-open-scan-"));
+  writeFileSync(join(bin, "secret-scan"), "#!/bin/sh\ncat >/dev/null\necho 'rule-x: abcd…' >&2\nexit 1\n");
+  chmodSync(join(bin, "secret-scan"), 0o755);
+  process.env.PATH = `${bin}:${PATH0}`; t.after(() => { process.env.PATH = PATH0; });
+  const gh = ghStub(routes());
+  await assert.rejects(openPr(dir, { title: "feat: b", bodyFile, base: "feat/a" }), (e) => e instanceof Blocked && e.detail.hits[0] === "rule-x: abcd…");
+  assert.equal(created(gh), undefined);
+});
+
+test("a base that exists only on origin is fetched", async () => {
+  const { dir, bodyFile } = await stack();
+  const other = join(dir, "..", `clone-rel-${Date.now()}`);
+  git(dir, "clone", "-q", git(dir, "remote", "get-url", "origin"), other);
+  git(other, "push", "-q", "origin", "main:release/x");
+  const gh = ghStub(routes({ "pr list --head release/x": { stdout: [] } }));
+  const r = await openPr(dir, { title: "feat: b", bodyFile, base: "release/x" });
+  assert.equal(r.base, "release/x");
+  assert.ok(created(gh));
 });
 
 test("a PR is already open: returned, no push, no create", async () => {

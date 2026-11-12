@@ -28,6 +28,19 @@ test("plural and model forms are hits", () => {
   assert.deepEqual(aiMentions("LLMs, GPT4 and Sonnet 4.5 wrote this; Claude Code too"), ["llms", "gpt4", "sonnet 4.5", "claude"]);
 });
 
+test("hyphenated and dotted forms are hits", () => {
+  assert.deepEqual(aiMentions("LLM-generated"), ["llm"]);
+  assert.deepEqual(aiMentions("switch to gpt-4o-mini"), ["gpt-4o"]);
+  assert.deepEqual(aiMentions("made with claude-3, ported from anthropic.ai"), ["claude", "anthropic"]);
+});
+
+test("checkBranch: a signed commit in a sha256 repo is signed", () => {
+  const dir = initRepo({ objectFormat: "sha256" });
+  git(dir, "checkout", "-q", "-b", "feat/x");
+  commit(dir, "a.txt", "a", "feat: a");
+  assert.deepEqual(checkBranch(dir, "main").unsigned, []);
+});
+
 test("plain words are not hits", () => {
   assert.deepEqual(aiMentions("fix: cursor position in the editor; recall the llama farm; email"), []);
 });

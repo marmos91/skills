@@ -19,9 +19,9 @@ function signingKey() {
 }
 
 /** New repo on branch main with one signed commit. With origin: true, also a bare origin with main pushed. */
-export function initRepo({ origin = false } = {}) {
+export function initRepo({ origin = false, objectFormat = "sha1" } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "pr-open-repo-"));
-  git(dir, "init", "-q", "-b", "main");
+  git(dir, "init", "-q", "-b", "main", `--object-format=${objectFormat}`);
   for (const [k, v] of [["user.name", "T"], ["user.email", "t@example.com"], ["gpg.format", "ssh"], ["user.signingkey", signingKey()], ["commit.gpgsign", "false"]]) git(dir, "config", k, v);
   commit(dir, "README.md", "x\n", "init", { sign: true });
   if (origin) {

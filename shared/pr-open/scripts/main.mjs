@@ -7,7 +7,7 @@ import { parseArgs } from "node:util";
 import { checkBranch } from "./lib/check.mjs";
 import { Blocked, runTests } from "./lib/counts.mjs";
 import { detect, readOverride } from "./lib/detect.mjs";
-import { Usage, openPr } from "./lib/open.mjs";
+import { Usage, openPr, resolveBase } from "./lib/open.mjs";
 
 const USAGE = `usage: pr-open detect
        pr-open test [--command "<cmd>"]
@@ -20,14 +20,7 @@ const OPTIONS = {
 };
 
 const git = (...args) => execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-const ok = (...args) => { try { git(...args); return true; } catch { return false; } };
 const print = (v) => console.log(JSON.stringify(v, null, 2));
-
-// check without --base: the remote's default branch, else main.
-function baseRef(base) {
-  if (!base) { try { return git("symbolic-ref", "--short", "refs/remotes/origin/HEAD"); } catch { base = "main"; } }
-  return ok("rev-parse", "--verify", "-q", `origin/${base}`) ? `origin/${base}` : base;
-}
 
 async function run(cmd, v) {
   let dir;
@@ -42,7 +35,7 @@ async function run(cmd, v) {
   }
   if (cmd === "check") {
     const body = v["body-file"] ? readFileSync(v["body-file"], "utf8") : "";
-    const r = checkBranch(dir, baseRef(v.base), { title: v.title ?? "", body, allow: readOverride(dir).allow ?? [] });
+    const r = checkBranch(dir, resolveBase(dir, v.base).ref, { title: v.title ?? "", body, allow: readOverride(dir).allow ?? [] });
     print(r);
     return r.ok ? 0 : 2;
   }

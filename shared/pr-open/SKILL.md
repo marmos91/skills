@@ -22,7 +22,8 @@ P="sh $SKILL_DIR/scripts/pr-open"
 
 1. **Base.** The PR goes to the default branch. For a stack, the base is the
    parent branch. A base with an open PR of its own is a stack; any other
-   base (for example `develop`) is a plain base. Open the parent's PR first.
+   base (for example `develop`) is a plain base, and `open` warns that it
+   has no parent marker. Open the parent's PR first.
    When the branch does not start from the default branch and the user did
    not say, ask.
 2. **Format and lint.** Run `$P detect`. It finds the commands in env
@@ -44,7 +45,9 @@ P="sh $SKILL_DIR/scripts/pr-open"
    why, how it was tested, breaking changes, and `Closes #N` (or the
    checklist item of #N it covers). Do not write test counts: `open` adds
    a `## Tests` line from the recorded run. Follow
-   `../pr-review/writing.md`. Save it to a file.
+   `../pr-review/writing.md`. Save it to
+   `$(git rev-parse --absolute-git-dir)/pr-open/body.md`, not in the work
+   tree: `pr-open test` needs a clean tree.
 6. **Open.** Run `$P check --base <base> --title "<title>" --body-file <file>`,
    fix what it reports, then
    `$P open --title "<title>" --body-file <file> [--base <parent>] [--draft]`.
