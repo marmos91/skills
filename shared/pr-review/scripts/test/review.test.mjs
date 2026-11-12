@@ -1124,3 +1124,15 @@ test("split PR: a seat that misses one part keeps its other parts and its vote; 
   assert.match(p.body, /Seat cubbit\/mimir-pro missed 1 part of the split diff \(turn limit\)\./);
   assert.notEqual(p.event, "APPROVE");
 });
+
+test("the next review removes the worktree of a finished run and keeps its ctx", async () => {
+  const fx = fixture(); routes(fx);
+  const { r } = await go(fx, happy());
+  const wt = join(r.runDir, "wt");
+  assert.ok(existsSync(wt));
+  const { r: r2 } = await go(fx, happy(), { restart: true });
+  assert.equal(existsSync(wt), false, "the finished run's worktree is gone");
+  assert.ok(existsSync(join(r.runDir, "ctx", "diff.patch")), "ctx stays for the loop");
+  assert.doesNotMatch(git(fx.repoDir, "worktree", "list"), new RegExp(basename(r.runDir)), "and git forgets it");
+  assert.ok(existsSync(join(r2.runDir, "wt")), "the new run keeps its own until it is swept");
+});

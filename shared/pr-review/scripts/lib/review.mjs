@@ -1,12 +1,12 @@
 // Review pipeline (spec 6): frame -> round1 -> merge -> round2 -> tally -> decide -> compose -> post.
 // Every child output and stage gets a marker (spec 8), so a rerun continues where the last run stopped.
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import * as github from "./github.mjs";
 import { runChild as realRunChild, ChildFailed, SeatDropped, stopping, harnessFor } from "./child.mjs";
 import { LENSES, WHOLE_PR_LENSES, applyEffort, loadConfig, lowerEffort, pickEffort, plannedChildren, seatId, seatsForLens, userConfigPath, withLimits } from "./config.mjs";
-import { frame as realFrame, git, readTree, HeadMoved, DiffTooLarge } from "./frame.mjs";
+import { frame as realFrame, git, readTree, cleanupWorktree, HeadMoved, DiffTooLarge } from "./frame.mjs";
 import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.mjs";
 import { tally } from "./tally.mjs";
 import { filterNew, fingerprint } from "./convergence.mjs";
@@ -60,6 +60,7 @@ export async function review(opts) {
   const mine = () => { try { return Number(readFileSync(join(repoState, "lock", "pid"), "utf8")) === process.pid; } catch { return false; } };
   const release = lock && !mine() ? acquireLock(repoState) : () => {};
   try {
+    sweepWorktrees(repoState);
     for (let attempt = 0; ; attempt++) {
       try { return await once(o, o.restart && attempt === 0); } catch (e) {
         if (!(e instanceof HeadMoved) || attempt >= 2) throw e;
@@ -72,6 +73,21 @@ export async function review(opts) {
     if (e instanceof ChildFailed || e instanceof HeadMoved) return { exit: 4, summary: e.message };
     throw e;
   } finally { release(); }
+}
+
+/** Removes the worktree of every finished run of the repo; ctx stays (the loop reads it later), and a resume makes it again. */
+export function sweepWorktrees(repoState) {
+  const pr = join(repoState, "pr");
+  let ls = [];
+  try { ls = readdirSync(pr); } catch { return; }
+  for (const n of ls) {
+    let runs = [];
+    try { runs = readdirSync(join(pr, n, "runs")); } catch { continue; }
+    for (const r of runs) {
+      const dir = join(pr, n, "runs", r);
+      if (done(dir, FINAL_STAGE) && existsSync(join(dir, "wt"))) cleanupWorktree(dir);
+    }
+  }
 }
 
 // One child: a marker means its output is reused, never paid for twice (spec 8).
