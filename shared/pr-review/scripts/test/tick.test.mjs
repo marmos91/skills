@@ -408,7 +408,7 @@ test("pause during a tick stops the queue and keeps tick.json", async () => {
   const inner = f.review;
   f.review = async (o) => { const r = await inner(o); writeFileSync(join(rs, "paused"), ""); return r; };
   const gh = fakeGh({ rows: [row(1, ["review-requested"], { updatedAt: "2026-11-11T13:00:00Z" }), row(2, ["review-requested"], { updatedAt: "2026-11-11T14:00:00Z" })] });
-  await go({ gh, f });
+  await go({ gh, f, loop: { max_parallel_prs: 1 } }); // running PRs finish; pause stops the ones not started
   assert.deepEqual(f.reviews.map((r) => r.n), [1]);
   const j = JSON.parse(readFileSync(join(rs, "tick.json"), "utf8"));
   assert.deepEqual([j.queue.map((r) => r.number), j.done], [[1, 2], [1]]);
@@ -536,4 +536,34 @@ test("a setup error (bad repo config) is retried next tick, never cached as a bl
   bad = false;
   await go({ gh: fakeGh({ rows: [row(1, ["review-requested"])] }), f });
   assert.equal(f.reviews.length, 2, "the fixed config is used on the next tick");
+});
+
+test("a tick reviews up to loop.max_parallel_prs PRs at once; tick.json lists the running ones", async () => {
+  const rs = fresh();
+  withBaseline(rs);
+  let active = 0, most = 0;
+  const seen = [];
+  const reviewResult = async (o) => {
+    most = Math.max(most, ++active);
+    seen.push(JSON.parse(readFileSync(join(rs, "tick.json"), "utf8")).current.length);
+    await new Promise((r) => setTimeout(r, 20));
+    active--;
+    return { exit: 0 };
+  };
+  const f = fakes({ reviewResult });
+  const { out } = await go({ gh: fakeGh({ rows: [1, 2, 3, 4, 5].map((n) => row(n, ["review-requested"])) }), f, loop: { max_parallel_prs: 2 } });
+  assert.equal(out.processed, 5);
+  assert.equal(most, 2);
+  assert.ok(seen.some((n) => n === 2), "two PRs run at once");
+  assert.deepEqual(f.reviews.map((o) => o.n).sort(), [1, 2, 3, 4, 5]);
+  assert.equal(existsSync(join(rs, "tick.json")), false);
+});
+
+test("a failed review in a parallel tick does not stop the others", async () => {
+  const rs = fresh();
+  withBaseline(rs);
+  const f = fakes({ reviewResult: (o) => (o.n === 2 ? { exit: 4, summary: "boom" } : { exit: 0 }) });
+  const { out } = await go({ gh: fakeGh({ rows: [1, 2, 3].map((n) => row(n, ["review-requested"])) }), f });
+  assert.equal(out.processed, 2);
+  assert.equal(out.skipped, 1);
 });

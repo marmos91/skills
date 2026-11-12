@@ -435,6 +435,11 @@ PR head.
    requests that are still open.
 7. Take at most `loop.max_prs_per_run` PRs (default 10), oldest activity
    first.
+   The tick works on up to `loop.max_parallel_prs` PRs at the same time
+   (default 3), in one process under the repo lock. Each review still runs up
+   to `review.max_parallel` round-1 children, so the machine runs up to
+   3 x 9 seats at once. A pause stops the PRs that did not start; running
+   ones finish.
 
 ### What it does per PR
 
@@ -561,6 +566,7 @@ decider and `round1` belong to you.
   "loop": {
     "authors_ignore": ["dependabot[bot]", "renovate[bot]"],
     "max_prs_per_run": 10,
+    "max_parallel_prs": 3,
     "max_review_rounds": 3,
     "max_replies_per_thread": 2,
     "effort": "auto"

@@ -9,6 +9,7 @@ import { frame as realFrame, SEVERITY } from "./frame.mjs";
 import { loadConfig, pickEffort, lowerEffort, userConfigPath } from "./config.mjs";
 import { budgetLeft } from "./convergence.mjs";
 import { FINAL_STAGE, acquireLock, Locked, markDone, prState, savePrState, runDir, stateRoot, writeAtomic } from "./state.mjs";
+import { limiter } from "./limit.mjs";
 import { appliedAnswer, openQuestions, pendingAnswers, queueQuestion, questionWarnings } from "./questions.mjs";
 
 const sha1 = (s) => createHash("sha1").update(s).digest("hex");
@@ -144,24 +145,36 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
       if (fresh && changed) rows.push(blockedStale ? { ...r, blockedRetry: true } : r); else out.skipped++;
     }
     rows.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
-    await runQueue({ startedAt: new Date(now()).toISOString(), queue: rows.slice(0, Math.max(0, budget)), done: [], current: null });
+    await runQueue({ startedAt: new Date(now()).toISOString(), queue: rows.slice(0, Math.max(0, budget)), done: [], current: [] });
 
+    // Up to loop.max_parallel_prs PRs at once, in one process: git in frame is synchronous, so two reviews
+    // never run git in the clone at the same time, and the repo lock covers them all.
     async function runQueue(j) {
-      let n = 0;
-      for (const r of j.queue) {
-        if (j.done.includes(r.number)) continue;
-        // Paused mid-run: keep tick.json so the next tick resumes this queue.
-        if (existsSync(join(rs, "paused"))) { log("pr-review-loop: paused; the rest of this queue waits for resume"); return null; }
-        writeAtomic(jf, JSON.stringify({ ...j, current: r.number }, null, 2) + "\n");
+      let n = 0, paused = false;
+      const running = new Set();
+      const save = () => writeAtomic(jf, JSON.stringify({ ...j, current: [...running] }, null, 2) + "\n");
+      const one = async (r) => {
+        // Paused mid-run: keep tick.json so the next tick resumes this queue; running PRs finish.
+        if (paused || existsSync(join(rs, "paused"))) {
+          if (!paused) log("pr-review-loop: paused; the rest of this queue waits for resume");
+          paused = true;
+          return;
+        }
+        running.add(r.number);
+        save();
         let res;
         try { res = await handle(r, forced.get(r.number)); } catch (e) { log(`#${r.number}: ${e.message}`); res = { acted: false, cache: false }; }
         // the block marker stays until a review really ran (or a new exit 1 replaces it)
         if (res.cache) update(r.number, (s) => { const blocked = res.blocked ?? (res.reviewed ? undefined : s.cache?.blocked); s.cache = { updatedAt: r.updatedAt, ...(blocked && { blocked }) }; });
         res.acted ? out.processed++ : out.skipped++;
         j.done.push(r.number);
-        writeAtomic(jf, JSON.stringify({ ...j, current: null }, null, 2) + "\n");
+        running.delete(r.number);
+        save();
         n++;
-      }
+      };
+      const slot = limiter(config.loop.max_parallel_prs);
+      await Promise.all(j.queue.filter((r) => !j.done.includes(r.number)).map((r) => slot(() => one(r))));
+      if (paused) return null;
       rmSync(jf, { force: true });
       return n;
     }
