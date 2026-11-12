@@ -49,9 +49,9 @@ export function authorQuestions(body) {
 
 export const git = (cwd, args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
 export const gitOk = (cwd, args) => { try { git(cwd, args); return true; } catch { return false; } };
-/** Every file under dir (ctx/guidance), joined; "" when the folder is missing. */
-export function readTree(dir) {
-  try { return readdirSync(dir, { recursive: true }).map((p) => join(dir, p)).filter((p) => statSync(p).isFile()).map((p) => readFileSync(p, "utf8")).join("\n\n"); } catch { return ""; }
+/** Every file under dir (ctx/guidance) whose relative path passes keep, joined; "" when the folder is missing. */
+export function readTree(dir, keep = () => true) {
+  try { return readdirSync(dir, { recursive: true }).filter(keep).map((p) => join(dir, p)).filter((p) => statSync(p).isFile()).map((p) => readFileSync(p, "utf8")).join("\n\n"); } catch { return ""; }
 }
 // Round 1 parts: a folder (a Go package, its tests with it) stays whole when it fits in max lines; folders are
 // packed in path order. sizes: [[path, lines]]. A folder that does not fit splits into units: a file with its test.

@@ -17,7 +17,7 @@ import { hygiene as realHygiene } from "./hygiene.mjs";
 import { limiter } from "./limit.mjs";
 import { decide as realDecide } from "./decider.mjs";
 import { appliedAnswer, pendingAnswers, queueQuestion } from "./questions.mjs";
-import { FINAL_STAGE, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, writeAtomic } from "./state.mjs";
+import { FINAL_STAGE, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, usageByStage, writeAtomic } from "./state.mjs";
 
 export const STAGES = ["frame", "round1", "merge", "round2", "tally", "decide", "compose", "post"];
 const RANK = { must: 0, should: 1, nit: 2 };
@@ -151,6 +151,15 @@ function hunk(f, c) {
     if (!file.startsWith(wt + sep)) return "";
   } catch { return ""; }
   try { return readFileSync(file, "utf8").split("\n").slice(Math.max(0, c.line - 6), c.line + 5).join("\n"); } catch { return ""; }
+}
+
+// Compose writes text: it gets the repo's review guidance, not the whole tree (CONTRIBUTING.md, CLAUDE.md, ...).
+// REVIEW.md stays whole; only the review.guidance files after it are capped.
+const GUIDANCE_CHARS = 8000;
+export function composeGuidance(ctxDir, config) {
+  const dir = join(ctxDir, "guidance");
+  const extra = readTree(dir, (p) => p !== "REVIEW.md" && config.review.guidance.includes(p)).trim();
+  return [readTree(dir, (p) => p === "REVIEW.md").trim(), extra.length > GUIDANCE_CHARS ? `${extra.slice(0, GUIDANCE_CHARS)}\n[cut]` : extra].filter(Boolean).join("\n\n");
 }
 
 // Spec 7.4: an answer given at an older sha holds only while the finding's line is the same code at the same place.
@@ -338,7 +347,9 @@ async function once(o, restart) {
   const ballots = await settled(voters.map((seat, i) => {
     const id = seatId(seat), mine = clusters.filter((c) => c.seats.includes(id) && !c.found.includes(id));
     if (!mine.length) return { id, votes: [] };
-    return child(ctx, "round2", `v~${i}`, { seat, tools: f.shellOk ? "shell" : "read", schema: "vote", prompt: (s, fr = f) => votePrompt(fr, mine.map(view), s.max_turns) }).then((votes) => ({ id, votes: votes ?? [] }));
+    // A vote checks given findings, not the whole PR: 10 turns plus 3 per finding, never above the seat's limit.
+    const turns = Math.min(withLimits(config, seat, undefined, "round2").max_turns, 10 + 3 * mine.length);
+    return child(ctx, "round2", `v~${i}`, { seat: { ...seat, max_turns: turns }, tools: f.shellOk ? "shell" : "read", schema: "vote", prompt: (s, fr = f) => votePrompt(fr, mine.map(view), s.max_turns) }).then((votes) => ({ id, votes: votes ?? [] }));
   }));
   enoughSeats();
   markDone(runDir, "round2");
@@ -435,7 +446,7 @@ async function once(o, restart) {
   const blocking = earlierAll.filter((e) => e.severity === "must" && !fixed.includes(e) && !retracted.includes(e));
   const composed = await child(ctx, "compose", "compose", {
     seat: config.judge, schema: "compose",
-    prompt: () => composePrompt(f, [...posted.map((c) => ({ ...view(c), ...(offDiff(c) && { outside: true }) })), ...hygItems.map(view)], readTree(join(f.ctxDir, "guidance")),
+    prompt: () => composePrompt(f, [...posted.map((c) => ({ ...view(c), ...(offDiff(c) && { outside: true }) })), ...hygItems.map(view)], composeGuidance(f.ctxDir, config),
       { retracted: retracted.map((e) => ({ thread_id: e.threadId, file: e.path, line: e.line ?? e.originalLine, finding: e.body, evidence: earlier.get(e.threadId).why })),
         blocking: blocking.map((e) => ({ thread_id: e.threadId, file: e.path, line: e.line ?? e.originalLine, finding: e.body })) }),
   });
@@ -526,7 +537,8 @@ async function once(o, restart) {
     const p = place(items.map((x) => ({ file: x.file, line: x.line, body: x.body })), hunks, permalink);
     const file = join(runDir, "review.md");
     writeFileSync(file, [`event: ${v().event}`, bodyOf(p.body, "dry-run", items.filter((x) => !offDiff(x))), ...p.inline.map((x) => `---\n${x.path}:${x.line}\n${x.body}`)].join("\n\n") + "\n");
-    return finish("compose (dry run)", { dryRun: true, file, ...v(), summary: [`dry run: review written to ${file}; ${planned} children planned`, ...warnings].join("\n") });
+    const tokens = Object.entries(usageByStage(runDir)).map(([st, u]) => `${st} ${["input", "output", "cache_read", "cache_creation"].map((k) => `${k} ${u[k] ?? "?"}`).join(" ")}`);
+    return finish("compose (dry run)", { dryRun: true, file, ...v(), summary: [`dry run: review written to ${file}; ${planned} children planned`, ...(tokens.length ? [`tokens: ${tokens.join("; ")}`] : []), ...warnings].join("\n") });
   }
 
   // Post (spec 6.10). CI may have changed since frame: read it again; a failed read is unknown and blocks APPROVE.
@@ -539,13 +551,16 @@ async function once(o, restart) {
   const clean = [];
   // A host the scan holds keeps none of its folded findings: they go out on their own, through the same scan.
   const own = (c) => ({ ...c, fps: [c.fp], body: `**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}` });
-  const passes = (x) => scanOutbound(x.answered ? redact(x.body) : x.body).ok;
+  // One scan per item: each scan spawns gitleaks.
+  const scans = new Map();
+  const scan1 = (x) => { if (!scans.has(x)) scans.set(x, scanOutbound(x.answered ? redact(x.body) : x.body)); return scans.get(x); };
+  const passes = (x) => scan1(x).ok;
   const heldHosts = new Set(items.filter((x) => !passes(x)).map((x) => x.id));
   for (const c of folded.filter((c) => heldHosts.has(hostOf.get(c.id)))) { hostOf.delete(c.id); items.push(own(c)); }
   for (const x of items) {
     // Marco answered "post" on a held comment: post it with the secret redacted. If it still hits, it stays out.
     const text = x.answered ? redact(x.body) : x.body;
-    const s = scanOutbound(text);
+    const s = scan1(x);
     if (s.ok) { clean.push({ ...x, body: text }); continue; }
     if (x.answered) continue;
     // Held back. The question keeps the fingerprint and the rule ids only: never the text, which holds the secret.

@@ -205,3 +205,21 @@ test("SIGTERM releases the lock", async () => {
   assert.equal(await closed, 143);
   assert.equal(existsSync(join(s, "lock")), false);
 });
+
+test("usageByStage sums the usage records per stage, skips wt and ctx, and adds a total", async () => {
+  const { usageByStage } = await import("../lib/state.mjs");
+  const d = tmp(), u = (input, cache_read = null) => JSON.stringify({ input, output: 1, cache_read, cache_creation: null });
+  assert.deepEqual(usageByStage(d), {});
+  for (const s of ["round1", "wt", "ctx"]) mkdirSync(join(d, s));
+  writeFileSync(join(d, "round1", "all~0.usage.json"), u(10, 5));
+  writeFileSync(join(d, "round1", "all~1.usage.json"), u(20));
+  writeFileSync(join(d, "round1", "all~1.json"), u(999));
+  writeFileSync(join(d, "wt", "x.usage.json"), u(999));
+  writeFileSync(join(d, "hygiene.usage.json"), u(3));
+  writeFileSync(join(d, "round1", "bad.usage.json"), "{");
+  assert.deepEqual(usageByStage(d), {
+    round1: { input: 30, output: 2, cache_read: 5, cache_creation: null },
+    hygiene: { input: 3, output: 1, cache_read: null, cache_creation: null },
+    total: { input: 33, output: 3, cache_read: 5, cache_creation: null },
+  });
+});

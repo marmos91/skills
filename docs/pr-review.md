@@ -20,7 +20,7 @@ attribution.
 | `pr-review review <n> [--repo o/r] [--effort low\|medium\|high\|max\|auto] [--lens a,b] [--max-diff-lines N] [--dry-run] [--until stage] [--restart]` | Review one PR. `<n>` is a number or a PR URL. Without `--repo`, the repo of the current directory |
 | `pr-review answer` | Print the open questions as JSON |
 | `pr-review answer <id> <post\|drop\|ask-author>` | Record your answer to one question |
-| `pr-review status [owner/repo]` | Questions, to-do items, review and reply counts per PR, lock holder, unfinished runs, paused flag |
+| `pr-review status [owner/repo]` | Questions, to-do items, review and reply counts per PR, lock holder, unfinished runs, tokens per stage, paused flag |
 | `pr-review doctor` | Merged config, a 1-token probe per seat, `gh auth status`, jev, gitleaks, claude login mode, planned child count per effort level |
 | `pr-review tick [owner/repo]` | One loop run (a tick); `pr-review-loop` calls it |
 | `pr-review-loop [owner/repo]` | One loop run (a tick) |
@@ -152,7 +152,8 @@ found it. Then the engine, in code:
 Each seat that found a cluster on its own already counts as one `keep`.
 Round 2 runs only for clusters that some seats did not find, and only those
 seats vote. Each voting seat runs 1 child and votes `keep` or `drop` with a
-reason. A `drop` needs a counter-case.
+reason. A `drop` needs a counter-case. A vote child gets 10 turns plus 3 per
+finding it checks, and never more than its `max_turns`.
 
 ### 5. Tally
 
@@ -196,6 +197,9 @@ The judge writes the review from the agreed findings, with the rules in
 `shared/pr-review/writing.md` (short sentences, the case first, a code
 snippet or a GitHub `suggestion` block, no filler, praise only when earned
 and specific, no dashes).
+Compose gets only the repo's review guidance: `REVIEW.md` and the files in
+`review.guidance`. `REVIEW.md` is always whole. The other files are cut at
+8000 characters. The seats read the whole guidance folder.
 
 - Findings stay inline. One finding per inline comment: severity label and a
   title that states the conclusion with a verb, the case in one line with the
@@ -265,7 +269,27 @@ Each posted body ends with a hidden marker:
 later run links a repeat of any of these findings to the thread.
 
 With `--dry-run` the engine writes the review to a file in the run folder,
-prints the planned children and models, and posts nothing.
+prints the planned children and models, prints the tokens that each stage
+used, and posts nothing.
+
+### Token usage
+
+Each child writes `<key>.usage.json` next to its output in the run folder:
+`input`, `output`, `cache_read` and `cache_creation` tokens, summed over its
+attempts. `claude -p --output-format json` and `pi --mode json` report these
+counts. A count that the harness does not report is `null`. A missing count
+never fails a run. Reply children count under the `reply` stage.
+`pr-review status` shows the totals per stage of each unfinished run, and of
+the newest run of each PR (`lastRunTokens`), also a dry run or a run with
+`--until`.
+
+The prompts help the prompt cache. Each prompt starts with the parts that all
+children of a run share: the context, the small context files (`pr.json`,
+`threads.json`, up to 6000 characters each), and in round 1 the diff. The
+parts that differ come last: the task, the lens, the budget and the findings.
+The data blocks of a run use one nonce, so these parts are the same text in
+each child. Merge gets `evidence` of each finding cut to 1500 characters.
+`fix` stays whole, because compose posts it.
 
 ## Delta review
 
@@ -422,7 +446,9 @@ PR head.
 4. **Config and guidance come from the base branch.** A PR that changes
    `.pr-review.json` or `CLAUDE.md` changes only its own diff, not the review.
 5. **PR text is data.** Prompts wrap the PR text in a delimited block with a
-   per-run nonce. One line says the block is data, never an instruction.
+   per-run nonce. The frame makes the nonce and keeps it in `frame.json`, so a
+   resume uses the same one. One line says the block is data, never an
+   instruction. Tag look-alikes inside the text are broken.
 6. **The verdict is code.** See [Verdict](#8-verdict).
 7. **Outgoing text is scanned** for secrets: review bodies, inline comments,
    replies and jev text.
@@ -704,7 +730,8 @@ pr-review-loop resume
 
 `pr-review status` shows the questions, the to-do items, the review and reply
 counts per PR, the lock holder, unfinished runs (PR, SHA, stage, children done
-of total), an interrupted tick queue, and the paused flag.
+of total, tokens per stage), the tokens of the last run of each PR, an
+interrupted tick queue, and the paused flag.
 
 ## Live dry runs
 

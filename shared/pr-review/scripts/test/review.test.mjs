@@ -6,7 +6,7 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import { review } from "../lib/review.mjs";
+import { composeGuidance, review } from "../lib/review.mjs";
 import { ChildFailed } from "../lib/child.mjs";
 import { decide as realDecide } from "../lib/decider.mjs";
 import { answer, openQuestions } from "../lib/questions.mjs";
@@ -940,6 +940,48 @@ test("round-1 children carry the lens max_turns; other children the global one",
   assert.ok(run.calls.every((c) => c.seat.timeout_minutes === 10));
 });
 
+test("a vote child gets 10 turns plus 3 per finding, never above its limit", async () => {
+  const fx = fixture(); routes(fx);
+  const { r, run } = await go(fx, happy());
+  assert.equal(r.exit, 0, r.summary);
+  const votes = run.calls.filter((c) => c.k.startsWith("v~"));
+  assert.ok(votes.length > 0);
+  for (const c of votes) {
+    const n = (c.prompt.match(/"id": "c\d+"/g) ?? []).length;
+    assert.equal(c.seat.max_turns, Math.min(40, 10 + 3 * n), c.k);
+    assert.match(c.prompt, new RegExp(`Budget: at most ${c.seat.max_turns - 5} tool calls\\.`));
+  }
+});
+
+test("compose gets the repo's review guidance only; round 1 still sees the whole guidance folder", async () => {
+  const fx = fixture(); routes(fx);
+  git(fx.seed, "checkout", "-q", "main");
+  commit(fx.seed, { "REVIEW.md": "REVIEW-RULE\n", "CONTRIBUTING.md": "CONTRIB-RULE\n" }, "docs: guidance");
+  git(fx.seed, "push", "-q", fx.origin, "main");
+  const { r, run } = await go(fx, happy());
+  assert.equal(r.exit, 0, r.summary);
+  const compose = run.calls.find((c) => c.k === "compose").prompt;
+  assert.ok(compose.includes("REVIEW-RULE") && !compose.includes("CONTRIB-RULE"));
+  assert.ok(existsSync(join(r.runDir, "ctx", "guidance", "CONTRIBUTING.md")));
+});
+
+test("each inline comment goes through the secret scanner once", async () => {
+  const fx = fixture(); routes(fx);
+  const bin = join(fx.root, "gl-bin"), log = join(fx.root, "gl.log");
+  mkdirSync(bin);
+  // stub gitleaks: log each scanned text, report no finding
+  writeFileSync(join(bin, "gitleaks"), `#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = --report-path ] && r=$2; shift; done\ncat >>"${log}"; echo "@@END" >>"${log}"; echo '[]' >"$r"\n`);
+  chmodSync(join(bin, "gitleaks"), 0o755);
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path}`;
+  try {
+    const { r } = await go(fx, happy());
+    assert.equal(r.exit, 0, r.summary);
+  } finally { process.env.PATH = path; }
+  const scans = readFileSync(log, "utf8").split("@@END\n").filter((t) => t.startsWith("**must:** off by one"));
+  assert.equal(scans.length, 1);
+});
+
 test("every child gets the ctx folder next to the worktree", async () => {
   const fx = fixture(); routes(fx);
   const { r, run } = await go(fx, happy());
@@ -1475,4 +1517,15 @@ test("an empty answer keeps the next answers on their own question numbers", asy
   const fx = fixture(); routes(fx, { body: "Is 2 right?\nWhy not 3?" });
   await go(fx, happy({ compose: { verdict: "The off by one blocks.", answers: ["", "3 overflows the buffer."], body: "", comments: [{ id: "c1", body: "**must:** off by one" }] } }));
   assert.match(posts(fx)[0].body, /Your questions:\n2\. 3 overflows the buffer\.\n/);
+});
+
+test("compose guidance: REVIEW.md stays whole; only the review.guidance files are capped", () => {
+  const ctx = mkdtempSync(join(tmpdir(), "prr-guide-"));
+  mkdirSync(join(ctx, "guidance", "docs"), { recursive: true });
+  writeFileSync(join(ctx, "guidance", "REVIEW.md"), "R".repeat(9000));
+  writeFileSync(join(ctx, "guidance", "docs", "style.md"), "S".repeat(9000));
+  writeFileSync(join(ctx, "guidance", "CONTRIBUTING.md"), "C");
+  const g = composeGuidance(ctx, { review: { guidance: ["docs/style.md", "REVIEW.md"] } });
+  assert.ok(g.startsWith("R".repeat(9000) + "\n\n"), "REVIEW.md first and whole");
+  assert.ok(g.endsWith("S".repeat(8000) + "\n[cut]") && !g.includes("C"));
 });
