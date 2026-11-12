@@ -286,8 +286,8 @@ children of a run share: the context, the small context files (`pr.json`,
 `threads.json`, up to 6000 characters each), and in round 1 the diff. The
 parts that differ come last: the task, the lens, the budget and the findings.
 The data blocks of a run use one nonce, so these parts are the same text in
-each child. Merge gets `evidence` and `fix` of each finding cut to 1500
-characters.
+each child. Merge gets `evidence` of each finding cut to 1500 characters.
+`fix` stays whole, because compose posts it.
 
 ## Delta review
 

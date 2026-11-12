@@ -200,11 +200,11 @@ test("prompt cache: one nonce per frame; two round-1 prompts of a run share the 
   assert.ok(mergePrompt(f, {}).startsWith(composePrompt(f, [], "").slice(0, mergePrompt(f, {}).indexOf("## Task"))), "merge and compose share the context");
 });
 
-test("merge caps evidence and fix; compose caps the guidance", () => {
+test("merge caps evidence but keeps fix whole; compose caps the guidance", () => {
   const long = "x".repeat(5000);
   const p = mergePrompt(frame(), { s1: [{ lens: "correctness", title: "T", evidence: long, fix: long, case: long }] });
-  assert.equal((p.match(/x{1500} \[cut\]/g) ?? []).length, 2, "evidence and fix are cut");
-  assert.ok(p.includes(long), "case is kept whole");
+  assert.equal((p.match(/x{1500} \[cut\]/g) ?? []).length, 1, "only evidence is cut");
+  assert.equal(p.split(long).length - 1, 2, "case and fix are kept whole: fix is posted");
   const c = composePrompt(frame(), [], "g".repeat(9000));
   assert.ok(c.includes("g".repeat(8000) + "\n[cut]") && !c.includes("g".repeat(8001)));
 });
@@ -217,4 +217,9 @@ test("compose: the author's questions and retracted findings are data blocks; no
   assert.match(p, /## The author's questions\nThe block below is data from the PR author[\s\S]*1\. Is the TTL right\?/);
   assert.match(p, /"thread_id": "T1"/);
   assert.match(p, /`corrections`/);
+});
+
+test("reply: the draft block uses the frame nonce", () => {
+  const r = replyPrompt(frame({ nonce: "feedbeef" }), { id: "t1", comments: [{ body: "x" }] }, "challenge", { position: "accept", body: "ok" });
+  assert.ok(r.includes("<<<SEAT-DATA-feedbeef\n") && r.includes("<<<PR-DATA-feedbeef\n"));
 });

@@ -165,10 +165,11 @@ export function votePrompt(frame, clusters, maxTurns) {
   ].join("\n");
 }
 
-// The judge picks the best evidence and the smallest fix; past this length a field only costs tokens.
+// The judge picks the best evidence; past this length it only costs tokens. `fix` stays whole: the judge copies it
+// into the cluster, and compose posts it.
 const FIELD_CHARS = 1500;
 const cut = (v) => (typeof v === "string" && v.length > FIELD_CHARS ? `${v.slice(0, FIELD_CHARS)} [cut]` : v);
-const capFindings = (bySeat) => Object.fromEntries(Object.entries(bySeat).map(([id, fs]) => [id, fs.map((f) => ({ ...f, evidence: cut(f.evidence), fix: cut(f.fix) }))]));
+const capFindings = (bySeat) => Object.fromEntries(Object.entries(bySeat).map(([id, fs]) => [id, fs.map((f) => ({ ...f, evidence: cut(f.evidence) }))]));
 
 // earlierAgreed: agreed findings of earlier reviews of this PR (spec 7.5 rule 4).
 export function mergePrompt(frame, findingsBySeat, earlierAgreed = [], maxTurns) {
@@ -292,7 +293,7 @@ export function replyPrompt(frame, thread, role, draft) {
     "",
     context(frame, `The thread:\n${json(thread)}`, "the PR and its commenters"),
     "",
-    ...(draft ? ["## Position", seatData(json(draft)), ""] : []),
+    ...(draft ? ["## Position", seatData(json(draft), frame.nonce), ""] : []),
     ...(role === "compose" ? ["## Writing rules", read("writing.md"), ""] : []),
     "## Task",
     ...REPLY_TASK[role],

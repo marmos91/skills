@@ -375,3 +375,12 @@ test("claude json at max_turns: the seat drops at once", async () => {
   await assert.rejects(runChild(base({ ...claudeSeat, max_turns: 3 }, { retries: 2, droppable: true })), (e) => e instanceof SeatDropped && e.reason === "turn limit");
   assert.equal(readFileSync(count, "utf8").trim().split("\n").length, 1);
 });
+
+test("token usage: a re-run of the same child (resume) adds to its usage record", async () => {
+  const outFile = join(dir, "resume.json");
+  for (const n of [10, 7]) {
+    stub("claude", `printf '%s' '${JSON.stringify({ type: "result", subtype: "success", result: OK, usage: { input_tokens: 0, output_tokens: 0 } })}'`.replace('"input_tokens":0', `"input_tokens":${n}`));
+    await runChild(base(claudeSeat, { outFile }));
+  }
+  assert.equal(JSON.parse(readFileSync(join(dir, "resume.usage.json"), "utf8")).input, 17);
+});

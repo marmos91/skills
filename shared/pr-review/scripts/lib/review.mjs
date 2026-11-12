@@ -543,13 +543,16 @@ async function once(o, restart) {
   const clean = [];
   // A host the scan holds keeps none of its folded findings: they go out on their own, through the same scan.
   const own = (c) => ({ ...c, fps: [c.fp], body: `**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}` });
-  const passes = (x) => scanOutbound(x.answered ? redact(x.body) : x.body).ok;
+  // One scan per item: each scan spawns gitleaks.
+  const scans = new Map();
+  const scan1 = (x) => { if (!scans.has(x)) scans.set(x, scanOutbound(x.answered ? redact(x.body) : x.body)); return scans.get(x); };
+  const passes = (x) => scan1(x).ok;
   const heldHosts = new Set(items.filter((x) => !passes(x)).map((x) => x.id));
   for (const c of folded.filter((c) => heldHosts.has(hostOf.get(c.id)))) { hostOf.delete(c.id); items.push(own(c)); }
   for (const x of items) {
     // Marco answered "post" on a held comment: post it with the secret redacted. If it still hits, it stays out.
     const text = x.answered ? redact(x.body) : x.body;
-    const s = scanOutbound(text);
+    const s = scan1(x);
     if (s.ok) { clean.push({ ...x, body: text }); continue; }
     if (x.answered) continue;
     // Held back. The question keeps the fingerprint and the rule ids only: never the text, which holds the secret.

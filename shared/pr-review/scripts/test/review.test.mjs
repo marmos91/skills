@@ -965,6 +965,23 @@ test("compose gets the repo's review guidance only; round 1 still sees the whole
   assert.ok(existsSync(join(r.runDir, "ctx", "guidance", "CONTRIBUTING.md")));
 });
 
+test("each inline comment goes through the secret scanner once", async () => {
+  const fx = fixture(); routes(fx);
+  const bin = join(fx.root, "gl-bin"), log = join(fx.root, "gl.log");
+  mkdirSync(bin);
+  // stub gitleaks: log each scanned text, report no finding
+  writeFileSync(join(bin, "gitleaks"), `#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = --report-path ] && r=$2; shift; done\ncat >>"${log}"; echo "@@END" >>"${log}"; echo '[]' >"$r"\n`);
+  chmodSync(join(bin, "gitleaks"), 0o755);
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path}`;
+  try {
+    const { r } = await go(fx, happy());
+    assert.equal(r.exit, 0, r.summary);
+  } finally { process.env.PATH = path; }
+  const scans = readFileSync(log, "utf8").split("@@END\n").filter((t) => t.startsWith("**must:** off by one"));
+  assert.equal(scans.length, 1);
+});
+
 test("every child gets the ctx folder next to the worktree", async () => {
   const fx = fixture(); routes(fx);
   const { r, run } = await go(fx, happy());

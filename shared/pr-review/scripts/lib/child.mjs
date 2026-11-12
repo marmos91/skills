@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -206,8 +206,9 @@ export async function runChild({ seat, tools = "read", promptFile, outFile, work
   // claude --effort has no off or minimal: a Mimir seat routed through claude thinks at low.
   const thinking = harness === "claude" && ["off", "minimal"].includes(seat.thinking) ? "low" : seat.thinking;
   let last, usage = addUsage();
-  // <key>.usage.json beside the output: every attempt counts, also a failed one.
+  // <key>.usage.json beside the output: every attempt counts, also a failed one and one of an earlier run (resume).
   const usageFile = outFile.replace(/(\.json)?$/, ".usage.json");
+  try { usage = addUsage(usage, JSON.parse(readFileSync(usageFile, "utf8"))); } catch {}
   const output = async () => {
     const o = unwrapOutput(await readFile(outFile, "utf8").catch(() => ""));
     usage = addUsage(usage, o.usage);
