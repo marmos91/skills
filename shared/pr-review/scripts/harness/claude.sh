@@ -21,5 +21,7 @@ if [ "$tools" = shell ]; then
   sandbox=$(node -e 'console.log(JSON.stringify({ sandbox: { enabled: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false,
     filesystem: { denyWrite: process.argv.slice(1).filter(Boolean) } } }))' "${SEAT_WORKTREE:-}" "${SEAT_CTX:-}" "$PWD")
   set -- "$@" --allowedTools Bash --settings "$sandbox"
+  # The lens asks for 60 s; seats ignored it (a 420 s test run, twice). This is the hard cap.
+  export BASH_DEFAULT_TIMEOUT_MS=60000 BASH_MAX_TIMEOUT_MS=120000
 fi
 claude -p "$@" --model "$model" --effort "$thinking" --tools "$list" <"$prompt" >"$out"

@@ -15,7 +15,9 @@ the skills repo, section "The loop".
 - Claude Code: `/loop 30m /pr-review-loop [owner/repo]`. Each interval runs
   `sh "$SKILL_DIR/scripts/pr-review-loop" [owner/repo]` once.
 - pi or any shell: one tick is `pr-review-loop [owner/repo]`. Repeat it with
-  cron, launchd, or `while :; do pr-review-loop; sleep 1800; done`.
+  cron, launchd, or `while :; do pr-review-loop; sleep 1800; done`. Run it in
+  a clone of the repo (cron: `cd /path/to/clone && pr-review-loop`): the tick
+  fetches the PR heads there.
 
 Without `owner/repo`, the loop uses the GitHub remote of the current
 directory, `origin` first. `pause`, `resume` and the tick use the same rule,

@@ -187,7 +187,9 @@ export async function main(argv, deps = {}) {
   if (cmd === "tick") {
     if (rest.length > 1) throw new Usage(USAGE);
     const { tick } = await import("./lib/tick.mjs");
-    const r = await tick({ repo: repoOf(rest[0] ?? v.repo) });
+    const repo = repoOf(rest[0] ?? v.repo);
+    if (!remoteRepos().includes(repo)) throw new Usage(`this folder is not a clone of ${repo}; cd into one: a tick fetches PR heads here`);
+    const r = await tick({ repo });
     return r?.exit ?? 0;
   }
   if (cmd !== "review" || rest.length > 1) throw new Usage(USAGE);
