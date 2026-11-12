@@ -49,8 +49,8 @@ end." State each other agreed finding directly.
 1. What the PR does, in 2 sentences.
 2. The `must` items, one line each, with its `file:line`. Do not add links.
 3. Other items only when they cannot go inline.
-4. When points wait for the reviewer: "1 point is still open with the
-   reviewer." Do not say why.
+Do not write lines about open points, dropped seats, lenses not run or
+findings left out. The engine adds them from the real state.
 
 ## Replies
 

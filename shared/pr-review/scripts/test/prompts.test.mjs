@@ -170,3 +170,9 @@ test("round1 part: the diff goes into the prompt; a split PR names the part's fi
   assert.ok(big.includes(`is in ${long}`));
   assert.ok(big.length < 10000, "a long patch is not inlined");
 });
+
+test("compose never gets a template for engine lines (open points, dropped seats)", () => {
+  const p = composePrompt(frame(), [], "");
+  assert.doesNotMatch(p, /still open with the reviewer/);
+  assert.doesNotMatch(p, /Add this line to the summary/);
+});
