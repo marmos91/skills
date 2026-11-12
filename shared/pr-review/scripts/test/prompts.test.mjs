@@ -94,7 +94,6 @@ test("compose: includes writing.md and repo guidance", () => {
   assert.ok(p.includes("Use nit: labels."));
   assert.ok(p.includes('"c1"'));
   assert.ok(!p.includes("No tracking issue or plan."));
-  assert.ok(composePrompt(frame(), [], "", { noTracking: true }).includes('"No tracking issue or plan."'));
 });
 
 test("round1: correctness asks for no_tracking; other lenses do not", () => {

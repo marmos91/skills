@@ -368,7 +368,7 @@ test("--restart starts a new run folder", async () => {
   assert.ok(b.summary && c.summary);
 });
 
-test("merge clusters with reverses are dropped and recorded; no_tracking reaches compose", async () => {
+test("merge clusters with reverses are dropped and recorded; no_tracking adds the engine line", async () => {
   const fx = fixture(); routes(fx);
   const { r, run } = await go(fx, happy({
     all: { findings: [F()], no_tracking: true },
@@ -378,7 +378,8 @@ test("merge clusters with reverses are dropped and recorded; no_tracking reaches
   const rec = JSON.parse(readFileSync(join(r.runDir, "clusters.json"), "utf8"));
   assert.deepEqual(rec.reversed.map((c) => c.id), ["c2"]);
   assert.ok(!run.calls.find((c) => c.k === "v~2").prompt.includes("Add the check back"));
-  assert.match(run.calls.find((c) => c.k === "compose").prompt, /No tracking issue or plan\./);
+  assert.doesNotMatch(run.calls.find((c) => c.k === "compose").prompt, /No tracking issue or plan\./);
+  assert.match(posts(fx)[0].body, /\n\nNo tracking issue or plan\.\n\n/);
 });
 
 test("ask_author: set for a one-seat finding and a jev-settled split, not for an agreed one", async () => {

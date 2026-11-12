@@ -183,8 +183,8 @@ export function mergePrompt(frame, findingsBySeat, earlierAgreed = [], maxTurns)
   ].join("\n");
 }
 
-// noTracking: a round-1 seat set no_tracking (spec 6.1). Open points and dropped seats are engine text (review.mjs bodyOf).
-export function composePrompt(frame, agreed, guidance, { noTracking = false } = {}) {
+// Open points, dropped seats and the tracking line are engine text (review.mjs bodyOf), never the judge's.
+export function composePrompt(frame, agreed, guidance) {
   return [
     "You are the judge of a review council. Write the review of this PR from the agreed findings.",
     "",
@@ -205,7 +205,6 @@ export function composePrompt(frame, agreed, guidance, { noTracking = false } = 
     "- A finding with `ask_author: true` is a question to the author. State each other finding directly.",
     "- Findings with lens `hygiene` get no inline comment. Put them in the summary as one short list.",
     "- Write the summary body with the summary layout of the writing rules.",
-    ...(noTracking ? ['- Add this line to the summary: "No tracking issue or plan."'] : []),
     "- Keep each claim, severity and fix of the findings. Add no findings.",
     "- Add no signature and no marker. The engine adds the marker.",
     "",
