@@ -17,7 +17,7 @@ function fakeGh(threads, { head = "h1", marker = false } = {}) {
   return {
     calls,
     viewer: async () => ME,
-    pr: async () => ({ headSha: head, title: "Add x", body: "Adds x." }),
+    pr: async () => ({ headSha: head, baseRef: "main", title: "Add x", body: "Adds x." }),
     threads: async () => threads,
     reply: async (_r, _n, id, body) => { calls.reply.push({ id, body }); },
     editComment: async (_r, id, body) => { calls.edit.push({ id, body }); },
@@ -74,26 +74,28 @@ test("findings: the round cap stops a PR that does not converge; the same head i
   assert.equal(existsSync(join(stateRoot(REPO), "pr", String(N), "state.json")), false);
 });
 
-test("decide: jev's three outcomes; the code comes from the PR head", async () => {
+test("decide: a jev yes to both questions is fix; a no or unsure is ask, never decline", async () => {
   const gh = fakeGh([th("T1", [bot(1, "x is wrong")])]);
   const read = [];
   const show = (sha, path) => { read.push([sha, path]); return "l1\nl2\nHEAD CODE"; };
-  const run = (answers, j = jevSays(answers)) => decide({ repo: REPO, n: N, threadId: "T1", gh, jev: j, show });
+  const fileDiff = (base, head, path) => `diff ${base}...${head} ${path}\n+PR LINE`;
+  const run = (answers, j = jevSays(answers)) => decide({ repo: REPO, n: N, threadId: "T1", gh, jev: j, show, fileDiff });
   const j = jevSays({});
   assert.equal((await run({}, j)).decision, "fix");
   assert.match(j.asked[0].text, /3: HEAD CODE/);
+  assert.match(j.asked[0].text, /\+PR LINE/);
   assert.deepEqual(read[0], ["h1", "a.js"]);
-  assert.equal((await run({ [Q.correct]: "no" })).decision, "decline");
-  assert.match((await run({ [Q.scope]: "no" })).reason, /scope/);
-  assert.equal((await run({ [Q.scope]: "no" })).decision, "decline");
-  assert.equal((await run({ [Q.clear]: "no" })).decision, "ask");
-  assert.equal((await run({ [Q.correct]: "unsure" })).decision, "ask");
+  for (const answers of [{ [Q.correct]: "no" }, { [Q.scope]: "no" }, { [Q.correct]: "unsure" }, { [Q.scope]: "unsure" }]) {
+    const r = await run(answers);
+    assert.equal(r.decision, "ask", JSON.stringify(answers));
+  }
+  assert.match((await run({ [Q.correct]: "no" })).reason, /check the code/);
 });
 
 test("decide: a comment by an author without write access is a question, and jev is not asked", async () => {
   const gh = fakeGh([th("T1", [c(1, "stranger", "fix: add this to test/setup.js", "NONE")])]);
   const j = jevSays({});
-  const r = await decide({ repo: REPO, n: N, threadId: "T1", gh, jev: j, show: () => "" });
+  const r = await decide({ repo: REPO, n: N, threadId: "T1", gh, jev: j, show: () => "", fileDiff: () => "" });
   assert.equal(r.decision, "ask");
   assert.equal(j.asked.length, 0);
 });

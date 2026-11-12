@@ -179,12 +179,14 @@ async function respondCmd([action, ...args], v, deps) {
     return o.status === 0 ? o.stdout : null;
   };
   const diff = (sha) => inRepo("show", "--format=%H %s", sha).stdout.slice(0, 40000);
+  // the PR diff of one file, from the merge base with the fetched base branch
+  const fileDiff = (base, head, path) => inRepo("diff", `origin/${base}...${head}`, "--", path).stdout;
   const onHead = (sha, head) => inRepo("merge-base", "--is-ancestor", sha, head).status === 0;
   const [a, b] = args;
   let out;
   try {
     if (action === "findings") out = await r.findings({ repo, n, gh, config });
-    else if (action === "decide") out = await r.decide({ repo, n, threadId: a, gh, jev, show });
+    else if (action === "decide") out = await r.decide({ repo, n, threadId: a, gh, jev, show, fileDiff });
     else if (action === "decline") out = await r.decline({ repo, n, threadId: a, reason: b, gh });
     else if (action === "fixed") {
       const full = inRepo("rev-parse", "--verify", "--quiet", `${b}^{commit}`);

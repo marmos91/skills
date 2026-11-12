@@ -25,15 +25,22 @@ the full command each time: zsh does not split a variable into words.
    - `"converged": true`: no finding is left. Go to "Done".
    - Exit `5`: the round cap (`respond.max_rounds`, default 5) stops the
      loop. Report the open findings to the user and stop.
-2. For each finding, run `$P decide <id>`. jev reads the file at the PR head
-   (fetch it first) and answers 3 yes/no questions (correct on the head? in
-   scope? one clear fix?). It prints a `decision`:
-   - `fix`: go to step 3.
-   - `decline`: write one or two sentences why, then run
-     `$P decline <id> "<reason>"`. The thread stays open for the reviewer.
-   - `ask` (also when a comment is by an author without write access): ask the user (Claude Code: `AskUserQuestion`; pi: `ask_user`).
-     Show the file, the line, the finding and the `reason`. Do not guess a
-     design decision. Then fix or decline as the user says.
+2. Group the findings that report the same problem (Copilot and the council
+   often do). Give each group one decision. For each group, run
+   `$P decide <id>` on one of its threads. jev reads the PR diff of the file
+   and the file at the PR head (fetch it first). It prints a `decision`:
+   - `fix`: jev says the finding is correct and about code this PR changes.
+     Go to step 3.
+   - `ask`: jev said no or is not sure, or a comment is by an author without
+     write access. jev is wrong often here, so read the code yourself:
+     - the finding is correct and in scope: go to step 3;
+     - you confirm it is wrong or out of scope: write one or two sentences
+       why, then run `$P decline <id> "<reason>"`. The thread stays open for
+       the reviewer;
+     - it needs a design decision, you cannot tell, or the author has no
+       write access: ask the user (Claude Code: `AskUserQuestion`; pi:
+       `ask_user`). Show the file, the line, the finding and the `reason`.
+       Then fix or decline as the user says.
 3. Fix the finding. Add a test. Prove that the test guards the fix: revert
    the fix, see the test fail, put the fix back.
 4. Run the full test suite. Commit signed (`git commit -S`) with a concise

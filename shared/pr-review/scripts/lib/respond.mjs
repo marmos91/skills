@@ -10,8 +10,7 @@ import { stateRoot, writeAtomic } from "./state.mjs";
 
 export const Q = {
   correct: "This review finding is correct about the code at the PR head.",
-  scope: "Fixing this finding is in the scope of this PR.",
-  clear: "This finding has one clear fix that needs no design decision.",
+  scope: "This review comment is about code that this PR adds or changes.",
   fixes: "The commit diff below fixes the case that the review comment describes.",
 };
 
@@ -63,38 +62,57 @@ export async function findings({ repo, n, gh, config }) {
   return { head: pr.headSha, round: load(repo, n).heads.length, converged: !list.length, findings: list };
 }
 
-// The code around the line. show(path) gives the file at the PR head from git (never the working tree,
-// so a symlink is its target text and a dirty tree does not count); null when the head has no such file.
+// jev was measured on texts up to 6 KB (bench/jev/RESULTS.md): the file and its diff stay near that.
+const FILE_CAP = 6000, DIFF_CAP = 4000;
+
+// The file at the PR head from git (never the working tree, so a symlink is its target text and a dirty
+// tree does not count), numbered, cut to FILE_CAP around the line. show(path) is null when the head has no such file.
 function code(show, path, line) {
   const text = path ? show(path) : null;
   if (text == null) return "(the file is not in the PR head)";
-  const lines = text.split("\n"), at = Math.max(1, line ?? 1);
-  return lines.slice(Math.max(0, at - 16), at + 15).map((l, i) => `${Math.max(1, at - 15) + i}: ${l}`).join("\n");
+  const lines = text.split("\n").map((l, i) => `${i + 1}: ${l}`);
+  let lo = Math.max(0, (line ?? 1) - 1), hi = lo + 1, size = lines[lo]?.length ?? 0;
+  // grow the window both ways from the line until the cap
+  while ((lo > 0 || hi < lines.length) && size < FILE_CAP) {
+    if (lo > 0) size += lines[--lo].length + 1;
+    if (hi < lines.length) size += lines[hi++].length + 1;
+  }
+  return lines.slice(lo, hi).join("\n");
 }
 
 /**
- * jev decides one finding. Unsure at any step, or an untrusted author, is a question for the user.
- * show(sha, path) reads a file at a commit. -> { decision: "fix"|"decline"|"ask", reason }
+ * What jev reads for one finding: the PR intent, the thread, the PR diff of the file, and the file at the head.
+ * show(sha, path) reads a file at a commit; fileDiff(base, head, path) is the PR diff of one file.
  */
-export async function decide({ repo, n, threadId, gh, jev, show }) {
-  const [pr, t] = [await gh.pr(repo, n), await thread(gh, repo, n, threadId)];
-  if (!trusted(t)) return { decision: "ask", reason: "a comment in the thread is by an author without write access" };
-  const text = [
+export function decideText(pr, t, { show, fileDiff }) {
+  const d = t.path ? fileDiff(pr.baseRef, pr.headSha, t.path) : "";
+  return [
     prData(`Title: ${pr.title}\n\n${pr.body ?? ""}`, "the PR author (the intent of the PR)"),
     threadText(t),
-    prData(`${t.path}\n${code((p) => show(pr.headSha, p), t.path, t.line ?? t.originalLine)}`, "the code at the PR head"),
+    prData(`${t.path}\n${d.length > DIFF_CAP ? `${d.slice(0, DIFF_CAP)}\n(diff cut)` : d}`, "the PR diff of this file"),
+    prData(`${t.path}\n${code((p) => show(pr.headSha, p), t.path, t.line ?? t.originalLine)}`, "the file at the PR head"),
   ].join("\n");
+}
+
+/**
+ * jev can confirm a finding, never decline one: on PR 44 it said no to 3 to 7 of 14 real findings, and one
+ * changed line of context flips its answer (bench/jev/respond.mjs). A yes to both questions is "fix"; a no or
+ * unsure is "ask" with the reason, and the agent checks the code (it declines only what it confirms is wrong).
+ * An untrusted author is "ask" before jev reads anything. -> { decision: "fix"|"ask", reason }
+ */
+export async function decide({ repo, n, threadId, gh, jev, show, fileDiff }) {
+  const [pr, t] = [await gh.pr(repo, n), await thread(gh, repo, n, threadId)];
+  if (!trusted(t)) return { decision: "ask", reason: "a comment in the thread is by an author without write access" };
+  const text = decideText(pr, t, { show, fileDiff });
   const steps = [
-    [Q.correct, "decline", "the finding does not hold on the head"],
-    [Q.scope, "decline", "the fix is outside the scope of this PR; it fits a follow-up"],
-    [Q.clear, "ask", "the fix needs a design decision"],
+    [Q.correct, "jev says the finding does not hold on the head"],
+    [Q.scope, "jev says the comment is not about code this PR adds or changes"],
   ];
-  for (const [q, onNo, why] of steps) {
+  for (const [q, why] of steps) {
     const a = await jev(q, text);
-    if (a === "unsure") return { decision: "ask", reason: `jev is not sure: "${q}"` };
-    if (a === "no") return { decision: onNo, reason: why };
+    if (a !== "yes") return { decision: "ask", reason: a === "no" ? `${why}; check the code` : `jev is not sure: "${q}"` };
   }
-  return { decision: "fix", reason: "correct, in scope, one clear fix" };
+  return { decision: "fix", reason: "jev: correct, and about code this PR changes" };
 }
 
 /** A short reason on the thread; the thread stays open for the reviewer. -> { action: "replied"|"skipped" } */
