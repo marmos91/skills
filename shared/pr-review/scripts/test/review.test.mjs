@@ -1383,7 +1383,20 @@ test("the author's questions in the PR body reach compose, and the answers come 
   const { r, run } = await go(fx, happy({ compose: { verdict: "Nothing blocks.", answers: ["Yes, 2 matches the spec.", "extra"], body: "", comments: [{ id: "c1", body: "**must:** off by one" }] } }));
   assert.equal(r.exit, 0, r.summary);
   assert.match(run.calls.find((c) => c.k === "compose").prompt, /## The author's questions[\s\S]*1\. Is 2 the right value\?/);
-  assert.match(posts(fx)[0].body, /^Nothing blocks\.\n\nYour questions:\n1\. Yes, 2 matches the spec\.\n\n<!-- pr-review/);
+  // c1 is a must of this run: "Nothing blocks." would contradict REQUEST_CHANGES
+  assert.match(posts(fx)[0].body, /^The must findings block the merge\.\n\nYour questions:\n1\. Yes, 2 matches the spec\.\n\n<!-- pr-review/);
+});
+
+test("a bold or reworded \"nothing blocks\" verdict next to an earlier must still open is replaced", async () => {
+  const fx = fixture();
+  routes(fx, { threads: [{ id: "T1", isResolved: false, isOutdated: false, viewerCanResolve: true, path: "a.js", line: 1, originalLine: 1,
+    comments: { nodes: [{ databaseId: 11, author: { login: ME, __typename: "User" }, body: "**must:** a is wrong", createdAt: "x" }] } }] });
+  savePrState(fx.state, N, { ...prState(fx.state, N), reviews: 1, lastReviewedSha: fx.base });
+  for (const verdict of ["**Nothing blocks.**", "I find nothing blocking the merge."]) {
+    const { r } = await go(fx, { all: { findings: [], earlier: [{ thread_id: "T1", status: "open", evidence: "x" }] }, compose: { verdict, body: "Still open.", comments: [] } }, { restart: true });
+    assert.equal(r.exit, 0, r.summary);
+    assert.match(posts(fx).at(-1).body, /1 earlier must finding is still open, so the PR is blocked\./, verdict);
+  }
 });
 
 test("pass 2: an earlier finding the seats judge wrong is retracted first, and no longer blocks", async () => {

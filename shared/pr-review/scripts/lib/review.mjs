@@ -472,6 +472,8 @@ async function once(o, restart) {
   // Engine layout of the body (spec 6.8): pass line, corrections, verdict, checks, answers, thread index, praise.
   // The index lists only ids whose thread went inline (inline: the posted items on diff lines), at their real line.
   const one = (t) => String(t ?? "").replace(/\s+/g, " ").trim();
+  const plain = (t) => one(t).replace(/[*_`]/g, "");
+  const mustNow = [...agreed, ...hygItems].some((x) => x.severity === "must");
   const at = (file, line) => `(thread on \`${file}\` L${line})`;
   const indexOf = (inline) => {
     const byThread = new Map(inline.map((x) => [x.id, x])), seen = new Set(), critical = [], groups = [];
@@ -492,9 +494,11 @@ async function once(o, restart) {
   const bodyOf = (outside, key, inline) => [
     f.reviewNumber > 1 ? `${f.reviewNumber === 2 ? "Second pass" : `Pass ${f.reviewNumber}`}, on \`${f.headSha.slice(0, 7)}\`.` : "",
     ...retracted.map((e) => `Correction: ${one(composed.corrections?.find((x) => x.thread_id === e.threadId)?.text) || "our earlier finding here was wrong."} ${at(e.path, e.line ?? e.originalLine)}`),
-    // The event blocks on an earlier must still open: a verdict that says nothing blocks would contradict it.
-    blocking.length && (!one(composed.verdict) || /^nothing blocks/i.test(one(composed.verdict)))
-      ? `${blocking.length} earlier must ${blocking.length === 1 ? "finding is" : "findings are"} still open, so the PR is blocked.`
+    // A must (earlier and still open, or from this run) blocks the event: a verdict that says nothing blocks would contradict it.
+    (blocking.length && !plain(composed.verdict)) || ((blocking.length || mustNow) && /\bnothing\b[^.]*\bblock/i.test(plain(composed.verdict)))
+      ? (blocking.length
+        ? `${blocking.length} earlier must ${blocking.length === 1 ? "finding is" : "findings are"} still open, so the PR is blocked.`
+        : "The must findings block the merge.")
       : one(composed.verdict),
     // Hook for the setup checks (#38): an engine line that says what was checked. Empty until frame sets f.checked.
     f.checked ? `What was checked: ${one(f.checked)}` : "",
