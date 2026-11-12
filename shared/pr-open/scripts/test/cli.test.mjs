@@ -7,6 +7,8 @@ function capture(t) {
   const out = [];
   t.mock.method(console, "log", (l) => out.push(l));
   t.mock.method(console, "error", () => {});
+  // runTests streams the child's output; a stray "ℹ pass N" would add to the counts of the outer run.
+  t.mock.method(process.stderr, "write", () => true);
   return () => JSON.parse(out.join("\n"));
 }
 
