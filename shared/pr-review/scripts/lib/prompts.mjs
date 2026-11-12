@@ -55,7 +55,40 @@ function context(frame, extra = "", from) {
 
 const finding = (sev) => `{"lens": "<lens>", "severity": "${sev}", "file": "path/from/repo/root", "line": 42, "symbol": "functionName (optional)", "title": "short title", "case": "input or situation -> wrong result", "evidence": "trace through the code, or a command and its output", "fix": "smallest fix, with a snippet"}`;
 
-export function round1Prompt(frame, lenses, maxTurns) {
+// The patch of a part goes into the prompt up to this many lines; above it the seat reads the file.
+const INLINE_LINES = 2500;
+
+// part: one entry of frame.chunks ({ patch, files, earlier }), or { whole: true } for a lens that reviews the
+// whole of a split PR; a frame without chunks is one part.
+function partSection(frame, part) {
+  if (!part) return [];
+  const n = frame.chunks.length, many = n > 1;
+  const patch = part.whole ? join(frame.ctxDir, "diff.patch") : part.patch;
+  let text = "", map = "";
+  try { text = readFileSync(patch, "utf8"); } catch {}
+  if (many) try { map = readFileSync(join(frame.ctxDir, "chunks", "map.txt"), "utf8").trim(); } catch {}
+  const inline = text && text.split("\n").length <= INLINE_LINES;
+  const what = part.whole ? "The diff of the whole PR" : `The diff${many ? " of your part" : ""}`;
+  const fn = part.functions ? " It shows the whole function around each change." : "";
+  const data = [
+    ...(many && !part.whole ? ["Files of your part:", ...part.files, ""] : []),
+    ...(map ? ["Map of the PR: the files of each part, with the functions that its hunks change.", map, ""] : []),
+    ...(inline ? [text] : []),
+  ].join("\n").trimEnd();
+  return [
+    "## Your part",
+    ...(part.whole
+      ? [`The PR is large, so the council splits it into ${n} parts for the other lenses. You review the whole PR for your lens.`]
+      : many
+        ? [`The PR is large, so the council splits it into ${n} parts, and other children review the other parts. Report findings only in the files of your part. The map below lists what each part changes: when your code uses a function that another part changes, read its new version in the worktree.`]
+        : []),
+    inline ? `${what} is below. Do not read it again from a file.${fn}` : `${what} is in ${patch}.${fn}`,
+    "",
+    ...(data ? [prData(data), ""] : []),
+  ];
+}
+
+export function round1Prompt(frame, lenses, maxTurns, part) {
   const ctx = context(frame);
   const n = frame.reviewNumber ?? 1;
   if (!Number.isInteger(n) || n < 1) throw new Error(`frame.reviewNumber must be an integer >= 1, got ${frame.reviewNumber}`);
@@ -63,12 +96,13 @@ export function round1Prompt(frame, lenses, maxTurns) {
   const sev = [...allowedSeverities(n)];
   const tracking = lenses.includes("correctness");
   const { base, isAncestor } = frame.delta ?? {};
-  const earlier = join(frame.ctxDir, "earlier.json");
+  const earlier = part?.earlier ?? join(frame.ctxDir, "earlier.json");
   return [
     "You are one seat of a review council. Review this pull request alone. Other seats review it too, and you do not see their work.",
     "",
     ctx,
     "",
+    ...partSection(frame, part),
     "## Rules",
     `- Allowed severities: ${sev.join(", ")}. Do not report a finding at another severity.`,
     "- must: a bug, a security hole, data loss, or a break at the expected load. should: risky code with no test, real slowness, code that should not exist. nit: a small, clear gain.",
@@ -77,7 +111,7 @@ export function round1Prompt(frame, lenses, maxTurns) {
       : "- Review each line that the diff adds or changes. Read other code only to judge those lines.",
     "- `file` is relative to the repo root. `line` is a line number in the head version of that file.",
     "- Add `symbol` (the function or type) when the finding is about one symbol.",
-    ...(frame.reviewNumber > 1
+    ...(frame.reviewNumber > 1 && !part?.whole
       ? [`- Earlier findings of this reviewer that are still open are in ${earlier}. Check each one against the head. Report each in \`earlier\` with its \`thread_id\`, \`status\` (fixed or open), and \`evidence\` (the line that fixes it, or the line that still has the defect). Do not repeat them in \`findings\`.`]
       : []),
     "",

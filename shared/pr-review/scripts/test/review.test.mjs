@@ -1057,3 +1057,70 @@ test("a seat that resolves to pi is never told it has a shell, and its votes car
   const saved = JSON.parse(readFileSync(join(r.runDir, "round2", `${piVote.k}.json`), "utf8"));
   assert.ok(saved.every((x) => x.evidence_run === false), "evidence from a read-only seat is cleared");
 });
+
+// A head with Go-like packages in two folders; chunk_lines 3 splits the diff into one part per folder.
+function splitFixture(review) {
+  const fx = fixture();
+  for (const d of ["x", "y"]) mkdirSync(join(fx.seed, d));
+  fx.head = commit(fx.seed, { "x/a.go": "package x\nfunc A() {}\n", "y/b.go": "package y\nfunc B() {}\n" }, "feat: two packages");
+  git(fx.seed, "push", "-qf", fx.origin, "HEAD:refs/pull/5/head");
+  routes(fx);
+  mkdirSync(join(process.env.XDG_CONFIG_HOME, "pr-review"), { recursive: true });
+  writeFileSync(join(process.env.XDG_CONFIG_HOME, "pr-review", "config.json"), JSON.stringify({ review: { chunk_lines: 6, ...review } }));
+  return fx;
+}
+
+test("a diff above chunk_lines: one round-1 child per seat and part, at most max_parallel at once", async () => {
+  const fx = splitFixture({ max_parallel: 2 });
+  let active = 0, most = 0;
+  const all = async () => { most = Math.max(most, ++active); await new Promise((r) => setTimeout(r, 20)); active--; return { findings: [F()] }; };
+  const { r, run } = await go(fx, happy({ all }), { until: "round1" });
+  assert.equal(r.exit, 0, r.summary);
+  const keys = run.calls.map((c) => c.k).sort();
+  assert.deepEqual(keys, ["all~0@0", "all~0@1", "all~0@2", "all~0@all", "all~1@0", "all~1@1", "all~1@2", "all~1@all", "all~2@0", "all~2@1", "all~2@2", "all~2@all"]);
+  const whole = run.calls.find((c) => c.k === "all~0@all").prompt;
+  assert.match(whole, /You review the whole PR for your lens/);
+  assert.match(whole, /## Lens: architecture/);
+  assert.doesNotMatch(whole, /## Lens: correctness/);
+
+  assert.equal(most, 2);
+  const y = run.calls.find((c) => c.k === "all~0@2").prompt;
+  assert.match(y, /splits it into 3 parts/);
+  assert.match(y, /Files of your part:\ny\/b\.go/);
+  assert.match(y, /\+func B\(\) \{\}/);
+  assert.doesNotMatch(y.slice(0, y.indexOf("Map of the PR")), /func A/);  assert.doesNotMatch(y, /## Lens: architecture/);
+  assert.match(y, /Map of the PR[\s\S]*Part 1:\n  x\/a\.go/);
+});
+
+test("too many children for the parts: a config effort steps down; an explicit --effort exits 1", async () => {
+  const fx = splitFixture({ max_children: 13 });
+  const lines = [];
+  const { r } = await go(fx, happy(), { until: "frame", log: (l) => lines.push(l) });
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(r.planned, 2 * 4 + 2 + 2); // low: 2 seats x (3 parts + 1 whole PR) + 2 votes + 2 judge
+  assert.ok(lines.some((l) => /effort medium needs 17 children for 3 diff parts.*using low/.test(l)), lines.join("\n"));
+  const fx2 = splitFixture({ max_children: 13 });
+  const { r: r2 } = await go(fx2, happy(), { effort: "medium" });
+  assert.equal(r2.exit, 1);
+  assert.match(r2.summary, /needs 17 children.*max_children \(13\)\. Use a lower --effort/);
+  // auto and the loop's effort are not pinned: they step down too
+  for (const over of [{ effort: "auto" }, { mode: "loop", effort: "medium", effortFromConfig: true }]) {
+    const fx3 = splitFixture({ max_children: 13 });
+    const { r: r3 } = await go(fx3, happy(), { until: "frame", ...over });
+    assert.equal(r3.exit, 0, `${JSON.stringify(over)}: ${r3.summary}`);
+    assert.equal(r3.planned, 12);
+  }
+});
+
+test("split PR: a seat that misses one part keeps its other parts and its vote; the summary says so; no APPROVE", async () => {
+  const fx = splitFixture({});
+  const { r, run } = await go(fx, happy({ "all~2@1": dropOf("turn limit") }));
+  assert.equal(r.exit, 0, r.summary);
+  const st = JSON.parse(readFileSync(join(r.runDir, "run.json"), "utf8"));
+  assert.deepEqual(st.dropped, []);
+  assert.deepEqual(st.missed.map((m) => [m.seat, m.key]), [[S2, "all~2@1"]]);
+  assert.ok(run.calls.some((c) => c.k === "v~2"), "the seat still votes");
+  const p = posts(fx)[0];
+  assert.match(p.body, /Seat cubbit\/mimir-pro missed 1 part of the split diff \(turn limit\)\./);
+  assert.notEqual(p.event, "APPROVE");
+});

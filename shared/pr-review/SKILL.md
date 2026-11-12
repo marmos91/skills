@@ -22,7 +22,8 @@ sh "$SKILL_DIR/scripts/pr-review" review <n> [--repo owner/repo] \
 - `--effort auto` picks the level from the changed paths.
 - `--lens a,b` runs only these lenses. The review then never approves.
 - `--max-diff-lines N` reviews a diff above `review.max_diff_lines` (exit
-  `1` says when a diff is too large).
+  `1` says when a diff is too large). A diff above `review.chunk_lines`
+  splits into parts by folder, and round 1 reviews each part.
 - `--dry-run` posts nothing. It prints the planned children and models, and
   writes the review to a file in the run folder.
 - `--until <stage>` stops after `frame`, `round1`, `merge`, `round2`,

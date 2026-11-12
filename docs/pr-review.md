@@ -45,7 +45,7 @@ Exit codes of the engine:
 | `0` | Done |
 | `3` | Questions wait for you. Only an interactive `review` exits `3`. The loop queues questions and continues |
 | `4` | A stage or a GitHub call failed after its retries. Check the PR before running again; part of the review may be posted. A rerun never posts the same item twice |
-| `1` | Usage or setup error, or a diff above `review.max_diff_lines` |
+| `1` | Usage or setup error, a diff above `review.max_diff_lines`, or a run above `review.max_children` |
 
 The skills (`shared/pr-review/SKILL.md`, `shared/pr-review-loop/SKILL.md`)
 are thin. They run the engine, ask your questions on exit `3`, and show the
@@ -75,10 +75,32 @@ every seat reads:
 - CI state for the head SHA (see [CI](#ci)).
 - A git worktree at the pinned SHA. Seats read callers and tests there. Full
   files are not copied into the prompt.
+- One patch per diff part (`ctx/chunks/<i>.patch`), made with `git diff -W`:
+  each change comes with its whole function. Round 1 puts the patch into the
+  prompt when it has 2500 lines or fewer, so seats need fewer reads.
 
-A diff above `review.max_diff_lines` (default 3000) stops the run with exit
-`1` before any child runs. `--max-diff-lines N` reviews it anyway. There is
-no diff splitter.
+A diff above `review.max_diff_lines` (default 6000) stops the run with exit
+`1` before any child runs. `--max-diff-lines N` reviews it anyway.
+
+A diff above `review.chunk_lines` (default 500) splits into parts. A folder
+(a Go package, with its tests) stays in one part when it fits. Folders are
+packed in path order. A folder that does not fit splits into units, and a
+file stays in one unit with its test (`x.go` and `x_test.go`). Each round-1
+job runs once per part and reports findings only in the files of its part.
+Every part prompt holds a map of the PR: the files of each part and the
+functions that its hunks change. A seat reads the new version of a function
+that another part changes when its own code uses it. The architecture lens
+is about design across parts, so it reviews the whole PR once per seat.
+Merge then removes the duplicates across parts. Votes and the judge see the
+whole PR. A seat that hits its turn limit or its timeout in one part loses that
+part only: it keeps its other parts and its vote. The summary names the
+missed parts, and a missed part blocks APPROVE, as a dropped seat does.
+
+Each part adds a full set of round-1 children. When the run needs more than
+`review.max_children` (default 60), an effort that the config chose steps
+down until the run fits. An explicit `--effort` stops the run with exit `1`
+instead. `review.max_parallel` (default 9) sets how many round-1 children run
+at the same time.
 
 ### 2. Round 1: independent review
 
@@ -543,7 +565,7 @@ decider and `round1` belong to you.
     "max_replies_per_thread": 2,
     "effort": "auto"
   },
-  "review": { "guidance": [], "ci": "use", "max_diff_lines": 3000, "max_turns": 40, "timeout_minutes": 10 },
+  "review": { "guidance": [], "ci": "use", "max_diff_lines": 6000, "chunk_lines": 500, "max_children": 60, "max_parallel": 9, "max_turns": 40, "timeout_minutes": 10 },
   "hygiene": { "enabled": true }
 }
 ```

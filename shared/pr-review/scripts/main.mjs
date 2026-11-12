@@ -151,7 +151,7 @@ async function doctor(v, { runChild = realRunChild, askJev = realAskJev, findJev
   line(...gitleaksProbe(gitleaks));
   console.log(`claude mode: --restricted (${process.env.CLAUDE_CODE_OAUTH_TOKEN ? "CLAUDE_CODE_OAUTH_TOKEN" : "login"})`);
   const lenses = LENSES.filter((l) => config.lenses[l].enabled);
-  for (const e of EFFORTS) console.log(`effort ${e}: ${plannedChildren(applyEffort(config, e), lenses)} children per PR`);
+  for (const e of EFFORTS) console.log(`effort ${e}: ${plannedChildren(applyEffort(config, e), lenses)} children per PR (a diff above review.chunk_lines adds round 1 for each part)`);
   return fail ? 1 : 0;
 }
 

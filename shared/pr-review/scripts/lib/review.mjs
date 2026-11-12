@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSyn
 import { basename, join, resolve, sep } from "node:path";
 import * as github from "./github.mjs";
 import { runChild as realRunChild, ChildFailed, SeatDropped, stopping, harnessFor } from "./child.mjs";
-import { LENSES, applyEffort, loadConfig, pickEffort, plannedChildren, seatId, seatsForLens, userConfigPath, withLimits } from "./config.mjs";
+import { LENSES, WHOLE_PR_LENSES, applyEffort, loadConfig, lowerEffort, pickEffort, plannedChildren, seatId, seatsForLens, userConfigPath, withLimits } from "./config.mjs";
 import { frame as realFrame, git, readTree, HeadMoved, DiffTooLarge } from "./frame.mjs";
 import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.mjs";
 import { tally } from "./tally.mjs";
@@ -68,7 +68,7 @@ export async function review(opts) {
     }
   } catch (e) {
     // Too large is the user's call, not a failed stage: nothing ran, so exit 1 with the way out.
-    if (e instanceof DiffTooLarge) return { exit: 1, summary: `${e.message}. Review it anyway with --max-diff-lines N, or raise review.max_diff_lines in the config.` };
+    if (e instanceof DiffTooLarge) return { exit: 1, summary: `${e.message}. ${e.hint}` };
     if (e instanceof ChildFailed || e instanceof HeadMoved) return { exit: 4, summary: e.message };
     throw e;
   } finally { release(); }
@@ -77,7 +77,8 @@ export async function review(opts) {
 // One child: a marker means its output is reused, never paid for twice (spec 8).
 // lens: the one lens of a round-1 child, for a lens-level max_turns.
 // A council seat (round 1, vote) that drops is recorded in run.json and gives null; the judge cannot drop.
-async function child(ctx, stage, key, { seat, prompt, schema, tools = "read", lens }) {
+// onePart: a round-1 child of a split PR; a drop loses that part only, and the seat stays for the rest.
+async function child(ctx, stage, key, { seat, prompt, schema, tools = "read", lens, onePart = false }) {
   const council = stage === "round1" || stage === "round2";
   if (council && ctx.dropped(seat)) return null;
   const dir = join(ctx.runDir, stage), outFile = join(dir, `${key}.json`);
@@ -92,6 +93,7 @@ async function child(ctx, stage, key, { seat, prompt, schema, tools = "read", le
   let v;
   try { v = await ctx.runChild({ trusted: ctx.frame.shellOk, seat: limited, tools, promptFile, outFile, worktree: ctx.frame.worktree, ctxDir: ctx.frame.ctxDir, schema, routerUp: ctx.routerUp, droppable: council }); } catch (e) {
     if (!(e instanceof SeatDropped) || !council) throw e;
+    if (onePart) { ctx.miss(seat, key, e.reason); return null; }
     ctx.drop(seat, e.reason, stage);
     return null;
   }
@@ -100,6 +102,19 @@ async function child(ctx, stage, key, { seat, prompt, schema, tools = "read", le
   save(outFile, v);
   markDone(ctx.runDir, stage, key);
   return v;
+}
+
+// At most n tasks at once: a big PR has many round-1 children.
+function limiter(n) {
+  let active = 0;
+  const queue = [];
+  const next = () => {
+    if (active >= n || !queue.length) return;
+    active++;
+    const [fn, ok, bad] = queue.shift();
+    fn().then(ok, bad).finally(() => { active--; next(); });
+  };
+  return (fn) => new Promise((ok, bad) => { queue.push([fn, ok, bad]); next(); });
 }
 
 // Waits for every child, so finished ones keep their markers when another fails.
@@ -190,13 +205,27 @@ async function once(o, restart) {
     if (effort === "auto") effort = pickEffort(f.changedPaths, config);
     const lenses = LENSES.filter((l) => config.lenses[l].enabled && (!o.lenses || o.lenses.includes(l)));
     if (!lenses.length) throw new SetupError("no lens runs: the requested lens is disabled in the config, or every lens is disabled");
+    // Each diff part multiplies round 1: an effort the user did not pin (config, auto, the loop) steps down
+    // until the PR fits max_children.
+    const parts = f.chunks?.length ?? 1, cap = config.review.max_children;
+    const count = (e) => plannedChildren(applyEffort(config, e), lenses, parts);
+    const pinned = o.effort && o.effort !== "auto" && !o.effortFromConfig;
+    while (!pinned && count(effort) > cap && effort !== "low") {
+      const lower = lowerEffort(effort);
+      log(`effort ${effort} needs ${count(effort)} children for ${parts} diff parts, above review.max_children (${cap}); using ${lower}`);
+      effort = lower;
+    }
+    if (count(effort) > cap) {
+      throw new DiffTooLarge(0, 0, `effort ${effort} needs ${count(effort)} children for ${parts} diff parts, above review.max_children (${cap})`,
+        "Use a lower --effort, or raise review.max_children or review.chunk_lines in the config.");
+    }
     // A lens the user runs but this run skips (--lens, or off in the repo config) counts as failed: no APPROVE.
     // planned: the count for this run's merged config, which status shows.
-    save(runFile, { effort, lenses, missing: LENSES.filter((l) => userConfig.lenses[l].enabled && !lenses.includes(l)), planned: plannedChildren(applyEffort(config, effort), lenses) });
+    save(runFile, { effort, lenses, missing: LENSES.filter((l) => userConfig.lenses[l].enabled && !lenses.includes(l)), planned: count(effort) });
   }
   const run = readJson(runFile);
   config = applyEffort(config, run.effort);
-  const planned = run.planned ?? plannedChildren(config, run.lenses);
+  const planned = run.planned ?? plannedChildren(config, run.lenses, f.chunks?.length ?? 1);
   log(`effort ${run.effort}: ${planned} children planned; seats ${config.seats.map(seatId).join(", ")}; judge ${seatId(config.judge)}`);
 
   const finish = (stage, extra = {}) => { markDone(runDir, FINAL_STAGE); return { exit: 0, runDir, planned, summary: `stopped after ${stage}`, ...extra }; };
@@ -219,14 +248,32 @@ async function once(o, restart) {
       if (left.length < 2) throw new ChildFailed(`fewer than 2 seats left for lens ${l} (dropped: ${run.dropped.map((d) => `${d.seat} (${d.reason})`).join(", ")})`);
     }
   };
-  const ctx = { runDir, frame: f, runChild: o.runChild, routerUp: o.routerUp, config, dropped: isDropped, drop };
+  // A part a seat could not finish (split PR): recorded, retried on resume, and it blocks APPROVE like a drop.
+  run.missed ??= [];
+  const miss = (s, key, reason) => {
+    run.missed.push({ seat: seatId(s), key, reason });
+    save(runFile, run);
+    log(`seat ${seatId(s)} missed part ${key} (${reason})`);
+  };
+  const ctx = { runDir, frame: f, runChild: o.runChild, routerUp: o.routerUp, config, dropped: isDropped, drop, miss };
   // a shell only when every text author is trusted (frame shellOk): in round 1 only in jobs that run the adversarial lens; votes may run a
   // repro, because a keep with run evidence holds against a majority of drops (tally, spec R2)
   const toolsFor = (j) => (f.shellOk && j.lenses.includes("adversarial") ? "shell" : "read");
-  const jobs = round1Jobs(config, run.lenses);
+  // A PR in one part keeps the plain key, so older runs resume. A split PR: one child per job and part for the
+  // local lenses, and one per job on the whole PR for the lenses about design across parts.
+  const parts = f.chunks ?? [null];
+  const jobs = round1Jobs(config, run.lenses).flatMap((j) => {
+    if (parts.length === 1) return [{ ...j, part: parts[0] }];
+    const whole = j.lenses.filter((l) => WHOLE_PR_LENSES.includes(l)), local = j.lenses.filter((l) => !WHOLE_PR_LENSES.includes(l));
+    return [
+      ...(local.length ? parts.map((part, i) => ({ ...j, lenses: local, part, key: `${j.key}@${i}` })) : []),
+      ...(whole.length ? [{ ...j, lenses: whole, part: { whole: true }, key: `${j.key}@all` }] : []),
+    ];
+  });
+  const slot = limiter(config.review.max_parallel ?? jobs.length);
   const hygFile = join(runDir, "hygiene-result.json");
   const [outs, hyg] = await settled([
-    settled(jobs.map((j) => child(ctx, "round1", j.key, { seat: j.seat, tools: toolsFor(j), schema: "round1", lens: j.lenses.length === 1 ? j.lenses[0] : undefined, prompt: (s, fr = f) => round1Prompt(fr, j.lenses, s.max_turns) }).then((v) => ({ ...j, v })))).then((all) => all.filter((x) => x.v && !isDropped(x.seat))),
+    settled(jobs.map((j) => slot(() => child(ctx, "round1", j.key, { seat: j.seat, tools: toolsFor(j), schema: "round1", lens: j.lenses.length === 1 ? j.lenses[0] : undefined, onePart: parts.length > 1, prompt: (s, fr = f) => round1Prompt(fr, j.lenses, s.max_turns, j.part) })).then((v) => ({ ...j, v })))).then((all) => all.filter((x) => x.v && !isDropped(x.seat))),
     existsSync(hygFile) ? readJson(hygFile) : o.hygiene(f, config, run.effort, { routerUp: o.routerUp }).then((h) => { save(hygFile, h); return h; }),
   ]);
   enoughSeats();
@@ -375,11 +422,13 @@ async function once(o, restart) {
   const text = new Map(composed.comments.map((x) => [x.id, x.body]));
   const items = posted.map((c) => ({ ...c, body: text.get(c.id) ?? `**${c.severity}:** ${c.title}\n\n${c.case}` }));
   const earlierAll = readJson(join(f.ctxDir, "earlier.json"));
+  // Misses of this run's final round 1: a resume that finished the part clears it.
+  const missedNow = run.missed.filter((m) => !done(runDir, "round1", m.key) && !isDropped(m.seat));
   const fixed = earlierAll.filter((e) => { const r = earlier.get(e.threadId); return r && r.open.size === 0 && r.fixed.size >= 2; });
   let ci = ciOf(f);
   const v = () => verdict({
     agreed: [...agreed, ...hygItems], earlierMustOpen: earlierAll.filter((e) => e.severity === "must" && !fixed.includes(e)).length,
-    openQuestions: open.length, failedLenses: run.missing?.length ?? 0, droppedSeats: run.dropped.length, ci: ci.state, mode, trustedAuthor: f.shellOk, unanimousZero, ownPr: f.ownPr,
+    openQuestions: open.length, failedLenses: run.missing?.length ?? 0, droppedSeats: run.dropped.length + missedNow.length, ci: ci.state, mode, trustedAuthor: f.shellOk, unanimousZero, ownPr: f.ownPr,
   });
   const bodyOf = (outside, key) => [
     composed.body.trim(),
@@ -388,6 +437,10 @@ async function once(o, restart) {
     leftOut ? `${leftOut} ${leftOut === 1 ? "finding was" : "findings were"} left out by the effort limit.` : "",
     run.missing?.length ? `Lenses not run: ${run.missing.join(", ")}.` : "",
     ...run.dropped.map((d) => `Seat ${safeText(d.seat.slice(d.seat.indexOf(":") + 1))} was dropped (${d.reason}).`),
+    ...[...new Set(missedNow.map((m) => m.seat))].map((id) => {
+      const m = missedNow.filter((x) => x.seat === id), n = new Set(m.map((x) => x.key)).size;
+      return `Seat ${safeText(id.slice(id.indexOf(":") + 1))} missed ${n} ${n === 1 ? "part" : "parts"} of the split diff (${[...new Set(m.map((x) => x.reason))].join(", ")}).`;
+    }),
     ci.line ?? "", marker(runId, f.headSha, key),
   ].filter(Boolean).join("\n\n");
   const hunks = parseHunks(readFileSync(join(f.ctxDir, "diff.patch"), "utf8"));

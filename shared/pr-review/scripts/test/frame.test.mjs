@@ -7,7 +7,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as gh from "../lib/github.mjs";
 import { loadConfig } from "../lib/config.mjs";
-import { frame, DiffTooLarge, HeadMoved, cleanupWorktree, PR_DATA_NOTE } from "../lib/frame.mjs";
+import { frame, planChunks, DiffTooLarge, HeadMoved, cleanupWorktree, PR_DATA_NOTE } from "../lib/frame.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const wrapper = join(mkdtempSync(join(tmpdir(), "ghbin-")), "gh");
@@ -253,4 +253,91 @@ test("head moved between pr() and fetch -> HeadMoved; bad PR number -> error", a
   stub("1".repeat(40));
   await assert.rejects(run(fx), HeadMoved);
   for (const n of [0, -1, 1.5, "5"]) await assert.rejects(run(fx, { n }), /positive integer/);
+});
+
+test("planChunks keeps a folder whole when it fits, packs folders in path order, splits a folder that does not fit", () => {
+  const parts = planChunks([["b/x.go", 300], ["a/y.go", 100], ["a/y_test.go", 100], ["c/big.go", 400], ["c/big2.go", 400], ["main.go", 10]], 500);
+  assert.deepEqual(parts, [
+    { files: ["main.go", "a/y.go", "a/y_test.go"], lines: 210 },
+    { files: ["b/x.go"], lines: 300 },
+    { files: ["c/big.go"], lines: 400 },
+    { files: ["c/big2.go"], lines: 400 },
+  ]);
+  assert.deepEqual(planChunks([["huge.go", 900]], 500), [{ files: ["huge.go"], lines: 900 }]);
+  // a folder that does not fit splits into units: a file stays with its test
+  assert.deepEqual(planChunks([["p/a.go", 300], ["p/a_test.go", 300], ["p/b.go", 100], ["p/b_test.go", 100]], 500).map((c) => c.files), [["p/a.go", "p/a_test.go"], ["p/b.go", "p/b_test.go"]]);
+});
+
+test("frame writes one patch per part: one part below chunk_lines, one per file above it", async () => {
+  const fx = fixture();
+  stub(fx.head);
+  const small = await run(fx);
+  assert.equal(small.chunks.length, 1);
+  assert.equal(small.chunks[0].files, null);
+  assert.match(readFileSync(small.chunks[0].patch, "utf8"), /^diff --git a\/\.pr-review\.json/m);
+  const config = loadConfig({});
+  config.review.chunk_lines = 1;
+  const big = await run(fx, { config });
+  assert.deepEqual(big.chunks.map((c) => c.files), [[".pr-review.json"], ["CLAUDE.md"], ["a.js"]]);
+  const a = readFileSync(big.chunks[2].patch, "utf8");
+  assert.match(a, /^\+const b = 3;$/m);
+  assert.doesNotMatch(a, /CLAUDE\.md/);
+  assert.ok(existsSync(big.chunks[0].earlier), "each part gets its own earlier findings file");
+  assert.match(ctx(big, "chunks/map.txt"), /^Part 0:\n  \.pr-review\.json\nPart 1:\n  CLAUDE\.md\nPart 2:\n  a\.js/);
+});
+
+test("a part whose function context passes 2500 lines keeps the plain patch", async () => {
+  const fx = fixture();
+  const body = Array.from({ length: 3000 }, (_, i) => `  x${i}();`).join("\n");
+  put(fx.repoDir, { "big.js": `function f() {\n${body}\n}\n` });
+  git(fx.repoDir, "add", "-A"); git(fx.repoDir, "commit", "-qm", "base big");
+  const base = git(fx.repoDir, "rev-parse", "HEAD");
+  put(fx.repoDir, { "big.js": `function f() {\n${body.replace("x1500();", "y1500();")}\n}\n` });
+  git(fx.repoDir, "add", "-A"); git(fx.repoDir, "commit", "-qm", "head big");
+  const head = git(fx.repoDir, "rev-parse", "HEAD");
+  git(fx.repoDir, "push", "-q", "origin", `${base}:refs/heads/main`, "-f");
+  git(fx.repoDir, "push", "-q", "origin", `${head}:refs/pull/5/head`, "-f");
+  stub(head);
+  const f = await frame({ repo: "o/r", n: 5, repoDir: fx.repoDir, runDir: freshRun({ ...fx, head }), config: loadConfig({}), gh });
+  const p = readFileSync(f.chunks[0].patch, "utf8");
+  assert.match(p, /^\+  y1500\(\);$/m);
+  assert.ok(p.split("\n").length < 20, `plain patch expected, got ${p.split("\n").length} lines`);
+});
+
+test("prMap lists each part's files with the functions their hunks change", async () => {
+  const { prMap } = await import("../lib/frame.mjs");
+  const diff = ["diff --git a/x/a.go b/x/a.go", "--- a/x/a.go", "+++ b/x/a.go", "@@ -3 +3 @@ func A(n int) error {", "-a", "+b", "@@ -9 +9 @@ func A(n int) error {", "@@ -20 +20 @@", "diff --git a/y/old.go b/y/old.go", "--- a/y/old.go", "+++ /dev/null", "@@ -1,2 +0,0 @@ type Old struct{}"].join("\n");
+  assert.equal(prMap(diff, [{ files: ["x/a.go"] }, { files: ["y/old.go", "z.go"] }]), "Part 0:\n  x/a.go: func A(n int) error {\nPart 1:\n  y/old.go: type Old struct{}\n  z.go");
+});
+
+test("split parts: from a subfolder of the clone the patches are not empty; a moved file stays a rename", async () => {
+  const fx = fixture();
+  const body = Array.from({ length: 40 }, (_, i) => `line ${i}`).join("\n");
+  put(fx.repoDir, { "sub/keep.txt": "k\n", "old/moved.js": body + "\n" });
+  git(fx.repoDir, "add", "-A"); git(fx.repoDir, "commit", "-qm", "base");
+  const base = git(fx.repoDir, "rev-parse", "HEAD");
+  git(fx.repoDir, "mv", "old/moved.js", "new/moved.js".replace("new/", "sub/"));
+  put(fx.repoDir, { "sub/moved.js": body.replace("line 20", "line twenty") + "\n", "z/other.js": "x\n" });
+  git(fx.repoDir, "add", "-A"); git(fx.repoDir, "commit", "-qm", "head");
+  const head = git(fx.repoDir, "rev-parse", "HEAD");
+  git(fx.repoDir, "push", "-q", "-f", "origin", `${base}:refs/heads/main`, `${head}:refs/pull/5/head`);
+  stub(head);
+  const config = loadConfig({});
+  config.review.chunk_lines = 8;
+  const f = await frame({ repo: "o/r", n: 5, repoDir: join(fx.repoDir, "sub"), runDir: freshRun({ ...fx, head }), config, gh });
+  assert.ok(f.chunks.length > 1);
+  const all = f.chunks.map((c) => readFileSync(c.patch, "utf8"));
+  for (const [i, t] of all.entries()) assert.ok(t.length > 0, `part ${i} is empty`);
+  const moved = all.find((t) => t.includes("sub/moved.js"));
+  assert.match(moved, /^rename from old\/moved\.js$/m);
+  assert.match(moved, /^\+line twenty$/m);
+  assert.ok(moved.split("\n").filter((l) => l.startsWith("+")).length < 10, "a move is not 40 added lines");
+});
+
+test("prMap: a path with a space keeps its functions; a header-like line inside a hunk is content", async () => {
+  const { prMap } = await import("../lib/frame.mjs");
+  const spaced = ["--- a/my dir/a b.go\t", "+++ b/my dir/a b.go\t", "@@ -1 +1 @@ func A() {", "-x", "+y"].join("\n");
+  assert.equal(prMap(spaced, [{ files: ["my dir/a b.go"] }]), "Part 0:\n  my dir/a b.go: func A() {");
+  const evil = ["--- a/x/a.go", "+++ b/x/a.go", "@@ -0,0 +1 @@ func A() error {", "+++ b/y/evil.go", "@@ -20 +21 @@ func B() {", "-a", "+b"].join("\n");
+  assert.equal(prMap(evil, [{ files: ["x/a.go"] }]), "Part 0:\n  x/a.go: func A() error {; func B() {");
 });

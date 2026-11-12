@@ -8,7 +8,11 @@ import { stripComments } from "./config.mjs";
 import { done, markDone } from "./state.mjs";
 
 export class DiffTooLarge extends Error {
-  constructor(lines, cap) { super(`diff has ${lines} lines, above review.max_diff_lines (${cap}); there is no diff splitter in v1`); this.name = "DiffTooLarge"; }
+  constructor(lines, cap, msg, hint = "Review it anyway with --max-diff-lines N, or raise review.max_diff_lines in the config.") {
+    super(msg ?? `diff has ${lines} lines, above review.max_diff_lines (${cap})`);
+    this.name = "DiffTooLarge";
+    this.hint = hint;
+  }
 }
 
 export class HeadMoved extends Error {
@@ -30,6 +34,101 @@ export const gitOk = (cwd, args) => { try { git(cwd, args); return true; } catch
 export function readTree(dir) {
   try { return readdirSync(dir, { recursive: true }).map((p) => join(dir, p)).filter((p) => statSync(p).isFile()).map((p) => readFileSync(p, "utf8")).join("\n\n"); } catch { return ""; }
 }
+// Round 1 parts: a folder (a Go package, its tests with it) stays whole when it fits in max lines; folders are
+// packed in path order. sizes: [[path, lines]]. A folder that does not fit splits into units: a file with its test.
+const stem = (p) => p.replace(/(_test|\.test|\.spec)?\.[^./]+$/, "");
+export function planChunks(sizes, max) {
+  const byDir = new Map();
+  for (const [p, n] of sizes) {
+    const d = p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
+    if (!byDir.has(d)) byDir.set(d, []);
+    byDir.get(d).push([p, n]);
+  }
+  const out = [];
+  let cur = null;
+  const add = (files, n) => {
+    if (!cur || cur.lines + n > max) out.push((cur = { files: [], lines: 0 }));
+    cur.files.push(...files);
+    cur.lines += n;
+  };
+  for (const d of [...byDir.keys()].sort()) {
+    const fs = byDir.get(d), n = fs.reduce((a, [, x]) => a + x, 0);
+    if (n <= max) add(fs.map(([p]) => p), n);
+    else {
+      const units = new Map();
+      for (const [p, x] of fs) {
+        if (!units.has(stem(p))) units.set(stem(p), [[], 0]);
+        const u = units.get(stem(p));
+        u[0].push(p);
+        u[1] += x;
+      }
+      for (const [files, x] of units.values()) add(files, x);
+    }
+  }
+  return out;
+}
+
+// The map of a split PR: each part's files with the functions their hunks touch (git's hunk header),
+// so a seat sees what the other parts change and reads it when its own code uses it.
+export function prMap(diff, parts) {
+  const syms = new Map();
+  let file = null, old = 0, add = 0;
+  for (const l of diff.split("\n")) {
+    // Inside a hunk a line that looks like a header is content: count the hunk's lines, as parseHunks does.
+    if (old > 0 || add > 0) {
+      if (l[0] === "-") old--; else if (l[0] === "+") add--; else if (l[0] !== "\\") { old--; add--; }
+      continue;
+    }
+    if (l.startsWith("--- a/") || l.startsWith("+++ b/")) file = l.slice(6).replace(/\t$/, ""); // git adds a tab after a path with a space
+    else if (l.startsWith("@@") && file) {
+      const m = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@ ?(.*)$/.exec(l);
+      if (!m) continue;
+      old = m[1] === undefined ? 1 : +m[1];
+      add = m[2] === undefined ? 1 : +m[2];
+      const h = m[3].trim().slice(0, 80);
+      if (!syms.has(file)) syms.set(file, new Set());
+      if (h) syms.get(file).add(h);
+    }
+  }
+  return parts.map((c, i) => [`Part ${i}:`, ...c.files.map((f) => {
+    const s = [...(syms.get(f) ?? [])];
+    return `  ${f}${s.length ? `: ${s.slice(0, 8).join("; ")}${s.length > 8 ? `; and ${s.length - 8} more` : ""}` : ""}`;
+  })].join("\n")).join("\n");
+}
+
+// One patch per part, with the whole function around each change (-W), so a seat needs fewer reads.
+// Above this many lines (the prompt's limit) big functions crowd out the diff: the part keeps the plain patch.
+const FUNCTION_CONTEXT_MAX = 2500;
+function writeChunks(repoDir, range, lines, max, ctxDir) {
+  // numstat paths are from the repo root, and git reads a pathspec from the cwd: run at the top level.
+  repoDir = git(repoDir, ["rev-parse", "--show-toplevel"]).trim();
+  let parts = [{ files: null, lines }];
+  const renamedFrom = new Map();
+  if (lines > max) {
+    // -z numstat: "a\td\tpath\0", or for a rename "a\td\t\0old\0new\0". A rename stays one file, under its new path.
+    const t = git(repoDir, ["-c", "core.quotePath=false", "diff", "--numstat", "-z", range]).split("\0"), sizes = [];
+    for (let i = 0; i < t.length; i++) {
+      const m = /^(\d+|-)\t(\d+|-)\t([\s\S]*)$/.exec(t[i]);
+      if (!m) continue;
+      let p = m[3];
+      if (p === "") { renamedFrom.set(t[i + 2], t[i + 1]); p = t[i + 2]; i += 2; }
+      sizes.push([p, (+m[1] || 0) + (+m[2] || 0) + 5]);
+    }
+    parts = planChunks(sizes, max);
+  }
+  mkdirSync(join(ctxDir, "chunks"));
+  if (parts.length > 1) writeFileSync(join(ctxDir, "chunks", "map.txt"), prMap(git(repoDir, ["-c", "core.quotePath=false", "diff", "--no-color", "-U0", range]), parts));
+  return parts.map((c, i) => {
+    const patch = join(ctxDir, "chunks", `${i}.patch`);
+    // the old path of a rename too, so git pairs it and shows the move, not a new file
+    const paths = c.files ? ["--", ...c.files.flatMap((p) => (renamedFrom.has(p) ? [p, renamedFrom.get(p)] : [p]))] : [];
+    const diff = (w) => git(repoDir, ["--literal-pathspecs", "-c", "core.quotePath=false", "diff", "--no-color", ...w, range, ...paths]);
+    const wide = diff(["-W"]), functions = wide.split("\n").length <= FUNCTION_CONTEXT_MAX;
+    writeFileSync(patch, functions ? wide : diff([]));
+    return { patch, files: c.files, lines: c.lines, functions };
+  });
+}
+
 const show = (cwd, ref, path) => { try { return git(cwd, ["show", `${ref}:${path}`]); } catch { return null; } };
 const json = (dir, name, v) => writeFileSync(join(dir, name), JSON.stringify(v, null, 2) + "\n");
 
@@ -108,6 +207,7 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
   rmSync(ctxDir, { recursive: true, force: true }); // a resumed frame rewrites ctx from scratch
   mkdirSync(join(ctxDir, "guidance"), { recursive: true });
   writeFileSync(join(ctxDir, "diff.patch"), diff);
+  const chunks = writeChunks(repoDir, range, lines, config.review.chunk_lines, ctxDir);
   if (delta.base) writeFileSync(join(ctxDir, "delta.patch"), git(repoDir, ["-c", "core.quotePath=false", "diff", "--no-color", `${delta.base}..${head}`]));
 
   const commits = git(repoDir, ["log", "--format=%H %s", `${base}..${head}`]).split("\n").filter(Boolean)
@@ -141,6 +241,15 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
     severity: SEVERITY.exec(t.comments[0].body ?? "")?.[1] ?? null, body: t.comments[0].body,
   })));
 
+  // Each part checks the open earlier findings in its files; the findings in no part go to part 0.
+  if (chunks.length > 1) {
+    const earlier = JSON.parse(readFileSync(join(ctxDir, "earlier.json"), "utf8"));
+    chunks.forEach((c, i) => {
+      c.earlier = join(ctxDir, "chunks", `${i}-earlier.json`);
+      json(join(ctxDir, "chunks"), `${i}-earlier.json`, earlier.filter((t) => c.files.includes(t.path) || (i === 0 && !chunks.some((x) => x.files.includes(t.path)))));
+    });
+  }
+
   let ci = "none";
   if (config.review.ci !== "ignore") {
     const c = await gh.checks(repo, n, head);
@@ -165,7 +274,7 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
   const f = {
     headSha: head, baseRef: p.baseRef, trusted, ownPr: p.author === viewer,
     shellOk: trusted && authors.every(([login, a]) => (login && login === viewer) || TRUSTED.has(a)),
-    reviewNumber: (prState.reviews ?? 0) + 1, delta, ctxDir, worktree, changedPaths, ci, repoConfigText, nonce,
+    reviewNumber: (prState.reviews ?? 0) + 1, delta, ctxDir, worktree, changedPaths, chunks, ci, repoConfigText, nonce,
   };
   json(runDir, "frame.json", f);
   markDone(runDir, "frame");
