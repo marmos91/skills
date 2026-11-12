@@ -263,8 +263,9 @@ The engine writes one context folder. All seats read the same folder.
 - The issue or plan that the PR implements: closing issues (GraphQL
   `closingIssuesReferences`), issues named in the PR body, and plan or spec
   files that the PR body or the branch name refers to. If none exists, the
-  correctness lens says "no tracking issue or plan" in the summary and checks
-  the PR against its own description.
+  correctness lens sets `no_tracking: true` and checks the PR against its own
+  description, and the engine adds "No tracking issue or plan." to the
+  summary.
 - Review guidance from the base branch (section 4, rule 4).
 - All earlier reviews, threads (open and resolved) and comments.
 - Marco's own earlier findings on this PR that are still open, with their
