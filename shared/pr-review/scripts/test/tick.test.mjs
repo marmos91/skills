@@ -177,6 +177,21 @@ test("lock held by another run -> exits 0 with a message", async () => {
   } finally { release(); }
 });
 
+test("a PR whose lock a manual review holds is skipped this tick; the others run", async () => {
+  const rs = fresh();
+  withBaseline(rs);
+  const release = acquireLock(join(rs, "pr", "1"), " of PR #1");
+  const lines = [];
+  try {
+    const { out, f } = await go({ gh: fakeGh({ rows: [row(1, ["review-requested"]), row(2, ["review-requested"])] }), log: (m) => lines.push(m) });
+    assert.deepEqual(f.reviews.map((r) => r.n), [2]);
+    assert.equal(out.processed, 1);
+    assert.ok(lines.some((l) => /^#1: .*lock of PR #1.*skipped this tick/.test(l)), lines.join("\n"));
+    assert.equal(prState(rs, 1).cache.updatedAt, undefined, "not cached: the next tick tries it again");
+  } finally { release(); }
+  assert.equal(existsSync(join(rs, "pr", "2", "lock")), false, "the tick released its PR lock");
+});
+
 test("no question is asked during a tick", async () => {
   const rs = fresh();
   withBaseline(rs);

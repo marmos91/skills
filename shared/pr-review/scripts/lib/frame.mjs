@@ -5,7 +5,7 @@ import { join, dirname, normalize, isAbsolute } from "node:path";
 import * as github from "./github.mjs";
 import { redact } from "./secrets.mjs";
 import { stripComments } from "./config.mjs";
-import { done, markDone } from "./state.mjs";
+import { done, markDone, waitLock } from "./state.mjs";
 
 export class DiffTooLarge extends Error {
   constructor(lines, cap, msg, hint = "Review it anyway with --max-diff-lines N, or raise review.max_diff_lines in the config.") {
@@ -161,23 +161,42 @@ function repoGuidance(text) {
 // A guidance path from config must stay inside ctx/guidance.
 const safePath = (p) => p && !isAbsolute(p) && normalize(p) === p && !p.split("/").includes("..");
 
+const commonDir = (cwd) => git(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).trim();
+// Fetch and worktree add, remove and prune write the clone's .git: reviews of other PRs, in other processes, use the
+// same clone. A short lock in the clone, waited for. In one process git runs synchronously, so a nested call
+// (worktreeAt -> cleanupWorktree) already holds it.
+let gitDepth = 0;
+function withGitLock(common, fn) {
+  if (gitDepth) return fn();
+  const release = waitLock(join(common, "pr-review"), " of the git clone");
+  gitDepth++;
+  try { return fn(); } finally { gitDepth--; release(); }
+}
+
 function worktreeAt(repoDir, wt, sha) {
-  if (existsSync(wt)) {
-    if (gitOk(wt, ["rev-parse", "--is-inside-work-tree"]) && git(wt, ["rev-parse", "HEAD"]).trim() === sha) return;
-    cleanupWorktree(dirname(wt));
-  }
-  gitOk(repoDir, ["worktree", "prune"]); // a wt/ deleted by hand is still registered
-  git(repoDir, ["worktree", "add", "--detach", wt, sha]);
+  withGitLock(commonDir(repoDir), () => {
+    if (existsSync(wt)) {
+      if (gitOk(wt, ["rev-parse", "--is-inside-work-tree"]) && git(wt, ["rev-parse", "HEAD"]).trim() === sha) return;
+      cleanupWorktree(dirname(wt));
+    }
+    gitOk(repoDir, ["worktree", "prune"]); // a wt/ deleted by hand is still registered
+    git(repoDir, ["worktree", "add", "--detach", wt, sha]);
+  });
 }
 
 export function cleanupWorktree(runDir) {
   const wt = join(runDir, "wt");
   if (!existsSync(wt)) return;
-  let main = null;
-  try { main = dirname(git(wt, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).trim()); } catch {}
-  if (main && gitOk(main, ["worktree", "remove", "--force", wt])) return;
-  rmSync(wt, { recursive: true, force: true });
-  if (main) gitOk(main, ["worktree", "prune"]);
+  let common = null;
+  try { common = commonDir(wt); } catch {}
+  if (!common) return void rmSync(wt, { recursive: true, force: true });
+  const main = dirname(common);
+  withGitLock(common, () => {
+    if (!existsSync(wt)) return; // another sweep removed it meanwhile
+    if (gitOk(main, ["worktree", "remove", "--force", wt])) return;
+    rmSync(wt, { recursive: true, force: true });
+    gitOk(main, ["worktree", "prune"]);
+  });
 }
 
 export async function frame({ repo, n, repoDir, runDir, config, gh = github, prState = {} }) {
@@ -192,7 +211,8 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
   const p = await gh.pr(repo, n);
   const viewer = await gh.viewer();
   const head = p.headSha, base = `origin/${p.baseRef}`;
-  git(repoDir, ["fetch", "-q", "origin", `+refs/heads/${p.baseRef}:refs/remotes/origin/${p.baseRef}`, `+refs/pull/${n}/head:refs/pr-review/${n}`]);
+  const common = commonDir(repoDir);
+  withGitLock(common, () => git(repoDir, ["fetch", "-q", "origin", `+refs/heads/${p.baseRef}:refs/remotes/origin/${p.baseRef}`, `+refs/pull/${n}/head:refs/pr-review/${n}`]));
   const fetched = git(repoDir, ["rev-parse", `refs/pr-review/${n}`]).trim();
   if (fetched !== head) throw new HeadMoved(head, fetched);
 
@@ -210,7 +230,7 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
   const isAncestor = !!last && gitOk(repoDir, ["merge-base", "--is-ancestor", last, head]);
   // After a rebase the reviewed commit is no ancestor, but a direct diff against it still shows which lines
   // changed since the review, so settled findings stay settled. A commit GitHub no longer serves falls back to null.
-  const haveLast = !!last && (gitOk(repoDir, ["cat-file", "-e", `${last}^{commit}`]) || gitOk(repoDir, ["fetch", "-q", "origin", last]));
+  const haveLast = !!last && (gitOk(repoDir, ["cat-file", "-e", `${last}^{commit}`]) || withGitLock(common, () => gitOk(repoDir, ["fetch", "-q", "origin", last])));
   const delta = { base: haveLast ? last : null, isAncestor };
 
   const ctxDir = join(runDir, "ctx");

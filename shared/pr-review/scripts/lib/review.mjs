@@ -57,9 +57,10 @@ export async function review(opts) {
     gh: github, runChild: realRunChild, decide: realDecide, stopping: () => stopping, frame: realFrame, hygiene: realHygiene, log: () => {},
     ...opts, mode, repoState,
   };
-  // Reentrant: the loop calls review() while it holds the repo lock.
-  const mine = () => { try { return Number(readFileSync(join(repoState, "lock", "pid"), "utf8")) === process.pid; } catch { return false; } };
-  const release = lock && !mine() ? acquireLock(repoState) : () => {};
+  // One run per PR: reviews of other PRs run in parallel. Reentrant: the loop calls review() while it holds this PR's lock.
+  const prDir = join(repoState, "pr", String(n));
+  const mine = () => { try { return Number(readFileSync(join(prDir, "lock", "pid"), "utf8")) === process.pid; } catch { return false; } };
+  const release = lock && !mine() ? acquireLock(prDir, ` of PR #${n}`) : () => {};
   try {
     for (let attempt = 0; ; attempt++) {
       try { return await once(o, o.restart && attempt === 0); } catch (e) {

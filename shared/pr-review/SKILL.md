@@ -31,7 +31,8 @@ sh "$SKILL_DIR/scripts/pr-review" review <n> [--repo owner/repo] \
 - `--restart` starts a new run. Without it, a run for the same head SHA
   continues from the last finished child.
 - The run can take many minutes. Run it in the foreground and wait. Do not
-  start a second run on the same repo: the lock stops it.
+  start a second run on the same PR: the lock stops it. Runs on other PRs
+  can go at the same time.
 
 ## Exit codes
 

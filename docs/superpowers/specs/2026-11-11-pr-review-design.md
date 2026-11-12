@@ -425,7 +425,7 @@ When Marco already reviewed the PR:
 
 ### 6.10 Post
 
-1. Take the lock of the repo (section 8).
+1. Hold the lock of the PR (section 8).
 2. Check the head again. If it moved since the frame, drop the run and frame
    again.
 3. Check each inline comment against the diff hunks of the pinned SHA. A
@@ -452,7 +452,9 @@ Input: `owner/repo`. With no input, the repo of the current directory.
 
 ### 7.1 One run (`tick`)
 
-1. Take the lock. If another run holds it, exit.
+1. Take the repo lock. If another tick holds it, exit. Each PR the tick
+   handles takes the PR lock; a PR that another run holds is skipped this
+   tick.
 2. Print the open questions and the to-do items. Apply the answers that Marco
    gave since the last run. Do not ask during a run.
 3. List open PRs where Marco is the author, a requested reviewer (Marco or one
@@ -553,8 +555,12 @@ The state records the review count and the reply count per thread, and
   holder's start time (Linux: start ticks from `/proc/<pid>/stat`; macOS:
   `ps -o lstart=` under `TZ=UTC`). A lock is stale when its PID is dead, or
   when the PID is alive but its start time differs (the PID was reused by
-  another process); a stale lock is removed. `/pr-review` and the loop use
-  the same lock.
+  another process); a stale lock is removed. Only the loop takes it.
+- `pr/<n>/lock/`: the same kind of lock for one PR. `/pr-review` takes it,
+  and the loop takes it for each PR it handles. Runs on different PRs do not
+  block each other.
+- Git writes in the clone (fetch, worktree add, remove and prune) take a
+  short lock in `.git/pr-review/lock/`. A run waits up to 60 s for it.
 - Per PR: `pr/<n>/cache.json` (head SHA and newest comment ID, used only to
   skip unchanged PRs) and `pr/<n>/runs/<sha>-<ts>/` with a folder per stage
   and a `.done` marker per stage. GitHub is the source of truth for what was

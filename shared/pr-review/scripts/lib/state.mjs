@@ -21,8 +21,9 @@ export function writeAtomic(file, text) {
   renameSync(tmp, file);
 }
 
+// what: "" for the repo lock, " of PR #5" for a PR lock.
 export class Locked extends Error {
-  constructor(pid) { super(`another pr-review run holds the lock (pid ${pid})`); this.name = "Locked"; this.pid = pid; }
+  constructor(pid, what = "") { super(`another pr-review run holds the lock${what} (pid ${pid})`); this.name = "Locked"; this.pid = pid; }
 }
 
 export function alive(pid) {
@@ -96,13 +97,13 @@ function moveAside(dir, deadRaw) {
 }
 
 // Best effort: temp and moved-aside dirs whose named pid is dead, and a takeover mutex whose holder died.
-function sweep(repoState) {
-  const mutex = join(repoState, "lock.takeover"), m = rawPid(mutex);
+function sweep(parent) {
+  const mutex = join(parent, "lock.takeover"), m = rawPid(mutex);
   if (m && !holderAlive(mutex, Number(m))) moveAside(mutex, m);
   try {
-    for (const f of readdirSync(repoState)) {
+    for (const f of readdirSync(parent)) {
       const pid = Number(/^lock(?:\.takeover)?\.(?:tmp|stale)\.(\d+)\./.exec(f)?.[1]);
-      if (pid && pid !== process.pid && !alive(pid)) rmSync(join(repoState, f), { recursive: true, force: true });
+      if (pid && pid !== process.pid && !alive(pid)) rmSync(join(parent, f), { recursive: true, force: true });
     }
   } catch {}
 }
@@ -110,8 +111,8 @@ function sweep(repoState) {
 // A takeover holds a mutex (claimed the same way), so only one process at a time moves a stale lock aside.
 // shortcut: if a process crashes inside this short critical section and a racer clears its dead mutex while another
 // racer takes over, two holders are possible; the second guard is that every post first checks GitHub for its marker (spec 6.10 step 6).
-function takeOver(repoState, dir, deadRaw) {
-  const mutex = join(repoState, "lock.takeover");
+function takeOver(parent, dir, deadRaw) {
+  const mutex = join(parent, "lock.takeover");
   if (!claim(mutex)) {
     const m = rawPid(mutex);
     if (!m || holderAlive(mutex, Number(m)) || !moveAside(mutex, m) || !claim(mutex)) return false;
@@ -123,10 +124,11 @@ function takeOver(repoState, dir, deadRaw) {
   }
 }
 
-export function acquireLock(repoState) {
-  const dir = join(repoState, "lock");
-  mkdirSync(repoState, { recursive: true });
-  sweep(repoState);
+// The lock is `<parent>/lock`: the repo state folder (tick), a PR folder pr/<n> (review), or a git clone (git writes).
+export function acquireLock(parent, what = "") {
+  const dir = join(parent, "lock");
+  mkdirSync(parent, { recursive: true });
+  sweep(parent);
   for (let attempt = 0; attempt < 2; attempt++) {
     if (!existsSync(dir) && claim(dir)) return own(dir);
     const raw = rawPid(dir);
@@ -134,11 +136,22 @@ export function acquireLock(repoState) {
     try { age = Date.now() - statSync(dir).mtimeMs; } catch (e) { if (e.code === "ENOENT") continue; throw e; } // released meanwhile: retry once
     // Stale = its holder is dead (pid gone, or reused by another process). A lock dir with no pid file only comes from an older version or a manual mkdir:
     // the one time-based rule treats it as stale after 60 s.
-    if (raw ? holderAlive(dir, Number(raw)) : age < 60000) throw new Locked(raw ? Number(raw) : null);
-    if (takeOver(repoState, dir, raw)) return own(dir);
-    throw new Locked(null);
+    if (raw ? holderAlive(dir, Number(raw)) : age < 60000) throw new Locked(raw ? Number(raw) : null, what);
+    if (takeOver(parent, dir, raw)) return own(dir);
+    throw new Locked(null, what);
   }
-  throw new Locked(null);
+  throw new Locked(null, what);
+}
+
+// acquireLock, retried for up to `ms`. It sleeps synchronously: it guards short synchronous git commands only.
+export function waitLock(parent, what, ms = 60000) {
+  const end = Date.now() + ms;
+  for (;;) {
+    try { return acquireLock(parent, what); } catch (e) {
+      if (!(e instanceof Locked) || Date.now() >= end) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+    }
+  }
 }
 
 function own(dir) {

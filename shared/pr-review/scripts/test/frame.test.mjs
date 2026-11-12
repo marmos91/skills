@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync, existsSync, rmSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -122,6 +122,28 @@ test(".pr-review.json and CLAUDE.md come from the base branch", async () => {
   cleanupWorktree(dir);
   assert.equal(existsSync(f.worktree), false);
   assert.doesNotMatch(git(fx.repoDir, "worktree", "list"), /\/wt\b/);
+});
+
+test("git writes wait for the clone's git lock: a worktree add in another process and frame's both succeed", async () => {
+  const fx = fixture();
+  stub(fx.head);
+  const other = join(fx.root, "wt-other");
+  // Another process holds the clone's git lock, adds its worktree and keeps the lock for 1.5 s.
+  const p = spawn(process.execPath, ["--input-type=module", "-e", `import { acquireLock } from ${JSON.stringify(join(here, "..", "lib", "state.mjs"))};
+    import { execFileSync } from "node:child_process";
+    const release = acquireLock(${JSON.stringify(join(fx.repoDir, ".git", "pr-review"))});
+    execFileSync("git", ["worktree", "add", "-q", "--detach", ${JSON.stringify(other)}, ${JSON.stringify(fx.base)}], { cwd: ${JSON.stringify(fx.repoDir)} });
+    console.log("HELD"); setTimeout(() => { release(); console.log("FREE"); }, 1500);`], { stdio: ["ignore", "pipe", "inherit"] });
+  const out = [];
+  p.stdout.on("data", (d) => out.push(...String(d).split("\n").filter(Boolean)));
+  await new Promise((res) => p.stdout.once("data", res));
+  const t0 = Date.now();
+  const f = await run(fx);
+  assert.ok(Date.now() - t0 >= 1000, "frame waited for the lock");
+  assert.ok(out.includes("FREE"), "frame's git ran after the other process released the lock");
+  const list = git(fx.repoDir, "worktree", "list");
+  assert.ok(list.includes(other) && list.includes(f.worktree), list);
+  assert.equal(existsSync(join(fx.repoDir, ".git", "pr-review", "lock")), false, "released");
 });
 
 test("PR body is wrapped as data", async () => {
