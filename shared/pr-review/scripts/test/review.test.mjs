@@ -345,6 +345,13 @@ test("a fixed thread longer than one page gets a reply: its newest comment is un
   assert.ok(m.some((x) => x.key.includes("comments/11/replies")));
 });
 
+test("\"No new findings.\" is dropped when a finding posts", async () => {
+  const fx = fixture(); routes(fx);
+  const { r } = await go(fx, happy({ compose: { body: "No new findings.", comments: [{ id: "c1", body: "**must:** off by one" }] } }));
+  assert.equal(r.exit, 0, r.summary);
+  assert.doesNotMatch(posts(fx)[0].body, /No new findings/);
+});
+
 test("an earlier must still open blocks approve", async () => {
   const fx = fixture();
   routes(fx, { threads: [{ id: "T1", isResolved: false, isOutdated: false, viewerCanResolve: true, path: "a.js", line: 1, originalLine: 1,
