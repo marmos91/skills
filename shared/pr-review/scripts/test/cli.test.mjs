@@ -105,7 +105,9 @@ test("doctor: a seat whose probe fails is named and the exit is 1", async (t) =>
   const fx = fixture();
   Object.assign(process.env, { XDG_STATE_HOME: fx.env.XDG_STATE_HOME, XDG_CONFIG_HOME: fx.env.XDG_CONFIG_HOME });
   const cfg = join(fx.root, "c.json");
-  writeFileSync(cfg, JSON.stringify({ apiKey: "zz-unknown-key-value", seats: [{ harness: "claude", model: "opus", thinking: "high" }, { harness: "pi", model: "bad/model", thinking: "high" }, { harness: "claude", model: "opus", thinking: "medium" }] }));
+  mkdirSync(join(fx.env.XDG_CONFIG_HOME, "pr-review", "lenses"), { recursive: true });
+  writeFileSync(join(fx.env.XDG_CONFIG_HOME, "pr-review", "lenses", "perf.md"), "Look for slow loops.\n");
+  writeFileSync(cfg, JSON.stringify({ apiKey: "zz-unknown-key-value", lenses: { security: { enabled: false } }, seats: [{ harness: "claude", model: "opus", thinking: "high" }, { harness: "pi", model: "bad/model", thinking: "high" }, { harness: "claude", model: "opus", thinking: "medium" }] }));
   const gh = join(fx.root, "gh");
   writeFileSync(gh, "#!/bin/sh\nexit 0\n");
   chmodSync(gh, 0o755);
@@ -131,6 +133,7 @@ test("doctor: a seat whose probe fails is named and the exit is 1", async (t) =>
   assert.match(out, /ok\s+seat claude:opus/);
   assert.match(out, /WARN\s+jev: not found/);
   assert.match(out, /claude mode: --restricted/);
+  assert.match(out, /lenses: adversarial, correctness, simplification, architecture, security \(off\), perf \(user\)/);
   assert.match(out, /effort low: \d+ children per PR/);
   assert.ok(!out.includes("zz-unknown-key-value"), "unknown config keys are not printed");
   assert.ok(!out.includes("ghp_" + "a".repeat(36)), "child errors are redacted");

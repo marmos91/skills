@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -202,4 +202,43 @@ test("seat ids: harness:model, later duplicates #2, #3 in config order; an expli
   assert.equal(seatId(c.judge), "claude:opus");
   assert.throws(() => loadConfig({ userPath: tmp(JSON.stringify({ seats: [s("a", "high", "x"), s("b", "high", "x")] })) }), /seats.*id/);
   assert.throws(() => loadConfig({ userPath: tmp(JSON.stringify({ seats: [{ ...s("a", "high"), id: "" }, s("b", "high")] })) }), /id/);
+});
+
+// A user config folder with lens files next to config.json.
+const lensDir = (files, cfg = "{}") => {
+  const d = mkdtempSync(join(tmpdir(), "prr-lens-"));
+  mkdirSync(join(d, "lenses"));
+  for (const [n, t] of Object.entries(files)) writeFileSync(join(d, "lenses", n), t);
+  writeFileSync(join(d, "config.json"), cfg);
+  return { userPath: join(d, "config.json"), lensDir: join(d, "lenses") };
+};
+
+test("a user lens file is a lens: on by default, seats and enabled set like a built-in", () => {
+  const c = loadConfig({ ...lensDir({ "perf.md": "Look for slow paths.\n", "notes.txt": "x" }) });
+  assert.deepEqual(Object.keys(c.lenses), [...LENSES, "perf"]);
+  assert.equal(c.lenses.perf.enabled, true);
+  const two = [{ harness: "pi", model: "a", thinking: "low" }, { harness: "pi", model: "b", thinking: "low" }];
+  const c2 = loadConfig({ ...lensDir({ "perf.md": "x" }, JSON.stringify({ lenses: { perf: { enabled: false, seats: two } } })) });
+  assert.equal(c2.lenses.perf.enabled, false);
+  assert.deepEqual(seatsForLens(c2, "perf").map(seatId), ["pi:a", "pi:b"]);
+});
+
+test("a bad user lens file is a config error that names the file", () => {
+  for (const [file, text, re] of [
+    ["Perf.md", "x", /Perf\.md: the name must use only a-z, 0-9 and -/],
+    ["my_lens.md", "x", /my_lens\.md: the name/],
+    ["security.md", "x", /security\.md: security is a built-in lens/],
+    ["hygiene.md", "x", /hygiene\.md: hygiene is a built-in lens/],
+    ["big.md", "x\n".repeat(41), /big\.md: over 40 lines/],
+    ["wide.md", "x".repeat(4001), /wide\.md: over 40 lines or 4000 characters/],
+    ["empty.md", "\n", /empty\.md: the file is empty/],
+  ]) assert.throws(() => loadConfig({ ...lensDir({ [file]: text }) }), re, file);
+  assert.deepEqual(Object.keys(loadConfig({ ...lensDir({ "ok.md": "x\n".repeat(40) }) }).lenses).at(-1), "ok");
+});
+
+test("a repo config cannot add a lens: only user lens files are lenses", () => {
+  assert.throws(() => loadConfig({ repoText: '{"lenses":{"perf":{"enabled":true}}}' }), /lenses\.perf must be a known lens/);
+  const dirs = lensDir({ "perf.md": "x" });
+  assert.equal(loadConfig({ ...dirs, repoText: '{"lenses":{"perf":{"enabled":false}}}' }).lenses.perf.enabled, false);
+  assert.throws(() => loadConfig({ ...dirs, repoText: '{"lenses":{"perf":{"seats":[]}}}' }), /not allowed at repo level: lenses\.perf\.seats/);
 });
