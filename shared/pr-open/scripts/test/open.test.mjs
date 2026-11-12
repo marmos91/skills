@@ -122,6 +122,24 @@ test("secret in the diff: blocked, the hit is masked, nothing pushed", async () 
   assert.equal(remoteHas(dir, "feat/b"), false);
 });
 
+test("a secret added in one commit and removed in the next: blocked", async () => {
+  const { dir, bodyFile } = await stack({ test: false });
+  commit(dir, "conf.txt", `token=${"ghp_" + "A1b2C3d4".repeat(5)}\n`, "feat: conf");
+  commit(dir, "conf.txt", "token=\n", "fix: drop token");
+  await runTests(dir, 'echo "ℹ pass 1"', { quiet: true });
+  const gh = ghStub(routes());
+  await assert.rejects(openPr(dir, { title: "feat: b", bodyFile, base: "feat/a" }), (e) => e instanceof Blocked && e.detail.hits.length > 0);
+  assert.equal(created(gh), undefined);
+});
+
+test("a secret in the test command would reach the body: blocked", async () => {
+  const { dir, bodyFile } = await stack({ test: false });
+  await runTests(dir, `echo "ℹ pass 1" # ${"ghp_" + "A1b2C3d4".repeat(5)}`, { quiet: true });
+  const gh = ghStub(routes());
+  await assert.rejects(openPr(dir, { title: "feat: b", bodyFile, base: "feat/a" }), (e) => e instanceof Blocked && e.detail.hits.length > 0);
+  assert.equal(created(gh), undefined);
+});
+
 test("a PR is already open: returned, no push, no create", async () => {
   const { dir, bodyFile } = await stack();
   const gh = ghStub(routes({ "pr list --head feat/b": { stdout: [{ number: 9, url: "https://github.com/o/r/pull/9" }] } }));

@@ -68,11 +68,12 @@ export async function openPr(dir, { title, bodyFile, base, draft = false }) {
   const check = checkBranch(dir, `origin/${base}`, { title, body, allow: readOverride(dir).allow ?? [] });
   if (!check.ok) throw new Blocked("unsigned commits or AI mentions", check);
 
-  const hits = secretHits(`${git(dir, "diff", `origin/${base}...HEAD`)}\n${title}\n${body}`);
+  // Every commit's patch and message is pushed, not only the net diff; the body is scanned as it will be posted.
+  const final = buildBody({ body, record, parent, parentPr: parentPr?.number });
+  const hits = secretHits(`${git(dir, "log", "-p", "--format=%B", `origin/${base}..HEAD`)}\n${title}\n${final}`);
   if (hits.length) throw new Blocked("the secret scan found a hit", { hits });
 
   if (!/#\d+/.test(body)) warnings.push("no linked issue");
-  const final = buildBody({ body, record, parent, parentPr: parentPr?.number });
   const file = join(git(dir, "rev-parse", "--absolute-git-dir"), "pr-open", `body-${sha}.md`);
   mkdirSync(join(file, ".."), { recursive: true });
   writeFileSync(file, final);
