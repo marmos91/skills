@@ -196,6 +196,7 @@ export async function main(argv, deps = {}) {
   const maxDiffLines = v["max-diff-lines"] === undefined ? undefined : Number(v["max-diff-lines"]);
   if (maxDiffLines !== undefined && !(/^\d+$/.test(v["max-diff-lines"]) && maxDiffLines > 0)) throw new Usage("--max-diff-lines must be a positive integer");
   const lenses = v.lens?.split(",").map((s) => s.trim()).filter(Boolean);
+  if (lenses && !lenses.length) throw new Usage("--lens needs at least one lens name");
   const bad = lenses?.filter((l) => !LENSES.includes(l));
   if (bad?.length) throw new Usage(`unknown lens ${bad.join(", ")}; lenses: ${LENSES.join(", ")}`);
   const r = await review({

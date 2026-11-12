@@ -55,6 +55,15 @@ test("a command with no --repo and no git remote is a usage error", () => {
   assert.match(r.stderr, /--repo/);
 });
 
+test("an empty --lens list is a usage error", () => {
+  const fx = fixture();
+  for (const lens of ["", ","]) {
+    const r = cli(fx, "review", "7", "--lens", lens);
+    assert.equal(r.status, 1, JSON.stringify(lens));
+    assert.match(r.stderr, /--lens needs at least one lens name/);
+  }
+});
+
 test("status shows a stale lock, open questions, an unfinished run and the interrupted tick", async () => {
   const fx = fixture();
   process.env.XDG_STATE_HOME = fx.env.XDG_STATE_HOME;
