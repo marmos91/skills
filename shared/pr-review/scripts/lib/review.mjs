@@ -5,40 +5,40 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync,
 import { basename, join, resolve, sep } from "node:path";
 import * as github from "./github.mjs";
 import { runChild as realRunChild, ChildFailed, SeatDropped, stopping, harnessFor } from "./child.mjs";
-import { LENSES, WHOLE_PR_LENSES, applyEffort, loadConfig, lowerEffort, pickEffort, plannedChildren, seatId, seatsForLens, userConfigPath, withLimits } from "./config.mjs";
+import { WHOLE_PR_LENSES, applyEffort, loadUserConfig, lowerEffort, pickEffort, plannedChildren, seatId, seatsForLens, withLimits } from "./config.mjs";
 import { frame as realFrame, git, readTree, cleanupWorktree, HeadMoved, DiffTooLarge } from "./frame.mjs";
 import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.mjs";
 import { tally } from "./tally.mjs";
 import { filterNew, fingerprint } from "./convergence.mjs";
-import { parseHunks, place } from "./hunks.mjs";
+import { diffLine, parseHunks, place } from "./hunks.mjs";
 import { verdict } from "./verdict.mjs";
 import { redact, scanOutbound } from "./secrets.mjs";
 import { hygiene as realHygiene } from "./hygiene.mjs";
 import { limiter } from "./limit.mjs";
 import { decide as realDecide } from "./decider.mjs";
 import { appliedAnswer, pendingAnswers, queueQuestion } from "./questions.mjs";
-import { FINAL_STAGE, VERSION, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, writeAtomic } from "./state.mjs";
+import { FINAL_STAGE, VERSION, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, usageByStage, writeAtomic } from "./state.mjs";
 
 export const STAGES = ["frame", "round1", "merge", "round2", "tally", "decide", "compose", "post"];
 const RANK = { must: 0, should: 1, nit: 2 };
 const sha1 = (s) => createHash("sha1").update(s).digest("hex");
 const readJson = (f) => JSON.parse(readFileSync(f, "utf8"));
 const save = (f, v) => writeAtomic(f, JSON.stringify(v, null, 2) + "\n");
-// fp= on inline comments lets a later run link a thread to its finding (spec 6.4); key= is the dedupe key.
+// fp= on inline comments lets a later run link a thread to its findings (spec 6.4), one fp per finding the comment covers; key= is the dedupe key.
 const marker = (runId, sha, key, fp) => `<!-- pr-review run=${runId} sha=${sha} key=${key}${fp ? ` fp=${fp}` : ""} -->`;
 // Fields the seats and the judge see; engine bookkeeping stays out of prompts.
 const view = ({ seats, fp, answered, ...c }) => c;
 // GitHub text that the engine puts into a posted body: no markup, no mentions, no marker look-alikes.
 export const safeText = (s) => String(s ?? "").replace(/[<>@`]/g, "").replace(/\s+/g, " ").trim().slice(0, 80);
 const ruleIds = (hits) => [...new Set(hits.map((h) => h.split(":")[0]))].join(", ");
-const MARKER_FP = /<!-- pr-review run=\S+ sha=\S+ key=[0-9a-f]{40} fp=([0-9a-f]{40}) -->/;
+const MARKER_FP = /<!-- pr-review run=\S+ sha=\S+ key=[0-9a-f]{40} fp=([0-9a-f]{40}(?:,[0-9a-f]{40})*) -->/;
 
 /** Config, flag or state problems: exit 1, not a failed stage. */
 export class SetupError extends Error { constructor(m) { super(m); this.name = "SetupError"; } }
 // maxDiffLines (--max-diff-lines) wins over review.max_diff_lines at every level.
 const config0 = (o, maxDiffLines) => {
   let c;
-  try { c = loadConfig(o); } catch (e) { throw new SetupError(e.message); }
+  try { c = loadUserConfig(o); } catch (e) { throw new SetupError(e.message); }
   if (maxDiffLines) c.review.max_diff_lines = maxDiffLines;
   return c;
 };
@@ -57,9 +57,10 @@ export async function review(opts) {
     gh: github, runChild: realRunChild, decide: realDecide, stopping: () => stopping, frame: realFrame, hygiene: realHygiene, log: () => {},
     ...opts, mode, repoState,
   };
-  // Reentrant: the loop calls review() while it holds the repo lock.
-  const mine = () => { try { return Number(readFileSync(join(repoState, "lock", "pid"), "utf8")) === process.pid; } catch { return false; } };
-  const release = lock && !mine() ? acquireLock(repoState) : () => {};
+  // One run per PR: reviews of other PRs run in parallel. Reentrant: the loop calls review() while it holds this PR's lock.
+  const prDir = join(repoState, "pr", String(n));
+  const mine = () => { try { return Number(readFileSync(join(prDir, "lock", "pid"), "utf8")) === process.pid; } catch { return false; } };
+  const release = lock && !mine() ? acquireLock(prDir, ` of PR #${n}`) : () => {};
   try {
     for (let attempt = 0; ; attempt++) {
       try { return await once(o, o.restart && attempt === 0); } catch (e) {
@@ -152,6 +153,15 @@ function hunk(f, c) {
   try { return readFileSync(file, "utf8").split("\n").slice(Math.max(0, c.line - 6), c.line + 5).join("\n"); } catch { return ""; }
 }
 
+// Compose writes text: it gets the repo's review guidance, not the whole tree (CONTRIBUTING.md, CLAUDE.md, ...).
+// REVIEW.md stays whole; only the review.guidance files after it are capped.
+const GUIDANCE_CHARS = 8000;
+export function composeGuidance(ctxDir, config) {
+  const dir = join(ctxDir, "guidance");
+  const extra = readTree(dir, (p) => p !== "REVIEW.md" && config.review.guidance.includes(p)).trim();
+  return [readTree(dir, (p) => p === "REVIEW.md").trim(), extra.length > GUIDANCE_CHARS ? `${extra.slice(0, GUIDANCE_CHARS)}\n[cut]` : extra].filter(Boolean).join("\n\n");
+}
+
 // Spec 7.4: an answer given at an older sha holds only while the finding's line is the same code at the same place.
 // A failed diff (the old sha is gone) counts as changed.
 export function codeMoved(repoDir, q, head) {
@@ -190,9 +200,11 @@ function ciState(c) {
 
 async function once(o, restart) {
   const { repo, n, mode, gh, log, repoState } = o;
-  const userPath = userConfigPath();
-  const userConfig = config0({ userPath, cliPath: o.configPath }, o.maxDiffLines);
+  const userConfig = config0({ cliPath: o.configPath }, o.maxDiffLines);
   let config = userConfig;
+  // User lenses load with the config, so --lens is checked here; a repo config cannot add a lens.
+  const bad = o.lenses?.filter((l) => !Object.hasOwn(userConfig.lenses, l));
+  if (bad?.length) throw new SetupError(`unknown lens ${bad.join(", ")}; lenses: ${Object.keys(userConfig.lenses).join(", ")}`);
   const head = (await gh.pr(repo, n)).headSha;
   const runDir = pickRunDir(repoState, n, head, { restart });
   const runId = basename(runDir);
@@ -207,14 +219,14 @@ async function once(o, restart) {
     return { exit: 0, runDir, skipped: true, summary: `already reviewed ${head}; use --restart to review it again` };
   }
   const f = await o.frame({ repo, n, repoDir: o.repoDir ?? process.cwd(), runDir, config, gh, prState: prState(repoState, n) });
-  config = config0({ userPath, cliPath: o.configPath, repoText: f.repoConfigText ?? undefined }, o.maxDiffLines);
+  config = config0({ cliPath: o.configPath, repoText: f.repoConfigText ?? undefined }, o.maxDiffLines);
 
   // A resumed run keeps its effort and lenses: its finished children depend on them.
   const runFile = join(runDir, "run.json");
   if (!existsSync(runFile)) {
     let effort = o.effort ?? (mode === "loop" ? config.loop.effort : config.effort);
     if (effort === "auto") effort = pickEffort(f.changedPaths, config);
-    const lenses = LENSES.filter((l) => config.lenses[l].enabled && (!o.lenses || o.lenses.includes(l)));
+    const lenses = Object.keys(config.lenses).filter((l) => config.lenses[l].enabled && (!o.lenses || o.lenses.includes(l)));
     if (!lenses.length) throw new SetupError("no lens runs: the requested lens is disabled in the config, or every lens is disabled");
     // Each diff part multiplies round 1: an effort the user did not pin (config, auto, the loop) steps down
     // until the PR fits max_children.
@@ -232,9 +244,11 @@ async function once(o, restart) {
     }
     // A lens the user runs but this run skips (--lens, or off in the repo config) counts as failed: no APPROVE.
     // planned: the count for this run's merged config, which status shows.
-    save(runFile, { version: VERSION, effort, lenses, missing: LENSES.filter((l) => userConfig.lenses[l].enabled && !lenses.includes(l)), planned: count(effort) });
+    save(runFile, { version: VERSION, effort, lenses, missing: Object.keys(userConfig.lenses).filter((l) => userConfig.lenses[l].enabled && !lenses.includes(l)), planned: count(effort) });
   }
   const run = readJson(runFile);
+  const gone = run.lenses.filter((l) => !Object.hasOwn(config.lenses, l));
+  if (gone.length) throw new SetupError(`lens ${gone.join(", ")} of this run is gone (its file was removed); restore it or use --restart`);
   config = applyEffort(config, run.effort);
   const planned = run.planned ?? plannedChildren(config, run.lenses, f.chunks?.length ?? 1);
   log(`effort ${run.effort}: ${planned} children planned; seats ${config.seats.map(seatId).join(", ")}; judge ${seatId(config.judge)}`);
@@ -294,8 +308,9 @@ async function once(o, restart) {
     const id = seatId(seat);
     (bySeat[id] ??= []).push(...v.findings.filter((x) => lenses.includes(x.lens)));
     for (const e of v.earlier ?? []) {
-      const r = earlier.get(e?.thread_id) ?? { fixed: new Set(), open: new Set() };
-      (e?.status === "fixed" ? r.fixed : r.open).add(id);
+      const r = earlier.get(e?.thread_id) ?? { fixed: new Set(), open: new Set(), wrong: new Set(), why: "" };
+      (e?.status === "fixed" ? r.fixed : e?.status === "wrong" ? r.wrong : r.open).add(id);
+      if (e?.status === "wrong" && !r.why) r.why = String(e.evidence ?? "");
       earlier.set(e?.thread_id, r);
     }
   }
@@ -316,9 +331,9 @@ async function once(o, restart) {
   // The judge may reword a repeat (other fingerprint), so an agreed thread on the same line also links a cluster of
   // the SAME lens; a cluster of another lens on that line is a different finding and is kept.
   const agreedLens = new Map((pst.agreed ?? []).map((a) => [a.id, a.lens]));
-  const ours = threads.filter((t) => t.comments[0]?.author === me && t.line != null).map((t) => ({ t, key: MARKER_FP.exec(t.comments[0].body ?? "")?.[1] }));
-  const resolvedThread = (c) => ours.some(({ t, key }) => t.path === c.file && t.line === c.line && key &&
-    (key === c.fp || (agreedLens.has(key) && agreedLens.get(key) === c.lens)));
+  const ours = threads.filter((t) => t.comments[0]?.author === me && t.line != null).map((t) => ({ t, keys: (MARKER_FP.exec(t.comments[0].body ?? "")?.[1] ?? "").split(",").filter(Boolean) }));
+  const resolvedThread = (c) => ours.some(({ t, keys }) => t.path === c.file && t.line === c.line &&
+    keys.some((key) => key === c.fp || (agreedLens.has(key) && agreedLens.get(key) === c.lens)));
   const all = raw.filter((c) => run.lenses.includes(c.lens)).map((c) => {
     const seats = [...new Set(seatsForLens(config, c.lens).map(seatId))].filter((id) => !isDropped(id));
     return { ...c, found: [...new Set(c.found)].filter((s) => seats.includes(s)), seats, fp: fingerprint(c) };
@@ -336,7 +351,9 @@ async function once(o, restart) {
   const ballots = await settled(voters.map((seat, i) => {
     const id = seatId(seat), mine = clusters.filter((c) => c.seats.includes(id) && !c.found.includes(id));
     if (!mine.length) return { id, votes: [] };
-    return child(ctx, "round2", `v~${i}`, { seat, tools: f.shellOk ? "shell" : "read", schema: "vote", prompt: (s, fr = f) => votePrompt(fr, mine.map(view), s.max_turns) }).then((votes) => ({ id, votes: votes ?? [] }));
+    // A vote checks given findings, not the whole PR: 10 turns plus 3 per finding, never above the seat's limit.
+    const turns = Math.min(withLimits(config, seat, undefined, "round2").max_turns, 10 + 3 * mine.length);
+    return child(ctx, "round2", `v~${i}`, { seat: { ...seat, max_turns: turns }, tools: f.shellOk ? "shell" : "read", schema: "vote", prompt: (s, fr = f) => votePrompt(fr, mine.map(view), s.max_turns) }).then((votes) => ({ id, votes: votes ?? [] }));
   }));
   enoughSeats();
   markDone(runDir, "round2");
@@ -423,26 +440,88 @@ async function once(o, restart) {
     return { exit: 4, runDir, planned, summary: `the review summary was blocked by the secret scan twice at ${f.headSha}; see the question, or use --restart` };
   }
   // The held line is engine text, written at post time, so it also counts comments that the secret scan holds back.
+  // A finding off the diff lines goes under "Outside the diff" (engine text), so the judge must not list it too.
+  const hunks = parseHunks(readFileSync(join(f.ctxDir, "diff.patch"), "utf8"));
+  const offDiff = (c) => !diffLine(hunks, c.file, c.line);
+  const earlierAll = readJson(join(f.ctxDir, "earlier.json"));
+  // An earlier finding of ours that 2 seats now judge wrong, and none still open, is retracted first in the body.
+  const retracted = earlierAll.filter((e) => { const r = earlier.get(e.threadId); return r && r.open.size === 0 && r.wrong.size >= 2; });
+  const fixed = earlierAll.filter((e) => { const r = earlier.get(e.threadId); return r && r.open.size === 0 && r.fixed.size >= 2 && !retracted.includes(e); });
+  const blocking = earlierAll.filter((e) => e.severity === "must" && !fixed.includes(e) && !retracted.includes(e));
   const composed = await child(ctx, "compose", "compose", {
     seat: config.judge, schema: "compose",
-    prompt: () => composePrompt(f, [...posted, ...hygItems].map(view), readTree(join(f.ctxDir, "guidance"))),
+    prompt: () => composePrompt(f, [...posted.map((c) => ({ ...view(c), ...(offDiff(c) && { outside: true }) })), ...hygItems.map(view)], composeGuidance(f.ctxDir, config),
+      { retracted: retracted.map((e) => ({ thread_id: e.threadId, file: e.path, line: e.line ?? e.originalLine, finding: e.body, evidence: earlier.get(e.threadId).why })),
+        blocking: blocking.map((e) => ({ thread_id: e.threadId, file: e.path, line: e.line ?? e.originalLine, finding: e.body })) }),
   });
   markDone(runDir, "compose");
   if (o.until === "compose") return finish("compose");
 
   const text = new Map(composed.comments.map((x) => [x.id, x.body]));
-  const items = posted.map((c) => ({ ...c, body: text.get(c.id) ?? `**${c.severity}:** ${c.title}\n\n${c.case}` }));
-  const earlierAll = readJson(join(f.ctxDir, "earlier.json"));
+  // One comment for findings with one root cause and one fix (compose `also`) on the same line, where a later
+  // repeat of either links to the thread. The host carries every fp. An id with its own comment is never folded,
+  // so a host is never folded itself (no chain loses a finding).
+  const byId = new Map(posted.map((c) => [c.id, c]));
+  const hosts = new Set(composed.comments.map((x) => x.id).filter((id) => byId.has(id))), hostOf = new Map();
+  for (const x of composed.comments) {
+    if (!hosts.has(x.id)) continue;
+    const h = byId.get(x.id);
+    for (const id of x.also ?? []) {
+      const c = byId.get(id);
+      if (c && !hosts.has(id) && !hostOf.has(id) && c.file === h.file && c.line === h.line) hostOf.set(id, x.id);
+    }
+  }
+  const folded = posted.filter((c) => hostOf.has(c.id));
+  const items = posted.filter((c) => !hostOf.has(c.id)).map((c) => ({
+    ...c, fps: [c.fp, ...folded.filter((o) => hostOf.get(o.id) === c.id).map((o) => o.fp)],
+    body: text.get(c.id) ?? `**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}`,
+  }));
   // Misses of this run's final round 1: a resume that finished the part clears it.
   const missedNow = run.missed.filter((m) => !done(runDir, "round1", m.key) && !isDropped(m.seat));
-  const fixed = earlierAll.filter((e) => { const r = earlier.get(e.threadId); return r && r.open.size === 0 && r.fixed.size >= 2; });
   let ci = ciOf(f);
   const v = () => verdict({
-    agreed: [...agreed, ...hygItems], earlierMustOpen: earlierAll.filter((e) => e.severity === "must" && !fixed.includes(e)).length,
+    agreed: [...agreed, ...hygItems], earlierMustOpen: blocking.length,
     openQuestions: open.length, failedLenses: run.missing?.length ?? 0, droppedSeats: run.dropped.length + missedNow.length, ci: ci.state, mode, trustedAuthor: f.shellOk, unanimousZero, ownPr: f.ownPr,
   });
-  const bodyOf = (outside, key) => [
-    composed.body.trim(),
+  // "No new findings." over a posted finding contradicts itself: drop it whatever compose wrote
+  const said = composed.body.trim(), anyFinding = posted.length + hygItems.length > 0;
+  // Engine layout of the body (spec 6.8): pass line, corrections, verdict, checks, answers, thread index, praise.
+  // The index lists only ids whose thread went inline (inline: the posted items on diff lines), at their real line.
+  const one = (t) => String(t ?? "").replace(/\s+/g, " ").trim();
+  const plain = (t) => one(t).replace(/[*_`]/g, "");
+  const mustNow = [...agreed, ...hygItems].some((x) => x.severity === "must");
+  const at = (file, line) => `(thread on \`${file}\` L${line})`;
+  const indexOf = (inline) => {
+    const byThread = new Map(inline.map((x) => [x.id, x])), seen = new Set(), critical = [], groups = [];
+    for (const g of composed.index ?? []) {
+      const lines = [];
+      for (const it of g.items ?? []) {
+        const x = byThread.get(hostOf.get(it.id) ?? it.id);
+        if (!x || seen.has(x.id) || !one(it.text)) continue;
+        seen.add(x.id);
+        (byId.get(it.id)?.severity === "must" || x.severity === "must" ? critical : lines).push(`- ${one(it.text)} ${at(x.file, x.line)}`);
+      }
+      if (lines.length) groups.push(`${one(g.theme) || "Other"}:\n${lines.join("\n")}`);
+    }
+    return [critical.length ? `Critical:\n${critical.join("\n")}` : "", ...groups];
+  };
+  // Numbered before the filter: an empty answer must not move the later ones onto the wrong question.
+  const replies = (composed.answers ?? []).slice(0, f.questions?.length ?? 0).map((a, i) => [i + 1, one(a)]).filter(([, a]) => a);
+  const bodyOf = (outside, key, inline) => [
+    f.reviewNumber > 1 ? `${f.reviewNumber === 2 ? "Second pass" : `Pass ${f.reviewNumber}`}, on \`${f.headSha.slice(0, 7)}\`.` : "",
+    ...retracted.map((e) => `Correction: ${one(composed.corrections?.find((x) => x.thread_id === e.threadId)?.text) || "our earlier finding here was wrong."} ${at(e.path, e.line ?? e.originalLine)}`),
+    // A must (earlier and still open, or from this run) blocks the event: a verdict that says nothing blocks would contradict it.
+    (blocking.length && !plain(composed.verdict)) || ((blocking.length || mustNow) && /\bnothing\b[^.]*\bblock/i.test(plain(composed.verdict)))
+      ? (blocking.length
+        ? `${blocking.length} earlier must ${blocking.length === 1 ? "finding is" : "findings are"} still open, so the PR is blocked.`
+        : "The must findings block the merge.")
+      : one(composed.verdict),
+    // Hook for the setup checks (#38): an engine line that says what was checked. Empty until frame sets f.checked.
+    f.checked ? `What was checked: ${one(f.checked)}` : "",
+    replies.length ? `Your questions:\n${replies.map(([i, a]) => `${i}. ${a}`).join("\n")}` : "",
+    ...indexOf(inline),
+    one(composed.praise),
+    anyFinding && /^No new findings\.?$/i.test(said) ? "" : said,
     noTracking ? "No tracking issue or plan." : "",
     outside.length ? `Outside the diff:\n${outside.map((l) => `- ${l}`).join("\n")}` : "",
     open.length ? `${open.length} ${open.length === 1 ? "point is" : "points are"} still open with the reviewer.` : "",
@@ -455,15 +534,15 @@ async function once(o, restart) {
     }),
     ci.line ?? "", marker(runId, f.headSha, key),
   ].filter(Boolean).join("\n\n");
-  const hunks = parseHunks(readFileSync(join(f.ctxDir, "diff.patch"), "utf8"));
   const permalink = `https://github.com/${repo}/blob/${f.headSha}`;
 
   const warnings = (hyg.warnings ?? []).map((w) => `warning: ${w}`);
   if (o.dryRun) {
     const p = place(items.map((x) => ({ file: x.file, line: x.line, body: x.body })), hunks, permalink);
     const file = join(runDir, "review.md");
-    writeFileSync(file, [`event: ${v().event}`, bodyOf(p.body, "dry-run"), ...p.inline.map((x) => `---\n${x.path}:${x.line}\n${x.body}`)].join("\n\n") + "\n");
-    return finish("compose (dry run)", { dryRun: true, file, ...v(), summary: [`dry run: review written to ${file}; ${planned} children planned`, ...warnings].join("\n") });
+    writeFileSync(file, [`event: ${v().event}`, bodyOf(p.body, "dry-run", items.filter((x) => !offDiff(x))), ...p.inline.map((x) => `---\n${x.path}:${x.line}\n${x.body}`)].join("\n\n") + "\n");
+    const tokens = Object.entries(usageByStage(runDir)).map(([st, u]) => `${st} ${["input", "output", "cache_read", "cache_creation"].map((k) => `${k} ${u[k] ?? "?"}`).join(" ")}`);
+    return finish("compose (dry run)", { dryRun: true, file, ...v(), summary: [`dry run: review written to ${file}; ${planned} children planned`, ...(tokens.length ? [`tokens: ${tokens.join("; ")}`] : []), ...warnings].join("\n") });
   }
 
   // Post (spec 6.10). CI may have changed since frame: read it again; a failed read is unknown and blocks APPROVE.
@@ -474,10 +553,18 @@ async function once(o, restart) {
   const now = (await gh.pr(repo, n)).headSha;
   if (now !== f.headSha) throw new HeadMoved(f.headSha, now);
   const clean = [];
+  // A host the scan holds keeps none of its folded findings: they go out on their own, through the same scan.
+  const own = (c) => ({ ...c, fps: [c.fp], body: `**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}` });
+  // One scan per item: each scan spawns gitleaks.
+  const scans = new Map();
+  const scan1 = (x) => { if (!scans.has(x)) scans.set(x, scanOutbound(x.answered ? redact(x.body) : x.body)); return scans.get(x); };
+  const passes = (x) => scan1(x).ok;
+  const heldHosts = new Set(items.filter((x) => !passes(x)).map((x) => x.id));
+  for (const c of folded.filter((c) => heldHosts.has(hostOf.get(c.id)))) { hostOf.delete(c.id); items.push(own(c)); }
   for (const x of items) {
     // Marco answered "post" on a held comment: post it with the secret redacted. If it still hits, it stays out.
     const text = x.answered ? redact(x.body) : x.body;
-    const s = scanOutbound(text);
+    const s = scan1(x);
     if (s.ok) { clean.push({ ...x, body: text }); continue; }
     if (x.answered) continue;
     // Held back. The question keeps the fingerprint and the rule ids only: never the text, which holds the secret.
@@ -492,9 +579,9 @@ async function once(o, restart) {
   const fresh = [];
   const seen = await gh.markerKeys(repo, n); // one fetch for every check of this post phase
   for (const x of clean) if (!seen.has(inlineKey(x))) fresh.push(x);
-  const p = place(fresh.map((x) => ({ file: x.file, line: x.line, body: `${x.body}\n\n${marker(runId, f.headSha, inlineKey(x), x.fp)}` })), hunks, permalink);
+  const p = place(fresh.map((x) => ({ file: x.file, line: x.line, body: `${x.body}\n\n${marker(runId, f.headSha, inlineKey(x), x.fps.join(","))}` })), hunks, permalink);
   const key = sha1(`review\0${runId}`);
-  const body = bodyOf(p.body, key);
+  const body = bodyOf(p.body, key, clean.filter((x) => !offDiff(x)));
   const scan = scanOutbound(body);
   if (!scan.ok) {
     const st = prState(repoState, n);
@@ -531,12 +618,14 @@ async function once(o, restart) {
     });
   }
 
+  // A folded finding counts as posted when its host comment is.
+  const recorded = [...clean, ...folded.filter((c) => clean.some((h) => h.id === hostOf.get(c.id)))];
   let st = prState(repoState, n);
   if (st.lastRunId !== runId) { // a rerun after a crash here must not count the review twice
-    const fps = [...clean, ...rejected, ...hygItems].map((c) => c.fp);
+    const fps = [...recorded, ...rejected, ...hygItems].map((c) => c.fp);
     Object.assign(st, {
       reviews: st.reviews + 1, lastReviewedSha: f.headSha, lastRunId: runId, settled: [...new Set([...st.settled, ...fps])],
-      agreed: [...(st.agreed ?? []), ...clean.map((c) => ({ id: c.fp, lens: c.lens, severity: c.severity, file: c.file, line: c.line, title: c.title }))],
+      agreed: [...(st.agreed ?? []), ...recorded.map((c) => ({ id: c.fp, lens: c.lens, severity: c.severity, file: c.file, line: c.line, title: c.title }))],
     });
     savePrState(repoState, n, st);
   }
@@ -545,7 +634,7 @@ async function once(o, restart) {
   // When the newest comment of the thread is already ours (a reply that said what changed), amend it with the
   // link instead of a second reply. The threads are read again here: the frame-time copy misses a reply posted
   // since (the loop replies between frame and post).
-  const liveThreads = fixed.length ? await gh.threads(repo, n) : [];
+  const liveThreads = fixed.length || retracted.length ? await gh.threads(repo, n) : [];
   for (const e of fixed) {
     st = prState(repoState, n);
     if ((st.resolved ?? []).includes(e.threadId)) continue;
@@ -561,6 +650,15 @@ async function once(o, restart) {
     else if (!seen.has(k)) await gh.reply(repo, n, e.commentId, msg);
     if (t?.viewerCanResolve) await gh.resolve(e.threadId);
     st.resolved = [...(st.resolved ?? []), e.threadId];
+    savePrState(repoState, n, st);
+  }
+  // A retracted thread is closed and recorded, so a later pass never judges it again (frame skips prState.retracted).
+  for (const e of retracted) {
+    st = prState(repoState, n);
+    if ((st.retracted ?? []).includes(e.threadId)) continue;
+    if (liveThreads.find((x) => x.id === e.threadId)?.viewerCanResolve) await gh.resolve(e.threadId);
+    st.resolved = [...(st.resolved ?? []), e.threadId];
+    st.retracted = [...(st.retracted ?? []), e.threadId];
     savePrState(repoState, n, st);
   }
   markDone(runDir, FINAL_STAGE);
@@ -580,7 +678,11 @@ function heldText(repoState, n, runId, fp) {
   const dir = join(repoState, "pr", String(n), "runs", runId ?? "");
   try {
     const c = readJson(join(dir, "clusters.json")).clusters.find((x) => x.fp === fp);
-    const body = readJson(join(dir, "compose", "compose.json")).comments.find((x) => x.id === c?.id)?.body;
+    // Rebuild from the cluster when there is no composed comment of its own (a folded finding), or when the
+    // comment merged others (a held host): those were posted on their own, and must not be posted twice.
+    const cmt = readJson(join(dir, "compose", "compose.json")).comments.find((x) => x.id === c?.id);
+    const body = (cmt && !cmt.also?.length ? cmt.body : undefined)
+      ?? (c && `**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}`);
     return body ? redact(body) : null;
   } catch { return null; }
 }

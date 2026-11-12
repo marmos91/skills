@@ -7,12 +7,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { installSignalHandlers, runChild as realRunChild } from "./lib/child.mjs";
-import { DEFAULTS, EFFORTS, LENSES, applyEffort, loadConfig, plannedChildren, seatId, userConfigPath } from "./lib/config.mjs";
+import { DEFAULTS, EFFORTS, LENSES, applyEffort, lensFileProblem, loadUserConfig, plannedChildren, seatId, userLensDir } from "./lib/config.mjs";
 import { redact } from "./lib/secrets.mjs";
 import { askJev as realAskJev, findJev as realFindJev } from "./lib/decider.mjs";
 import { review, SetupError, STAGES } from "./lib/review.mjs";
 import { answer, markAsked, openQuestions, questionWarnings } from "./lib/questions.mjs";
-import { FINAL_STAGE, Locked, VERSION, done, holderAlive, prState, stateRoot } from "./lib/state.mjs";
+import { FINAL_STAGE, Locked, VERSION, done, holderAlive, prState, stateRoot, usageByStage } from "./lib/state.mjs";
 import { remoteRepos } from "./lib/github.mjs";
 
 // The one signal path: stop the children, then exit; the lock is released on exit.
@@ -76,12 +76,17 @@ function listQuestions(rs) {
   }));
 }
 
+// The lock in `parent` (the repo folder: the tick; a PR folder: a review of that PR), or null.
+function lockOf(parent) {
+  const dir = join(parent, "lock"), raw = readJson(join(dir, "pid")) ?? (existsSync(dir) ? null : undefined);
+  // a lock dir with no pid is stale only after 60 s, as acquireLock treats it
+  const young = () => { try { return Date.now() - statSync(dir).mtimeMs < 60000; } catch { return false; } };
+  return raw === undefined ? null : { pid: raw, stale: raw === null ? !young() : !holderAlive(dir, raw) };
+}
+
 function status(repo) {
   const rs = stateRoot(repo);
-  const raw = readJson(join(rs, "lock", "pid")) ?? (existsSync(join(rs, "lock")) ? null : undefined);
-  // a lock dir with no pid is stale only after 60 s, as acquireLock treats it
-  const young = () => { try { return Date.now() - statSync(join(rs, "lock")).mtimeMs < 60000; } catch { return false; } };
-  const lock = raw === undefined ? null : { pid: raw, stale: raw === null ? !young() : !holderAlive(join(rs, "lock"), raw) };
+  const lock = lockOf(rs);
   const questions = openQuestions(rs).map((q) => ({ id: q.id, pr: q.pr, file: join(rs, "questions", `${q.id}.md`) }));
   const todo = existsSync(join(rs, "todo.md")) ? readFileSync(join(rs, "todo.md"), "utf8") : "";
   const t = readJson(join(rs, "tick.json"));
@@ -89,13 +94,15 @@ function status(repo) {
     let st;
     try { st = prState(rs, n); } catch (e) { return { pr: n, error: `state.json unreadable: ${e.message}` }; }
     const runsDir = join(rs, "pr", String(n), "runs");
+    // newest run by its <sha>-<ms> name, posted or not (dry run, --until): lastRunId tracks only posted reviews
+    const latestRun = ls(runsDir).sort((a, b) => Number(a.slice(a.lastIndexOf("-") + 1)) - Number(b.slice(b.lastIndexOf("-") + 1))).at(-1);
     const runs = ls(runsDir).filter((d) => !done(join(runsDir, d), FINAL_STAGE)).map((d) => {
       const dir = join(runsDir, d), run = readJson(join(dir, "run.json"));
       const childDone = ls(dir).reduce((k, s) => k + ls(join(dir, s)).filter((f) => f.endsWith(".done")).length, 0);
-      return { sha: d.slice(0, d.lastIndexOf("-")), stage: STAGES.find((s) => !done(dir, s)), children: { done: childDone, total: run?.planned ?? null } };
+      return { sha: d.slice(0, d.lastIndexOf("-")), stage: STAGES.find((s) => !done(dir, s)), children: { done: childDone, total: run?.planned ?? null }, tokens: usageByStage(dir) };
     });
     const replies = Object.values(st.replies ?? {}).reduce((a, b) => a + (Number(b) || 0), 0);
-    return { pr: n, reviews: st.reviews, replies, lastReviewedSha: st.lastReviewedSha, questions: questions.filter((q) => q.pr === n).length, runs };
+    return { pr: n, lock: lockOf(join(rs, "pr", String(n))), reviews: st.reviews, replies, lastReviewedSha: st.lastReviewedSha, lastRunTokens: latestRun ? usageByStage(join(runsDir, latestRun)) : {}, questions: questions.filter((q) => q.pr === n).length, runs };
   });
   return {
     repo, paused: existsSync(join(rs, "paused")), lock, questions, warnings: questionWarnings(rs),
@@ -120,7 +127,7 @@ async function doctor(v, { runChild = realRunChild, askJev = realAskJev, findJev
   let repoText;
   try { repoText = execFileSync("git", ["show", "origin/HEAD:.pr-review.json"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }); } catch {}
   let config;
-  try { config = loadConfig({ userPath: userConfigPath(), cliPath: v.config, repoText }); } catch (e) { throw new Usage(e.message); }
+  try { config = loadUserConfig({ cliPath: v.config, repoText }); } catch (e) { throw new Usage(e.message); }
   // only known keys: unknown keys in a user file may hold secrets
   console.log(JSON.stringify(Object.fromEntries(Object.keys(DEFAULTS).map((k) => [k, config[k]])), null, 2));
   let fail = false;
@@ -151,7 +158,12 @@ async function doctor(v, { runChild = realRunChild, askJev = realAskJev, findJev
   }
   line(...gitleaksProbe(gitleaks));
   console.log(`claude mode: --restricted (${process.env.CLAUDE_CODE_OAUTH_TOKEN ? "CLAUDE_CODE_OAUTH_TOKEN" : "login"})`);
-  const lenses = LENSES.filter((l) => config.lenses[l].enabled);
+  const lenses = Object.keys(config.lenses).filter((l) => config.lenses[l].enabled);
+  for (const l of Object.keys(config.lenses).filter((x) => !LENSES.includes(x) && !config.lenses[x].enabled)) {
+    const p = lensFileProblem(userLensDir(), l);
+    if (p) line("WARN", `${p} (the lens is off)`);
+  }
+  console.log(`lenses: ${Object.keys(config.lenses).map((l) => `${l}${LENSES.includes(l) ? "" : " (user)"}${config.lenses[l].enabled ? "" : " (off)"}`).join(", ")}`);
   for (const e of EFFORTS) console.log(`effort ${e}: ${plannedChildren(applyEffort(config, e), lenses)} children per PR (a diff above review.chunk_lines adds round 1 for each part)`);
   return fail ? 1 : 0;
 }
@@ -203,8 +215,6 @@ export async function main(argv, deps = {}) {
   if (maxDiffLines !== undefined && !(/^\d+$/.test(v["max-diff-lines"]) && maxDiffLines > 0)) throw new Usage("--max-diff-lines must be a positive integer");
   const lenses = v.lens?.split(",").map((s) => s.trim()).filter(Boolean);
   if (lenses && !lenses.length) throw new Usage("--lens needs at least one lens name");
-  const bad = lenses?.filter((l) => !LENSES.includes(l));
-  if (bad?.length) throw new Usage(`unknown lens ${bad.join(", ")}; lenses: ${LENSES.join(", ")}`);
   const r = await review({
     ...target(rest[0], v.repo), mode: v.loop ? "loop" : "interactive", effort: v.effort, dryRun: v["dry-run"], until: v.until,
     restart: v.restart, lenses, maxDiffLines, configPath: v.config, log: (l) => console.error(l),

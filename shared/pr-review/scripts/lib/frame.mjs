@@ -5,7 +5,7 @@ import { join, dirname, normalize, isAbsolute } from "node:path";
 import * as github from "./github.mjs";
 import { redact } from "./secrets.mjs";
 import { stripComments } from "./config.mjs";
-import { done, markDone } from "./state.mjs";
+import { done, markDone, waitLock } from "./state.mjs";
 
 export class DiffTooLarge extends Error {
   constructor(lines, cap, msg, hint = "Review it anyway with --max-diff-lines N, or raise review.max_diff_lines in the config.") {
@@ -28,11 +28,30 @@ const TRUSTED = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 // writing.md uses a plain label (must: ...); a bold one (**must:**) counts too
 export const SEVERITY = /^\s*(?:\*\*)?(must|should|nit):(?:\*\*)?/;
 
+// The author's questions in the PR body: a line that ends with "?", or a list item or line under a heading
+// that names questions, up to the next heading. Code fences are skipped. Capped, so a long body stays cheap.
+export function authorQuestions(body) {
+  const out = [];
+  let fence = null, under = false;
+  for (const raw of String(body ?? "").split(/\r?\n/)) {
+    const line = raw.trim();
+    // A fence closes only on the same char, at least as long (CommonMark), so a nested ``` block stays code.
+    const m = line.match(/^(`{3,}|~{3,})/);
+    if (m) { if (!fence) fence = m[1]; else if (m[1][0] === fence[0] && m[1].length >= fence.length) fence = null; continue; }
+    if (fence || !line) continue;
+    // a heading about answers or replies to questions holds answers, not questions
+    if (/^#{1,6}\s/.test(line)) { under = /question/i.test(line) && !/answer|repl/i.test(line); continue; }
+    const text = line.replace(/^(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/, "");
+    if (text && (under || text.endsWith("?"))) out.push(text.slice(0, 300));
+  }
+  return out.slice(0, 10);
+}
+
 export const git = (cwd, args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
 export const gitOk = (cwd, args) => { try { git(cwd, args); return true; } catch { return false; } };
-/** Every file under dir (ctx/guidance), joined; "" when the folder is missing. */
-export function readTree(dir) {
-  try { return readdirSync(dir, { recursive: true }).map((p) => join(dir, p)).filter((p) => statSync(p).isFile()).map((p) => readFileSync(p, "utf8")).join("\n\n"); } catch { return ""; }
+/** Every file under dir (ctx/guidance) whose relative path passes keep, joined; "" when the folder is missing. */
+export function readTree(dir, keep = () => true) {
+  try { return readdirSync(dir, { recursive: true }).filter(keep).map((p) => join(dir, p)).filter((p) => statSync(p).isFile()).map((p) => readFileSync(p, "utf8")).join("\n\n"); } catch { return ""; }
 }
 // Round 1 parts: a folder (a Go package, its tests with it) stays whole when it fits in max lines; folders are
 // packed in path order. sizes: [[path, lines]]. A folder that does not fit splits into units: a file with its test.
@@ -161,23 +180,42 @@ function repoGuidance(text) {
 // A guidance path from config must stay inside ctx/guidance.
 const safePath = (p) => p && !isAbsolute(p) && normalize(p) === p && !p.split("/").includes("..");
 
+const commonDir = (cwd) => git(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).trim();
+// Fetch and worktree add, remove and prune write the clone's .git: reviews of other PRs, in other processes, use the
+// same clone. A short lock in the clone, waited for. In one process git runs synchronously, so a nested call
+// (worktreeAt -> cleanupWorktree) already holds it.
+let gitDepth = 0;
+function withGitLock(common, fn) {
+  if (gitDepth) return fn();
+  const release = waitLock(join(common, "pr-review"), " of the git clone");
+  gitDepth++;
+  try { return fn(); } finally { gitDepth--; release(); }
+}
+
 function worktreeAt(repoDir, wt, sha) {
-  if (existsSync(wt)) {
-    if (gitOk(wt, ["rev-parse", "--is-inside-work-tree"]) && git(wt, ["rev-parse", "HEAD"]).trim() === sha) return;
-    cleanupWorktree(dirname(wt));
-  }
-  gitOk(repoDir, ["worktree", "prune"]); // a wt/ deleted by hand is still registered
-  git(repoDir, ["worktree", "add", "--detach", wt, sha]);
+  withGitLock(commonDir(repoDir), () => {
+    if (existsSync(wt)) {
+      if (gitOk(wt, ["rev-parse", "--is-inside-work-tree"]) && git(wt, ["rev-parse", "HEAD"]).trim() === sha) return;
+      cleanupWorktree(dirname(wt));
+    }
+    gitOk(repoDir, ["worktree", "prune"]); // a wt/ deleted by hand is still registered
+    git(repoDir, ["worktree", "add", "--detach", wt, sha]);
+  });
 }
 
 export function cleanupWorktree(runDir) {
   const wt = join(runDir, "wt");
   if (!existsSync(wt)) return;
-  let main = null;
-  try { main = dirname(git(wt, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).trim()); } catch {}
-  if (main && gitOk(main, ["worktree", "remove", "--force", wt])) return;
-  rmSync(wt, { recursive: true, force: true });
-  if (main) gitOk(main, ["worktree", "prune"]);
+  let common = null;
+  try { common = commonDir(wt); } catch {}
+  if (!common) return void rmSync(wt, { recursive: true, force: true });
+  const main = dirname(common);
+  withGitLock(common, () => {
+    if (!existsSync(wt)) return; // another sweep removed it meanwhile
+    if (gitOk(main, ["worktree", "remove", "--force", wt])) return;
+    rmSync(wt, { recursive: true, force: true });
+    gitOk(main, ["worktree", "prune"]);
+  });
 }
 
 export async function frame({ repo, n, repoDir, runDir, config, gh = github, prState = {} }) {
@@ -192,7 +230,8 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
   const p = await gh.pr(repo, n);
   const viewer = await gh.viewer();
   const head = p.headSha, base = `origin/${p.baseRef}`;
-  git(repoDir, ["fetch", "-q", "origin", `+refs/heads/${p.baseRef}:refs/remotes/origin/${p.baseRef}`, `+refs/pull/${n}/head:refs/pr-review/${n}`]);
+  const common = commonDir(repoDir);
+  withGitLock(common, () => git(repoDir, ["fetch", "-q", "origin", `+refs/heads/${p.baseRef}:refs/remotes/origin/${p.baseRef}`, `+refs/pull/${n}/head:refs/pr-review/${n}`]));
   const fetched = git(repoDir, ["rev-parse", `refs/pr-review/${n}`]).trim();
   if (fetched !== head) throw new HeadMoved(head, fetched);
 
@@ -210,7 +249,7 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
   const isAncestor = !!last && gitOk(repoDir, ["merge-base", "--is-ancestor", last, head]);
   // After a rebase the reviewed commit is no ancestor, but a direct diff against it still shows which lines
   // changed since the review, so settled findings stay settled. A commit GitHub no longer serves falls back to null.
-  const haveLast = !!last && (gitOk(repoDir, ["cat-file", "-e", `${last}^{commit}`]) || gitOk(repoDir, ["fetch", "-q", "origin", last]));
+  const haveLast = !!last && (gitOk(repoDir, ["cat-file", "-e", `${last}^{commit}`]) || withGitLock(common, () => gitOk(repoDir, ["fetch", "-q", "origin", last])));
   const delta = { base: haveLast ? last : null, isAncestor };
 
   const ctxDir = join(runDir, "ctx");
@@ -224,7 +263,8 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
     .map((l) => ({ sha: l.slice(0, l.indexOf(" ")), subject: wrap(l.slice(l.indexOf(" ") + 1)) }));
   const issues = p.closingIssues.map((i) => issue(repo, i, wrap));
   const linked = linkedIssues(p, n).map((i) => issue(repo, i, wrap)).filter((i) => "title" in i); // unreadable: nothing reaches ctx
-  json(ctxDir, "pr.json", { number: n, ...p, headRef: wrap(p.headRef), title: wrap(p.title), body: wrap(p.body), commits, closingIssues: issues, linkedIssues: linked });
+  const questions = authorQuestions(p.body);
+  json(ctxDir, "pr.json", { number: n, ...p, headRef: wrap(p.headRef), title: wrap(p.title), body: wrap(p.body), questions: questions.map(wrap), commits, closingIssues: issues, linkedIssues: linked });
   // Text authors in ctx: [login, association]. A seat with a shell reads all of it, so each one must be trusted.
   const authors = [...issues, ...linked].map((i) => [i.author, i.association]);
 
@@ -247,7 +287,8 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
   for (const t of threads) for (const c of t.comments) authors.push([c.author, c.authorAssociation]);
   json(ctxDir, "threads.json", threads.map((t) => ({ ...t, comments: t.comments.map((c) => ({ ...c, body: mine(c.author, c.body) })) })));
   // The viewer's open earlier findings.
-  json(ctxDir, "earlier.json", threads.filter((t) => !t.isResolved && t.comments[0]?.author === viewer).map((t) => ({
+  // A thread we retracted (prState.retracted) is closed, also when GitHub would not let us resolve it.
+  json(ctxDir, "earlier.json", threads.filter((t) => !t.isResolved && t.comments[0]?.author === viewer && !(prState.retracted ?? []).includes(t.id)).map((t) => ({
     threadId: t.id, commentId: t.comments[0].id, path: t.path, line: t.line, originalLine: t.originalLine, isOutdated: t.isOutdated,
     severity: SEVERITY.exec(t.comments[0].body ?? "")?.[1] ?? null, body: t.comments[0].body,
   })));
@@ -285,7 +326,7 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
   const f = {
     headSha: head, baseRef: p.baseRef, trusted, ownPr: p.author === viewer,
     shellOk: trusted && authors.every(([login, a]) => (login && login === viewer) || TRUSTED.has(a)),
-    reviewNumber: (prState.reviews ?? 0) + 1, delta, ctxDir, worktree, changedPaths, chunks, ci, repoConfigText, nonce,
+    reviewNumber: (prState.reviews ?? 0) + 1, delta, ctxDir, worktree, changedPaths, chunks, ci, repoConfigText, nonce, questions,
   };
   json(runDir, "frame.json", f);
   markDone(runDir, "frame");

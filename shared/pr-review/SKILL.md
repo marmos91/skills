@@ -22,7 +22,8 @@ sh "$SKILL_DIR/scripts/pr-review" review <n> [--repo owner/repo] \
 - `<n>` is the PR number or URL. Without `--repo`, the engine uses the repo
   of the current directory.
 - `--effort auto` picks the level from the changed paths.
-- `--lens a,b` runs only these lenses. The review then never approves.
+- `--lens a,b` runs only these lenses. The review then never approves. Your
+  own lenses are files in `~/.config/pr-review/lenses/<name>.md`.
 - `--max-diff-lines N` reviews a diff above `review.max_diff_lines` (exit
   `1` says when a diff is too large). A diff above `review.chunk_lines`
   splits into parts by folder, and round 1 reviews each part.
@@ -33,7 +34,8 @@ sh "$SKILL_DIR/scripts/pr-review" review <n> [--repo owner/repo] \
 - `--restart` starts a new run. Without it, a run for the same head SHA
   continues from the last finished child.
 - The run can take many minutes. Run it in the foreground and wait. Do not
-  start a second run on the same repo: the lock stops it.
+  start a second run on the same PR: the lock stops it. Runs on other PRs
+  can go at the same time.
 
 ## Exit codes
 
@@ -73,7 +75,7 @@ questions.
 ## Other commands
 
 - `pr-review status [owner/repo]`: open questions, to-do items, unfinished
-  runs and the lock holder.
+  runs, tokens per stage, and the lock holder.
 - `pr-review doctor`: merged config, a probe of each seat, `gh` login, jev,
   gitleaks, and the planned child count per effort level. Run it first on a new
   machine.

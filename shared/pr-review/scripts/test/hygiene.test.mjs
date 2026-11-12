@@ -163,7 +163,7 @@ test("hygiene.enabled false -> no findings and no child", async () => {
 test("hygienePrompt names absolute paths, wraps data, gives the schema", () => {
   const p = hygienePrompt(frame, { diffSummary: " a.js | 2 +-" });
   assert.match(p, new RegExp(`${ctxDir}/pr.json`));
-  assert.match(p, /<<<PR-DATA-[0-9a-f]{8}/);
+  assert.match(p, /<<<PR-DATA-ab12\n/, "the block uses the frame nonce");
   assert.match(p, /a\.js \| 2/);
   assert.match(p, /"lens": "hygiene"/);
   assert.match(p, /should\|nit/);
