@@ -1266,3 +1266,24 @@ test("compose `also` never folds a finding of another file", async () => {
   assert.match(all, /\*\*must:\*\* x/);
   assert.match(all, /\*\*must:\*\* y/, "c2 keeps its own comment");
 });
+
+test("compose `also`: a chain loses no finding; another line of the same file is not folded", async () => {
+  const fx = fixture(); routes(fx);
+  await go(fx, happy({
+    merge: [C("c1"), C("c2", { lens: "security", title: "Leak" }), C("c3", { lens: "simplification", title: "Dead" }), C("c4", { lens: "adversarial", title: "Other line", line: 3 })],
+    "v~2": ["c1", "c2", "c3", "c4"].map(keep),
+    compose: { body: "Changes a.", comments: [
+      { id: "c1", also: ["c2"], body: "**must:** one" },
+      { id: "c3", also: ["c1", "c4"], body: "**must:** three" },
+      { id: "c4", body: "**must:** four" },
+    ] },
+  }));
+  const t = posts(fx)[0].threads;
+  const fp = (o) => fingerprint(F(o));
+  const by = (re) => t.find((x) => re.test(x.body));
+  assert.ok(by(/one/).body.endsWith(`fp=${fp({})},${fp({ lens: "security", title: "Leak" })} -->`), "c2 folds into c1");
+  assert.ok(by(/three/), "c1 keeps its own comment: a host is never folded");
+  assert.ok(by(/four/), "c4, on another line, is not folded");
+  const st = prState(fx.state, N);
+  for (const o of [{}, { lens: "security", title: "Leak" }, { lens: "simplification", title: "Dead" }, { lens: "adversarial", title: "Other line", line: 3 }]) assert.ok(st.settled.includes(fp(o)));
+});

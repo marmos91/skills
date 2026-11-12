@@ -431,11 +431,18 @@ async function once(o, restart) {
   if (o.until === "compose") return finish("compose");
 
   const text = new Map(composed.comments.map((x) => [x.id, x.body]));
-  // One comment for findings with one root cause and one fix (compose `also`, same file): the host carries every fp.
-  const hostOf = new Map(), byId = new Map(posted.map((c) => [c.id, c]));
+  // One comment for findings with one root cause and one fix (compose `also`) on the same line, where a later
+  // repeat of either links to the thread. The host carries every fp. An id with its own comment is never folded,
+  // so a host is never folded itself (no chain loses a finding).
+  const byId = new Map(posted.map((c) => [c.id, c]));
+  const hosts = new Set(composed.comments.map((x) => x.id).filter((id) => byId.has(id))), hostOf = new Map();
   for (const x of composed.comments) {
-    if (!byId.has(x.id) || hostOf.has(x.id)) continue;
-    for (const id of x.also ?? []) if (id !== x.id && byId.get(id)?.file === byId.get(x.id).file && !hostOf.has(id)) hostOf.set(id, x.id);
+    if (!hosts.has(x.id)) continue;
+    const h = byId.get(x.id);
+    for (const id of x.also ?? []) {
+      const c = byId.get(id);
+      if (c && !hosts.has(id) && !hostOf.has(id) && c.file === h.file && c.line === h.line) hostOf.set(id, x.id);
+    }
   }
   const folded = posted.filter((c) => hostOf.has(c.id));
   const items = posted.filter((c) => !hostOf.has(c.id)).map((c) => ({

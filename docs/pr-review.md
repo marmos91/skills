@@ -197,8 +197,8 @@ The judge writes the review from the agreed findings, with the rules in
 snippet or a GitHub `suggestion` block, no filler, no praise, no dashes).
 
 - One finding per inline comment: severity label, the case in one line,
-  then the snippet. Findings with one root cause and one fix in the same
-  file (often 2 lenses on one line) share one comment.
+  then the snippet. Findings with one root cause and one fix on the same
+  line (often from 2 lenses) share one comment.
 - Summary: what the PR does in 2 sentences, then the `must` items, then the
   hygiene list. When a question is still open: "1 point is still open with
   the reviewer."
