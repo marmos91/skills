@@ -24,14 +24,14 @@ const RANK = { must: 0, should: 1, nit: 2 };
 const sha1 = (s) => createHash("sha1").update(s).digest("hex");
 const readJson = (f) => JSON.parse(readFileSync(f, "utf8"));
 const save = (f, v) => writeAtomic(f, JSON.stringify(v, null, 2) + "\n");
-// fp= on inline comments lets a later run link a thread to its finding (spec 6.4); key= is the dedupe key.
+// fp= on inline comments lets a later run link a thread to its findings (spec 6.4), one fp per finding the comment covers; key= is the dedupe key.
 const marker = (runId, sha, key, fp) => `<!-- pr-review run=${runId} sha=${sha} key=${key}${fp ? ` fp=${fp}` : ""} -->`;
 // Fields the seats and the judge see; engine bookkeeping stays out of prompts.
 const view = ({ seats, fp, answered, ...c }) => c;
 // GitHub text that the engine puts into a posted body: no markup, no mentions, no marker look-alikes.
 export const safeText = (s) => String(s ?? "").replace(/[<>@`]/g, "").replace(/\s+/g, " ").trim().slice(0, 80);
 const ruleIds = (hits) => [...new Set(hits.map((h) => h.split(":")[0]))].join(", ");
-const MARKER_FP = /<!-- pr-review run=\S+ sha=\S+ key=[0-9a-f]{40} fp=([0-9a-f]{40}) -->/;
+const MARKER_FP = /<!-- pr-review run=\S+ sha=\S+ key=[0-9a-f]{40} fp=([0-9a-f]{40}(?:,[0-9a-f]{40})*) -->/;
 
 /** Config, flag or state problems: exit 1, not a failed stage. */
 export class SetupError extends Error { constructor(m) { super(m); this.name = "SetupError"; } }
@@ -316,9 +316,9 @@ async function once(o, restart) {
   // The judge may reword a repeat (other fingerprint), so an agreed thread on the same line also links a cluster of
   // the SAME lens; a cluster of another lens on that line is a different finding and is kept.
   const agreedLens = new Map((pst.agreed ?? []).map((a) => [a.id, a.lens]));
-  const ours = threads.filter((t) => t.comments[0]?.author === me && t.line != null).map((t) => ({ t, key: MARKER_FP.exec(t.comments[0].body ?? "")?.[1] }));
-  const resolvedThread = (c) => ours.some(({ t, key }) => t.path === c.file && t.line === c.line && key &&
-    (key === c.fp || (agreedLens.has(key) && agreedLens.get(key) === c.lens)));
+  const ours = threads.filter((t) => t.comments[0]?.author === me && t.line != null).map((t) => ({ t, keys: (MARKER_FP.exec(t.comments[0].body ?? "")?.[1] ?? "").split(",").filter(Boolean) }));
+  const resolvedThread = (c) => ours.some(({ t, keys }) => t.path === c.file && t.line === c.line &&
+    keys.some((key) => key === c.fp || (agreedLens.has(key) && agreedLens.get(key) === c.lens)));
   const all = raw.filter((c) => run.lenses.includes(c.lens)).map((c) => {
     const seats = [...new Set(seatsForLens(config, c.lens).map(seatId))].filter((id) => !isDropped(id));
     return { ...c, found: [...new Set(c.found)].filter((s) => seats.includes(s)), seats, fp: fingerprint(c) };
@@ -431,7 +431,24 @@ async function once(o, restart) {
   if (o.until === "compose") return finish("compose");
 
   const text = new Map(composed.comments.map((x) => [x.id, x.body]));
-  const items = posted.map((c) => ({ ...c, body: text.get(c.id) ?? `**${c.severity}:** ${c.title}\n\n${c.case}` }));
+  // One comment for findings with one root cause and one fix (compose `also`) on the same line, where a later
+  // repeat of either links to the thread. The host carries every fp. An id with its own comment is never folded,
+  // so a host is never folded itself (no chain loses a finding).
+  const byId = new Map(posted.map((c) => [c.id, c]));
+  const hosts = new Set(composed.comments.map((x) => x.id).filter((id) => byId.has(id))), hostOf = new Map();
+  for (const x of composed.comments) {
+    if (!hosts.has(x.id)) continue;
+    const h = byId.get(x.id);
+    for (const id of x.also ?? []) {
+      const c = byId.get(id);
+      if (c && !hosts.has(id) && !hostOf.has(id) && c.file === h.file && c.line === h.line) hostOf.set(id, x.id);
+    }
+  }
+  const folded = posted.filter((c) => hostOf.has(c.id));
+  const items = posted.filter((c) => !hostOf.has(c.id)).map((c) => ({
+    ...c, fps: [c.fp, ...folded.filter((o) => hostOf.get(o.id) === c.id).map((o) => o.fp)],
+    body: text.get(c.id) ?? `**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}`,
+  }));
   const earlierAll = readJson(join(f.ctxDir, "earlier.json"));
   // Misses of this run's final round 1: a resume that finished the part clears it.
   const missedNow = run.missed.filter((m) => !done(runDir, "round1", m.key) && !isDropped(m.seat));
@@ -474,6 +491,11 @@ async function once(o, restart) {
   const now = (await gh.pr(repo, n)).headSha;
   if (now !== f.headSha) throw new HeadMoved(f.headSha, now);
   const clean = [];
+  // A host the scan holds keeps none of its folded findings: they go out on their own, through the same scan.
+  const own = (c) => ({ ...c, fps: [c.fp], body: `**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}` });
+  const passes = (x) => scanOutbound(x.answered ? redact(x.body) : x.body).ok;
+  const heldHosts = new Set(items.filter((x) => !passes(x)).map((x) => x.id));
+  for (const c of folded.filter((c) => heldHosts.has(hostOf.get(c.id)))) { hostOf.delete(c.id); items.push(own(c)); }
   for (const x of items) {
     // Marco answered "post" on a held comment: post it with the secret redacted. If it still hits, it stays out.
     const text = x.answered ? redact(x.body) : x.body;
@@ -492,7 +514,7 @@ async function once(o, restart) {
   const fresh = [];
   const seen = await gh.markerKeys(repo, n); // one fetch for every check of this post phase
   for (const x of clean) if (!seen.has(inlineKey(x))) fresh.push(x);
-  const p = place(fresh.map((x) => ({ file: x.file, line: x.line, body: `${x.body}\n\n${marker(runId, f.headSha, inlineKey(x), x.fp)}` })), hunks, permalink);
+  const p = place(fresh.map((x) => ({ file: x.file, line: x.line, body: `${x.body}\n\n${marker(runId, f.headSha, inlineKey(x), x.fps.join(","))}` })), hunks, permalink);
   const key = sha1(`review\0${runId}`);
   const body = bodyOf(p.body, key);
   const scan = scanOutbound(body);
@@ -531,12 +553,14 @@ async function once(o, restart) {
     });
   }
 
+  // A folded finding counts as posted when its host comment is.
+  const recorded = [...clean, ...folded.filter((c) => clean.some((h) => h.id === hostOf.get(c.id)))];
   let st = prState(repoState, n);
   if (st.lastRunId !== runId) { // a rerun after a crash here must not count the review twice
-    const fps = [...clean, ...rejected, ...hygItems].map((c) => c.fp);
+    const fps = [...recorded, ...rejected, ...hygItems].map((c) => c.fp);
     Object.assign(st, {
       reviews: st.reviews + 1, lastReviewedSha: f.headSha, lastRunId: runId, settled: [...new Set([...st.settled, ...fps])],
-      agreed: [...(st.agreed ?? []), ...clean.map((c) => ({ id: c.fp, lens: c.lens, severity: c.severity, file: c.file, line: c.line, title: c.title }))],
+      agreed: [...(st.agreed ?? []), ...recorded.map((c) => ({ id: c.fp, lens: c.lens, severity: c.severity, file: c.file, line: c.line, title: c.title }))],
     });
     savePrState(repoState, n, st);
   }
@@ -580,7 +604,11 @@ function heldText(repoState, n, runId, fp) {
   const dir = join(repoState, "pr", String(n), "runs", runId ?? "");
   try {
     const c = readJson(join(dir, "clusters.json")).clusters.find((x) => x.fp === fp);
-    const body = readJson(join(dir, "compose", "compose.json")).comments.find((x) => x.id === c?.id)?.body;
+    // Rebuild from the cluster when there is no composed comment of its own (a folded finding), or when the
+    // comment merged others (a held host): those were posted on their own, and must not be posted twice.
+    const cmt = readJson(join(dir, "compose", "compose.json")).comments.find((x) => x.id === c?.id);
+    const body = (cmt && !cmt.also?.length ? cmt.body : undefined)
+      ?? (c && `**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}`);
     return body ? redact(body) : null;
   } catch { return null; }
 }

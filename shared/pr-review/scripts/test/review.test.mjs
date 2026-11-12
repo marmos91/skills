@@ -1233,3 +1233,115 @@ test("sweep: a run at an old head loses its worktree; a folder that cannot go ne
     assert.equal(r3.exit, 0, r3.summary);
   } finally { execFileSync("chmod", ["755", stuck]); }
 });
+
+test("one root cause found by 2 lenses: one comment with both fps; the next run links either lens to it", async () => {
+  const sec = { lens: "security", title: "Total leaks the secret" };
+  const fx0 = fixture(); routes(fx0);
+  const fold = happy({
+    merge: [C("c1"), C("c2", sec)], "v~2": [keep("c1"), keep("c2")],
+    compose: { body: "Changes a.", comments: [{ id: "c1", also: ["c2"], body: "**must:** off by one, and it leaks" }] },
+  });
+  await go(fx0, fold);
+  const t = posts(fx0)[0].threads;
+  assert.equal(t.length, 1);
+  assert.ok(t[0].body.endsWith(` fp=${fingerprint(F())},${fingerprint(F(sec))} -->`), t[0].body);
+  const st = prState(fx0.state, N);
+  assert.ok(st.settled.includes(fingerprint(F(sec))));
+  assert.deepEqual(st.agreed.map((a) => a.lens).sort(), ["correctness", "security"]);
+  // A later review: our thread holds both fps, so a reworded security repeat on that line links to it.
+  const fx = fixture(); routes(fx, { threads: [thread("T1", ME, t[0].body)] });
+  savePrState(fx.state, N, { ...prState(fx.state, N), agreed: st.agreed });
+  const { r } = await go(fx, happy({ merge: [C("c2", { ...sec, title: "Other words" })] }));
+  const rec = JSON.parse(readFileSync(join(r.runDir, "clusters.json"), "utf8"));
+  assert.deepEqual([rec.clusters.length, rec.linked.length], [0, 1]);
+});
+
+test("compose `also` never folds a finding of another file", async () => {
+  const fx = fixture(); routes(fx);
+  await go(fx, happy({
+    merge: [C("c1"), C("c2", { file: "b.js", lens: "security" })], "v~2": [keep("c1"), keep("c2")],
+    compose: { body: "Changes a.", comments: [{ id: "c1", also: ["c2"], body: "**must:** x" }, { id: "c2", body: "**must:** y" }] },
+  }));
+  const all = JSON.stringify(posts(fx)[0]);
+  assert.match(all, /\*\*must:\*\* x/);
+  assert.match(all, /\*\*must:\*\* y/, "c2 keeps its own comment");
+});
+
+test("compose `also`: a chain loses no finding; another line of the same file is not folded", async () => {
+  const fx = fixture(); routes(fx);
+  await go(fx, happy({
+    merge: [C("c1"), C("c2", { lens: "security", title: "Leak" }), C("c3", { lens: "simplification", title: "Dead" }), C("c4", { lens: "adversarial", title: "Other line", line: 3 })],
+    "v~2": ["c1", "c2", "c3", "c4"].map(keep),
+    compose: { body: "Changes a.", comments: [
+      { id: "c1", also: ["c2"], body: "**must:** one" },
+      { id: "c3", also: ["c1", "c4"], body: "**must:** three" },
+    ] },
+  }));
+  const t = posts(fx)[0].threads;
+  const fp = (o) => fingerprint(F(o));
+  const by = (re) => t.find((x) => re.test(x.body));
+  assert.ok(by(/one/).body.endsWith(`fp=${fp({})},${fp({ lens: "security", title: "Leak" })} -->`), "c2 folds into c1");
+  assert.ok(by(/three/), "c1 keeps its own comment: a host is never folded");
+  assert.ok(by(/three/).body.endsWith(`fp=${fp({ lens: "simplification", title: "Dead" })} -->`), "c3 carries only its own fp");
+  const c4 = t.find((x) => x.line === 3);
+  assert.ok(c4, "c4, on another line, is not folded");
+  assert.match(c4.body, /Other line[\s\S]*use 2/, "a refused fold still posts its fix");
+  const st = prState(fx.state, N);
+  for (const o of [{}, { lens: "security", title: "Leak" }, { lens: "simplification", title: "Dead" }, { lens: "adversarial", title: "Other line", line: 3 }]) assert.ok(st.settled.includes(fp(o)));
+});
+
+test("a host held by the secret scan does not swallow its folded findings: they post on their own", async () => {
+  const fx = fixture(); routes(fx);
+  const token = "ghp_" + "A".repeat(36);
+  const sec = { lens: "security", title: "Leak" };
+  const { r } = await go(fx, happy({
+    merge: [C("c1"), C("c2", sec)], "v~2": [keep("c1"), keep("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c1", also: ["c2"], body: `**must:** token ${token} leaks` }] },
+  }), { mode: "loop" });
+  assert.equal(r.exit, 0, r.summary);
+  const t = posts(fx)[0].threads;
+  assert.equal(t.length, 1, "the held host is not posted; c2 is");
+  assert.match(t[0].body, /\*\*must:\*\* Leak[\s\S]*use 2/);
+  assert.ok(t[0].body.endsWith(`fp=${fingerprint(F(sec))} -->`));
+  assert.ok(!JSON.stringify(mutations(fx)).includes(token));
+  assert.equal(openQuestions(fx.state).length, 1, "the host is a question");
+  assert.ok(prState(fx.state, N).settled.includes(fingerprint(F(sec))));
+});
+
+test("a folded finding held on its own: answer post sends it with the secret redacted", async () => {
+  const fx = fixture(); routes(fx);
+  const token = "ghp_" + "B".repeat(36);
+  const sec = { lens: "security", title: "Leak", case: `the token ${token} is logged` };
+  const answers = happy({
+    merge: [C("c1"), C("c2", sec)], "v~2": [keep("c1"), keep("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c1", also: ["c2"], body: `**must:** token ${token} leaks` }] },
+  });
+  await go(fx, answers, { mode: "loop" });
+  const q = openQuestions(fx.state).find((x) => x.fingerprint === fingerprint(F(sec)));
+  assert.ok(q, "the folded finding has its own question");
+  answer(fx.state, q.id, "post");
+  const again = await go(fx, answers, { mode: "loop" });
+  assert.equal(again.r.exit, 0, again.r.summary);
+  const all = JSON.stringify(posts(fx).slice(1));
+  assert.match(all, /\[REDACTED:github-token\] is logged/);
+  assert.ok(!JSON.stringify(mutations(fx)).includes(token));
+});
+
+test("a held host answered post goes out with its own text only, not the folded finding again", async () => {
+  const fx = fixture(); routes(fx);
+  const token = "ghp_" + "C".repeat(36);
+  const sec = { lens: "security", title: "Leak" };
+  const answers = happy({
+    merge: [C("c1"), C("c2", sec)], "v~2": [keep("c1"), keep("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c1", also: ["c2"], body: `**must:** off by one, and Leak via ${token}` }] },
+  });
+  await go(fx, answers, { mode: "loop" });
+  const q = openQuestions(fx.state).find((x) => x.fingerprint === fingerprint(F()));
+  answer(fx.state, q.id, "post");
+  const again = await go(fx, answers, { mode: "loop" });
+  assert.equal(again.r.exit, 0, again.r.summary);
+  const t = posts(fx).slice(1).flatMap((p) => p.threads);
+  assert.equal(t.length, 1);
+  assert.match(t[0].body, /^\*\*must:\*\* Off by one/);
+  assert.doesNotMatch(t[0].body, /Leak/, "the folded finding is not posted twice");
+});

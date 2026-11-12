@@ -197,7 +197,8 @@ The judge writes the review from the agreed findings, with the rules in
 snippet or a GitHub `suggestion` block, no filler, no praise, no dashes).
 
 - One finding per inline comment: severity label, the case in one line,
-  then the snippet.
+  then the snippet. Findings with one root cause and one fix on the same
+  line (often from 2 lenses) share one comment.
 - Summary: what the PR does in 2 sentences, then the `must` items, then the
   hygiene list. When a question is still open: "1 point is still open with
   the reviewer."
@@ -240,7 +241,9 @@ text (`scripts/lib/verdict.mjs`). The first row that matches wins.
    thread is already yours, add the link to that comment instead of a reply.
 
 Each posted body ends with a hidden marker:
-`<!-- pr-review run=<id> sha=<sha> key=<hash> -->`.
+`<!-- pr-review run=<id> sha=<sha> key=<hash> -->`. An inline comment adds
+`fp=<fingerprint>`, one for each finding it covers, separated by commas. A
+later run links a repeat of any of these findings to the thread.
 
 With `--dry-run` the engine writes the review to a file in the run folder,
 prints the planned children and models, and posts nothing.

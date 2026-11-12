@@ -47,6 +47,7 @@ const stages = {
     list(v?.comments, "comments", errs, (x, p) => {
       if (!str(x?.id)) errs.push(`${p}.id: required`);
       if (!str(x?.body)) errs.push(`${p}.body: required`);
+      if (x?.also !== undefined && !(Array.isArray(x.also) && x.also.every(str))) errs.push(`${p}.also: must be an array of finding ids`);
     });
   },
   hygiene(v, errs) {
