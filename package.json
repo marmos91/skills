@@ -34,7 +34,6 @@
     "smoke": "sh tools/smoke.sh"
   },
   "publishConfig": {
-    "access": "public",
-    "provenance": true
+    "access": "public"
   }
 }

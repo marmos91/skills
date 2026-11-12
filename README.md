@@ -32,9 +32,8 @@ release PR with the CHANGELOG. Merging it tags `vX.Y.Z`, bumps
 Each skill is a directory with `SKILL.md` (frontmatter: name, description)
 plus whatever scripts/resources it needs. The agent harness discovers skills
 by directory; the description drives automatic routing.
-A shared skill's command-line tools go in `<skill>/bin/`; `install.sh` links
-each one into `~/.local/bin` (`BIN_DIR`). Add a new CLI to `bin` in
-`package.json` too, so npm and the installer ship it. Add a new `SKILL.md` to
+A skill's command-line tools are listed in `bin` in `package.json`; the
+installer and `install.sh` link each one into `~/.local/bin` (`BIN_DIR`). Add a new `SKILL.md` to
 `extra-files` in `release-please-config.json` and give it `metadata.version`.
 
 ## Skills

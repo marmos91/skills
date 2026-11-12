@@ -48,6 +48,21 @@ function writable(p) {
 
 function place(src, dest, link, log) {
   const name = dest.split(sep).pop();
+  // copy into a hidden staging folder first: an interrupted copy never looks like a user's local copy
+  const tmp = join(dirname(dest), `.skills-copying-${name}`);
+  rmSync(tmp, { recursive: true, force: true });
+  try {
+    if (!link) {
+      cpSync(src, tmp, { recursive: true, verbatimSymlinks: true, filter: (s) => !s.includes(`${sep}__pycache__`) });
+      writable(tmp);
+      writeFileSync(join(tmp, MARKER), `${PKG.name}@${PKG.version}\n`);
+    }
+    replace(src, dest, tmp, link, log);
+  } finally { rmSync(tmp, { recursive: true, force: true }); }
+}
+
+function replace(src, dest, tmp, link, log) {
+  const name = dest.split(sep).pop();
   if (isLink(dest)) {
     const to = resolve(dirname(dest), readlinkSync(dest));
     if (link && to === src) return log(`  ${name}: already linked`);
@@ -63,11 +78,7 @@ function place(src, dest, link, log) {
     }
   }
   if (link) symlinkSync(src, dest);
-  else {
-    cpSync(src, dest, { recursive: true, verbatimSymlinks: true, filter: (s) => !s.includes(`${sep}__pycache__`) });
-    writable(dest);
-    writeFileSync(join(dest, MARKER), `${PKG.name}@${PKG.version}\n`);
-  }
+  else renameSync(tmp, dest);
   log(`  ${name}: ${link ? "linked" : "copied"} (${skillVersion(src) ?? "no version"})`);
 }
 
@@ -104,14 +115,22 @@ export function run(argv, { env = process.env, log = console.log } = {}) {
   // links must outlive the package: npx and pnpm caches, npm ci and upgrades delete installed copies
   if (v.link && !existsSync(join(ROOT, ".git"))) { console.error("skills: --link needs a git clone of the package; drop --link to copy"); return 1; }
   const home = env.HOME || homedir();
-  const dirs = { claude: env.CLAUDE_DIR || join(home, ".claude", "skills"), pi: env.PI_DIR || join(home, ".pi", "agent", "skills") };
-  const binDir = env.BIN_DIR || join(home, ".local", "bin");
+  // resolve: a relative override would make every link relative to the wrong folder
+  const dirs = { claude: resolve(env.CLAUDE_DIR || join(home, ".claude", "skills")), pi: resolve(env.PI_DIR || join(home, ".pi", "agent", "skills")) };
+  const binDir = resolve(env.BIN_DIR || join(home, ".local", "bin"));
   const agents = v.claude || v.pi ? ["claude", "pi"].filter((a) => v[a]) : ["claude", "pi"];
   const all = catalog();
   const unknown = wanted.filter((n) => !all.has(n));
   if (unknown.length) { console.error(`skills: unknown skill ${unknown.join(", ")}; known: ${[...all.keys()].join(", ")}`); return 1; }
   let names = wanted.length ? wanted : [...all.keys()];
   if (cmd === "install") names = [...new Set(names.flatMap((n) => [n, ...(NEEDS[n] ?? [])]))];
+  if (cmd === "uninstall") {
+    // pr-review-loop runs the engine of its sibling pr-review: removing only the engine breaks it
+    for (const [dep, reqs] of Object.entries(NEEDS)) {
+      const left = agents.filter((a) => exists(join(dirs[a], dep)) && ours(join(dirs[a], dep)));
+      if (!names.includes(dep) && left.length && reqs.some((r) => names.includes(r))) { console.error(`skills: ${dep} needs ${reqs.join(", ")}; uninstall ${dep} too`); return 1; }
+    }
+  }
 
   if (cmd === "list") {
     log(`${PKG.name}@${PKG.version} (${ROOT})`);

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -168,4 +168,38 @@ test("--link from an installed package stops: npm can delete it under the links"
     assert.ok(!existsSync(env.CLAUDE_DIR), "nothing installed");
   }
   assert.equal(run(join(root, "proj", "node_modules", "@marmos91", "skills"), "install", "--claude", "jev").status, 0, "a copy still works");
+});
+
+test("an interrupted copy leaves nothing behind, and the next install works", (t) => {
+  const { root, env, run } = setup(t);
+  const pkg = join(root, "pkg");
+  for (const p of ["package.json", "bin", "shared", "pi"]) cpSync(join(REPO, p), join(pkg, p), { recursive: true, verbatimSymlinks: true });
+  const locked = join(pkg, "shared", "jev", "zz-unreadable");
+  writeFileSync(locked, "x");
+  chmodSync(locked, 0); // cpSync fails on it after copying the other files
+  const r = run(pkg, "install", "--claude", "jev");
+  assert.equal(r.status, 1);
+  assert.deepEqual(readdirSync(env.CLAUDE_DIR), [], "no partial folder, no staging folder");
+  chmodSync(locked, 0o644);
+  assert.equal(run(pkg, "install", "--claude", "jev").status, 0);
+  assert.ok(existsSync(join(env.CLAUDE_DIR, "jev", ".skills-package")));
+  assert.ok(!existsSync(join(env.CLAUDE_DIR, "jev.pre-skills-repo")), "our own copy is never taken for a local one");
+});
+
+test("uninstall of pr-review stops while pr-review-loop stays installed", (t) => {
+  const { env, run } = setup(t);
+  assert.equal(run(REPO, "install", "--claude", "pr-review-loop").status, 0);
+  const r = run(REPO, "uninstall", "--claude", "pr-review");
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /pr-review-loop needs pr-review/);
+  assert.ok(existsSync(join(env.CLAUDE_DIR, "pr-review")), "nothing removed");
+  assert.equal(run(REPO, "uninstall", "--claude", "pr-review", "pr-review-loop").status, 0);
+  assert.deepEqual(readdirSync(env.CLAUDE_DIR), []);
+});
+
+test("relative folder overrides become absolute links", (t) => {
+  const { root, env } = setup(t);
+  const r = spawnSync(process.execPath, [join(REPO, "bin", "skills.mjs"), "install", "--claude", "jev"], { cwd: root, env: { ...env, CLAUDE_DIR: "rel/claude", BIN_DIR: "rel/bin" }, encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(readlinkSync(join(root, "rel", "bin", "jev")), join(realpathSync(root), "rel", "claude", "jev", "jev.py")); // cwd is the real path (/private/var on macOS)
 });
