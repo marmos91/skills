@@ -232,6 +232,12 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
         let effort = pcfg.loop.effort === "auto" ? pickEffort(fr.changedPaths, pcfg) : pcfg.loop.effort;
         if (fr.delta?.isAncestor) effort = lowerEffort(effort); // 5.1: delta review one level below
         const res = await review({ repo, n, mode: "loop", effort, repoDir, gh });
+        // Exit 1 (diff too large, ...) repeats on every tick until the PR changes: close its answers and cache it.
+        if (res?.exit === 1) {
+          for (const id of force || []) { appliedAnswer(rs, id); log(`#${n}: answer ${id} closed; the review cannot run`); }
+          log(`#${n}: ${res.summary}; skipped until the PR changes`);
+          return { acted: false, cache: true };
+        }
         if (res?.exit) throw new Error(`review exit ${res.exit}: ${res.summary}; retried next tick`);
         // A skipped review leaves the answers to review(): a pending-review skip keeps them pending (forced again
         // next tick), and the answer-only follow-up closes the ones it handled itself.

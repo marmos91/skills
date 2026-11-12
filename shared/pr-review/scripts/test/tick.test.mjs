@@ -453,8 +453,8 @@ test("a skipped review (pending review on GitHub) leaves the forced answers pend
   assert.deepEqual(pendingAnswers(rs).map((q) => q.id), [id]);
 });
 
-test("a failed review (exit 1 or 4) leaves the forced answers pending", async () => {
-  for (const exit of [1, 4]) {
+test("a failed review (exit 4) leaves the forced answers pending", async () => {
+  for (const exit of [4]) {
     const rs = fresh();
     withBaseline(rs);
     const id = answered(rs, 1, "post");
@@ -463,6 +463,22 @@ test("a failed review (exit 1 or 4) leaves the forced answers pending", async ()
     assert.deepEqual(pendingAnswers(rs).map((q) => q.id), [id], `exit ${exit}`);
     assert.ok(lines.some((l) => /diff too large/.test(l)), `exit ${exit}`);
   }
+});
+
+test("a review that can never run (exit 1) closes its answers and skips the PR until it changes", async () => {
+  const rs = fresh();
+  withBaseline(rs);
+  const id = answered(rs, 1, "post");
+  const lines = [];
+  const f = fakes({ reviewResult: { exit: 1, summary: "diff too large" } });
+  const { out } = await go({ gh: fakeGh({ rows: [row(1, ["review-requested"])] }), f, log: (m) => lines.push(m) });
+  assert.deepEqual(pendingAnswers(rs), []);
+  assert.ok(lines.includes("#1: diff too large; skipped until the PR changes"), lines.join("\n"));
+  assert.deepEqual(prState(rs, 1).cache, { updatedAt: AFTER });
+  assert.equal(out.processed, 0);
+  assert.equal(out.skipped, 1);
+  await go({ gh: fakeGh({ rows: [row(1, ["review-requested"])] }), f });
+  assert.equal(f.reviews.length, 1, "not framed again while unchanged");
 });
 
 test("a reply-only tick leaves no unfinished run folder", async () => {
