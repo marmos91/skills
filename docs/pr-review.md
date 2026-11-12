@@ -715,8 +715,8 @@ Each prints JSON. Without `--pr`, they act on the PR of the current branch.
 
 | Command | What it does |
 |---|---|
-| `pr-respond findings` | Lists the open threads that we did not answer (a council thread with only its first comment counts). A head not seen before counts one round; past `respond.max_rounds` (default 5) with findings left, it exits `5` |
-| `pr-respond decide <thread>` | jev answers: correct on the head? in scope? one clear fix? Prints `fix`, `decline` (a no to one of the first two) or `ask` (a no to the third, or unsure at any step) |
+| `pr-respond findings` | Lists the unresolved threads that pr-respond did not handle at their newest comment by someone else (a council thread with only its first comment counts; a thread longer than one page always counts). Rounds and handled threads live in `pr/<n>/respond.json`, apart from `state.json`. A head not seen before counts one round; past `respond.max_rounds` (default 5) with findings left, it exits `5` |
+| `pr-respond decide <thread>` | Reads the file at the PR head with `git show` (not the working tree). A comment by an author without write access (bots aside) gives `ask` at once. Else jev answers: correct on the head? in scope? one clear fix? Prints `fix`, `decline` (a no to one of the first two) or `ask` (a no to the third, or unsure at any step) |
 | `pr-respond decline <thread> "<reason>"` | Replies with the reason; the thread stays open. Skips when our reply is already the newest comment |
-| `pr-respond fixed <thread> <sha>` | `Fixed in <commit link>.`, or the link added to our newest reply (never a second reply). Resolves only when jev says yes, the commit fixes the case |
+| `pr-respond fixed <thread> <sha>` | Refuses a sha that is not in the PR head. jev checks the commit first; only on a yes: `Fixed in <commit link>.`, or the link added to our newest reply (never a second reply), then resolve. On a no or unsure it posts nothing |
 | `pr-respond summary <points.json>` | One PR comment that answers the review point by point and opens with the count. Once per head |

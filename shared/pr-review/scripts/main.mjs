@@ -168,16 +168,28 @@ async function respondCmd([action, ...args], v, deps) {
   const gh = deps.gh ?? (await import("./lib/github.mjs"));
   const ask = deps.askJev ?? realAskJev;
   const jev = async (q, text) => (await ask(q, text, config)).answer;
-  const diff = (sha) => execFileSync("git", ["show", "--format=%H %s", sha], { encoding: "utf8", maxBuffer: 64 << 20 }).slice(0, 40000);
+  // git at the repo root, whatever subfolder the agent runs in; the PR head must be fetched
+  const git = (...g) => spawnSync("git", g, { encoding: "utf8", maxBuffer: 64 << 20 });
+  const top = git("rev-parse", "--show-toplevel");
+  if (top.status !== 0) throw new Usage("run pr-respond in a clone of the repo");
+  const inRepo = (...g) => git("-C", top.stdout.trim(), ...g);
+  const show = (sha, path) => {
+    if (inRepo("cat-file", "-e", `${sha}^{commit}`).status !== 0) throw new Usage(`the PR head ${sha.slice(0, 7)} is not fetched; run git fetch`);
+    const o = inRepo("show", `${sha}:${path}`);
+    return o.status === 0 ? o.stdout : null;
+  };
+  const diff = (sha) => inRepo("show", "--format=%H %s", sha).stdout.slice(0, 40000);
+  const onHead = (sha, head) => inRepo("merge-base", "--is-ancestor", sha, head).status === 0;
   const [a, b] = args;
   let out;
   try {
     if (action === "findings") out = await r.findings({ repo, n, gh, config });
-    else if (action === "decide") out = await r.decide({ repo, n, threadId: a, gh, jev });
+    else if (action === "decide") out = await r.decide({ repo, n, threadId: a, gh, jev, show });
     else if (action === "decline") out = await r.decline({ repo, n, threadId: a, reason: b, gh });
     else if (action === "fixed") {
-      if (!/^[0-9a-f]{7,40}$/.test(b)) throw new Usage(`not a commit sha: ${b}`);
-      out = await r.fixed({ repo, n, threadId: a, sha: execFileSync("git", ["rev-parse", `${b}^{commit}`], { encoding: "utf8" }).trim(), gh, jev, diff });
+      const full = inRepo("rev-parse", "--verify", "--quiet", `${b}^{commit}`);
+      if (!/^[0-9a-f]{7,40}$/.test(b) || full.status !== 0) throw new Usage(`not a commit sha in this clone: ${b}`);
+      out = await r.fixed({ repo, n, threadId: a, sha: full.stdout.trim(), gh, jev, diff, onHead });
     } else {
       const points = readJson(a);
       if (!Array.isArray(points)) throw new Usage(`${a} must hold a JSON array of points`);
@@ -186,6 +198,7 @@ async function respondCmd([action, ...args], v, deps) {
     }
   } catch (e) {
     if (e instanceof r.RoundCap) { console.error(`pr-respond: ${e.message}`); return 5; }
+    if (e instanceof r.NotOnHead) throw new Usage(e.message);
     throw e;
   }
   console.log(JSON.stringify(out, null, 2));

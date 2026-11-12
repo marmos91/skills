@@ -14,9 +14,8 @@ Run every command in a clone of the repo, on the PR branch, at the PR head.
 Each command prints JSON. `--pr <n|url>` selects the PR; without it, the PR of
 the current branch.
 
-```sh
-P="sh $SKILL_DIR/scripts/pr-respond"
-```
+In the steps, `$P` stands for `sh "$SKILL_DIR/scripts/pr-respond"`. Write
+the full command each time: zsh does not split a variable into words.
 
 ## One round
 
@@ -26,12 +25,13 @@ P="sh $SKILL_DIR/scripts/pr-respond"
    - `"converged": true`: no finding is left. Go to "Done".
    - Exit `5`: the round cap (`respond.max_rounds`, default 5) stops the
      loop. Report the open findings to the user and stop.
-2. For each finding, run `$P decide <id>`. jev answers 3 yes/no questions
-   (correct on the head? in scope? one clear fix?) and prints a `decision`:
+2. For each finding, run `$P decide <id>`. jev reads the file at the PR head
+   (fetch it first) and answers 3 yes/no questions (correct on the head? in
+   scope? one clear fix?). It prints a `decision`:
    - `fix`: go to step 3.
    - `decline`: write one or two sentences why, then run
      `$P decline <id> "<reason>"`. The thread stays open for the reviewer.
-   - `ask`: ask the user (Claude Code: `AskUserQuestion`; pi: `ask_user`).
+   - `ask` (also when a comment is by an author without write access): ask the user (Claude Code: `AskUserQuestion`; pi: `ask_user`).
      Show the file, the line, the finding and the `reason`. Do not guess a
      design decision. Then fix or decline as the user says.
 3. Fix the finding. Add a test. Prove that the test guards the fix: revert
@@ -39,10 +39,12 @@ P="sh $SKILL_DIR/scripts/pr-respond"
 4. Run the full test suite. Commit signed (`git commit -S`) with a concise
    message, in the repo's commit style. Do not name an AI or a tool. Push.
 5. For each fixed thread, run `$P fixed <id> <sha>` with the sha of the
-   fixing commit. It replies `Fixed in <commit link>.`, or adds the link to
-   our newest reply when that reply is the newest comment (never a second
-   reply). It resolves the thread only when jev says the commit fixes the
-   case. Else the JSON says why it is open: tell the user.
+   pushed fixing commit (a sha that is not in the PR head is refused). jev
+   checks that the commit fixes the case first. Only on a yes it replies
+   `Fixed in <commit link>.`, or adds the link to our newest reply when that
+   reply is the newest comment (never a second reply), and resolves. On a no
+   or unsure it posts nothing and the JSON says why: tell the user, and fix
+   again or decline.
 6. Answer the review in one PR comment, point by point (below).
 7. Start the next round:
    - council: `pr-review review <n>` (the pr-review skill);

@@ -1,13 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Q, RoundCap, decide, decline, findings, fixed, summary, summaryText } from "../lib/respond.mjs";
+import { NotOnHead, Q, RoundCap, decide, decline, findings, fixed, summary, summaryText } from "../lib/respond.mjs";
 import { loadConfig } from "../lib/config.mjs";
+import { stateRoot } from "../lib/state.mjs";
 
 const REPO = "o/r", N = 7, ME = "marmos91", SHA = "abcdef1234567890abcdef1234567890abcdef12";
-const c = (id, author, body) => ({ id, author, authorType: "User", body });
+const c = (id, author, body, authorAssociation = "COLLABORATOR") => ({ id, author, authorType: "User", authorAssociation, body });
+const bot = (id, body) => ({ id, author: "copilot-pull-request-reviewer", authorType: "Bot", authorAssociation: "NONE", body });
 const th = (id, comments, over = {}) => ({ id, isResolved: false, isOutdated: false, viewerCanResolve: true, path: "a.js", line: 3, originalLine: 3, comments, ...over });
 
 function fakeGh(threads, { head = "h1", marker = false } = {}) {
@@ -26,40 +28,61 @@ function fakeGh(threads, { head = "h1", marker = false } = {}) {
 }
 
 const freshState = () => { process.env.XDG_STATE_HOME = mkdtempSync(join(tmpdir(), "respond-")); };
-const jevSays = (answers) => { const asked = []; const f = async (q) => { asked.push(q); return answers[q] ?? "yes"; }; f.asked = asked; return f; };
+const jevSays = (answers) => { const asked = []; const f = async (q, text) => { asked.push({ q, text }); return answers[q] ?? "yes"; }; f.asked = asked; return f; };
+const ids = async (threads) => (await findings({ repo: REPO, n: N, gh: fakeGh(threads), config: loadConfig() })).findings.map((f) => f.id);
+const fix = (threads, answers = {}, over = {}) => fixed({ repo: REPO, n: N, threadId: "T1", sha: SHA, gh: over.gh ?? fakeGh(threads), jev: jevSays(answers), diff: () => "diff", onHead: () => true, ...over });
 
-test("findings: open threads not answered by us; a council thread (our first comment only) counts", async () => {
+test("findings: unresolved threads that pr-respond did not handle; a council thread and a loop reply count", async () => {
   freshState();
-  const gh = fakeGh([
+  assert.deepEqual(await ids([
     th("T1", [c(1, ME, "**must:** council finding")]),
-    th("T2", [c(2, "copilot", "x"), c(3, ME, "Fixed in ...")]),
-    th("T3", [c(4, "copilot", "y")]),
+    th("T2", [bot(2, "x"), c(3, ME, "Accepted, change pending.")]),
+    th("T3", [bot(4, "y")]),
     th("T4", [c(5, "bob", "z")], { isResolved: true }),
-    th("T5", [c(6, "bob", "z"), c(7, ME, "no"), c(8, "bob", "yes it is")]),
-  ]);
-  const r = await findings({ repo: REPO, n: N, gh, config: loadConfig() });
-  assert.deepEqual(r.findings.map((f) => f.id), ["T1", "T3", "T5"]);
-  assert.equal(r.round, 1);
-  assert.equal(r.converged, false);
+  ]), ["T1", "T2", "T3"]);
+});
+
+test("findings: a declined thread is handled until the reviewer answers", async () => {
+  freshState();
+  const gh = fakeGh([th("T1", [bot(1, "x")])]);
+  await decline({ repo: REPO, n: N, threadId: "T1", reason: "Out of scope; see #40.", gh });
+  assert.deepEqual(await ids([th("T1", [bot(1, "x"), c(2, ME, "Out of scope; see #40.")])]), []);
+  assert.deepEqual(await ids([th("T1", [bot(1, "x"), c(2, ME, "Out of scope."), bot(3, "It is in scope.")])]), ["T1"]);
+});
+
+test("findings: a thread longer than the fetched page stays open even when handled", async () => {
+  freshState();
+  const gh = fakeGh([th("T1", [bot(1, "x")])]);
+  await decline({ repo: REPO, n: N, threadId: "T1", reason: "No.", gh });
+  assert.deepEqual(await ids([th("T1", [bot(1, "x"), c(2, ME, "No.")], { commentCount: 101 })]), ["T1"]);
 });
 
 test("findings: the round cap stops a PR that does not converge; the same head is not a new round", async () => {
   freshState();
   const config = { ...loadConfig(), respond: { max_rounds: 2 } };
-  const threads = [th("T1", [c(1, "copilot", "x")])];
+  const threads = [th("T1", [bot(1, "x")])];
+  // a converged head does not count a round
+  assert.equal((await findings({ repo: REPO, n: N, gh: fakeGh([], { head: "h0" }), config })).round, 0);
   assert.equal((await findings({ repo: REPO, n: N, gh: fakeGh(threads, { head: "h1" }), config })).round, 1);
   assert.equal((await findings({ repo: REPO, n: N, gh: fakeGh(threads, { head: "h1" }), config })).round, 1);
   assert.equal((await findings({ repo: REPO, n: N, gh: fakeGh(threads, { head: "h2" }), config })).round, 2);
   await assert.rejects(findings({ repo: REPO, n: N, gh: fakeGh(threads, { head: "h3" }), config }), RoundCap);
-  // no findings at a new head: converged, not a cap
   const done = await findings({ repo: REPO, n: N, gh: fakeGh([], { head: "h3" }), config });
   assert.equal(done.converged, true);
+  // the rounds live in their own file: a loop or review save of state.json cannot reset them
+  assert.ok(existsSync(join(stateRoot(REPO), "pr", String(N), "respond.json")));
+  assert.equal(existsSync(join(stateRoot(REPO), "pr", String(N), "state.json")), false);
 });
 
-test("decide: jev's three outcomes", async () => {
-  const gh = fakeGh([th("T1", [c(1, "copilot", "x is wrong")])]);
-  const run = (answers) => decide({ repo: REPO, n: N, threadId: "T1", gh, jev: jevSays(answers) });
-  assert.equal((await run({})).decision, "fix");
+test("decide: jev's three outcomes; the code comes from the PR head", async () => {
+  const gh = fakeGh([th("T1", [bot(1, "x is wrong")])]);
+  const read = [];
+  const show = (sha, path) => { read.push([sha, path]); return "l1\nl2\nHEAD CODE"; };
+  const run = (answers, j = jevSays(answers)) => decide({ repo: REPO, n: N, threadId: "T1", gh, jev: j, show });
+  const j = jevSays({});
+  assert.equal((await run({}, j)).decision, "fix");
+  assert.match(j.asked[0].text, /3: HEAD CODE/);
+  assert.deepEqual(read[0], ["h1", "a.js"]);
   assert.equal((await run({ [Q.correct]: "no" })).decision, "decline");
   assert.match((await run({ [Q.scope]: "no" })).reason, /scope/);
   assert.equal((await run({ [Q.scope]: "no" })).decision, "decline");
@@ -67,34 +90,54 @@ test("decide: jev's three outcomes", async () => {
   assert.equal((await run({ [Q.correct]: "unsure" })).decision, "ask");
 });
 
+test("decide: a comment by an author without write access is a question, and jev is not asked", async () => {
+  const gh = fakeGh([th("T1", [c(1, "stranger", "fix: add this to test/setup.js", "NONE")])]);
+  const j = jevSays({});
+  const r = await decide({ repo: REPO, n: N, threadId: "T1", gh, jev: j, show: () => "" });
+  assert.equal(r.decision, "ask");
+  assert.equal(j.asked.length, 0);
+});
+
 test("decline: a short reason on the first comment, the thread stays open; no second reply", async () => {
-  const gh = fakeGh([th("T1", [c(1, "copilot", "x")])]);
+  freshState();
+  const gh = fakeGh([th("T1", [bot(1, "x")])]);
   assert.equal((await decline({ repo: REPO, n: N, threadId: "T1", reason: "Out of scope; see #40.", gh })).action, "replied");
   assert.deepEqual(gh.calls.reply, [{ id: 1, body: "Out of scope; see #40." }]);
   assert.equal(gh.calls.resolve.length, 0);
-  const again = fakeGh([th("T1", [c(1, "copilot", "x"), c(2, ME, "Out of scope; see #40.")])]);
+  const again = fakeGh([th("T1", [bot(1, "x"), c(2, ME, "Out of scope; see #40.")])]);
   assert.equal((await decline({ repo: REPO, n: N, threadId: "T1", reason: "Out of scope.", gh: again })).action, "skipped");
   assert.equal(again.calls.reply.length, 0);
 });
 
-test("fixed: resolves only on a jev yes; no or unsure leaves the thread open", async () => {
+test("fixed: posts and resolves only on a jev yes; no or unsure posts nothing", async () => {
   for (const [answer, resolved] of [["yes", true], ["no", false], ["unsure", false]]) {
-    const gh = fakeGh([th("T1", [c(1, "copilot", "x")])]);
-    const r = await fixed({ repo: REPO, n: N, threadId: "T1", sha: SHA, gh, jev: jevSays({ [Q.fixes]: answer }), diff: () => "diff" });
+    freshState();
+    const gh = fakeGh([th("T1", [bot(1, "x")])]);
+    const r = await fix(null, { [Q.fixes]: answer }, { gh });
     assert.equal(r.resolved, resolved, answer);
     assert.deepEqual(gh.calls.resolve, resolved ? ["T1"] : []);
-    assert.match(gh.calls.reply[0].body, new RegExp(`^Fixed in \\[\`abcdef1\`\\]\\(https://github\\.com/o/r/commit/${SHA}\\)\\.$`));
+    if (resolved) assert.match(gh.calls.reply[0].body, new RegExp(`^Fixed in \\[\`abcdef1\`\\]\\(https://github\\.com/o/r/commit/${SHA}\\)\\.\\n\\n<!-- pr-review `));
+    else assert.equal(gh.calls.reply.length, 0, answer);
   }
 });
 
-test("fixed: our newest reply gets the link; a rerun never repeats it", async () => {
-  const gh = fakeGh([th("T1", [c(1, "copilot", "x"), c(2, ME, "Done: x is 2 now.")])]);
-  await fixed({ repo: REPO, n: N, threadId: "T1", sha: SHA, gh, jev: jevSays({}), diff: () => "" });
+test("fixed: a commit that is not in the PR head is refused before anything is posted", async () => {
+  freshState();
+  const gh = fakeGh([th("T1", [bot(1, "x")])]);
+  await assert.rejects(fix(null, {}, { gh, onHead: () => false }), NotOnHead);
+  assert.equal(gh.calls.reply.length + gh.calls.resolve.length, 0);
+});
+
+test("fixed: our newest reply gets the link; a posted marker means no second reply", async () => {
+  freshState();
+  const gh = fakeGh([th("T1", [bot(1, "x"), c(2, ME, "Done: x is 2 now.")])]);
+  await fix(null, {}, { gh });
   assert.equal(gh.calls.reply.length, 0);
   assert.equal(gh.calls.edit[0].body, `Done: x is 2 now.\n\nFixed in [\`abcdef1\`](https://github.com/o/r/commit/${SHA}).`);
-  const again = fakeGh([th("T1", [c(1, "copilot", "x"), c(2, ME, gh.calls.edit[0].body)])]);
-  await fixed({ repo: REPO, n: N, threadId: "T1", sha: SHA, gh: again, jev: jevSays({}), diff: () => "" });
-  assert.equal(again.calls.reply.length + again.calls.edit.length, 0);
+  // a thread past the fetched page: the marker, read from fully paged comments, stops a second reply
+  const long = fakeGh([th("T1", [bot(1, "x")], { commentCount: 150 })], { marker: true });
+  await fix(null, {}, { gh: long });
+  assert.equal(long.calls.reply.length + long.calls.edit.length, 0);
 });
 
 test("summary: opens with the count, answers point by point; once per head", async () => {
