@@ -63,7 +63,7 @@ stage, writes a `.done` marker after its output passes the stage schema.
 The engine pins the head SHA for the run and writes one context folder that
 every seat reads:
 
-- PR metadata, the diff, the commits.
+- PR metadata, the diff, the commits, and the author's questions from the PR body.
 - The issues that the PR closes. If there is none, the summary says "No
   tracking issue or plan." and the correctness lens checks the PR against its
   own description.
@@ -194,17 +194,32 @@ API.
 
 The judge writes the review from the agreed findings, with the rules in
 `shared/pr-review/writing.md` (short sentences, the case first, a code
-snippet or a GitHub `suggestion` block, no filler, no praise, no dashes).
+snippet or a GitHub `suggestion` block, no filler, praise only when earned
+and specific, no dashes).
 
-- One finding per inline comment: severity label, the case in one line,
-  then the snippet. Findings with one root cause and one fix on the same
-  line (often from 2 lenses) share one comment.
-- Summary: what the PR does in 2 sentences, then the `must` items, then the
-  hygiene list. When a question is still open: "1 point is still open with
-  the reviewer."
-- A later review of the same PR does not describe the PR again. Its summary
-  lists only new `must` items and items that cannot go inline, or says "No
-  new findings." Fixed earlier findings get their link in the thread.
+- Findings stay inline. One finding per inline comment: severity label and a
+  title that states the conclusion with a verb, the case in one line with the
+  source of each claim ("(ran ...)", "(read file:line)", "I think"), then a
+  paste-ready fix. Findings with one root cause and one fix on the same line
+  (often from 2 lenses) share one comment.
+- The body is a short index of the threads, in this order: the verdict line
+  (what blocks and why, or "Nothing blocks."), the answers to the author's
+  questions, the inline threads grouped by theme with a `Critical` group
+  first (each line ends "(thread on `file` L<n>)"), and 1 or 2 lines of
+  specific praise when earned. Then the hygiene list and the engine lines.
+  The engine writes each index line with the real line of its thread, and
+  leaves out a finding that did not post inline.
+- The author's questions are the lines of the PR body that end with "?", and
+  the lines under a heading that names questions (code blocks skipped, 10 at
+  most). Frame writes them to `pr.json`, and compose answers them first.
+- A later review opens with "Second pass, on `<sha>`." It does not describe
+  the PR again, and says if the author's replies check out. An earlier
+  finding of ours that 2 seats now judge wrong (none open) is retracted first,
+  as "Correction: ...". Its thread is resolved and recorded, so it no longer
+  blocks and a later pass does not judge it again. An earlier `must` of ours
+  that is still open goes to compose, and the verdict names it; the engine
+  never lets the verdict say "Nothing blocks." while it blocks. Otherwise the body says "No new
+  findings." Fixed earlier findings get their link in the thread.
 - A finding off the diff lines is listed once, under "Outside the diff".
 - A finding from a single seat, or one the author must clarify, is written
   as a question to the author.

@@ -383,12 +383,21 @@ The judge writes the review from the agreed findings, with the rules in
 
 - Follow the review guidance of the repo, if it has one (format, tone,
   labels such as `nit:` or Conventional Comments).
-- Inline comments: one finding per comment. Layout: severity label, the case
-  in one line, then a code snippet or a GitHub `suggestion` block.
-- Summary body: what the PR does in 2 sentences, then the `must` items. The
-  engine, not the judge, adds the state lines from the real state: "1 point
-  is still open with the reviewer.", dropped seats, lenses not run, findings
-  left out, and "No tracking issue or plan."
+- Inline comments: one finding per comment. Layout: severity label and a
+  title that states the conclusion with a verb, the case in one line with the
+  source of each claim, then a paste-ready fix (`suggestion` block, `diff`, or
+  exact text). A question says what each answer changes.
+- Body: the judge returns parts, and the engine puts them in order: the pass
+  line ("Second pass, on `<sha>`.", engine text), corrections of our earlier
+  findings that the seats now judge wrong (round 1 `earlier` status `wrong`
+  from 2 seats, none `open`), the verdict line, the "What was checked" line
+  (engine text, from the setup checks), answers to the author's questions,
+  the index of inline threads by theme (a `Critical` group first), optional
+  praise, then other items. The engine renders each index line with the real
+  line of its thread, and drops an id that did not post inline.
+- The engine, not the judge, adds the state lines from the real state: "1
+  point is still open with the reviewer.", dropped seats, lenses not run,
+  findings left out, and "No tracking issue or plan."
 - A finding from a single seat, or one that the author must clarify, is
   phrased as a question to the author.
 

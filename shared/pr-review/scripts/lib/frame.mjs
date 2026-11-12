@@ -28,6 +28,25 @@ const TRUSTED = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 // writing.md uses a plain label (must: ...); a bold one (**must:**) counts too
 export const SEVERITY = /^\s*(?:\*\*)?(must|should|nit):(?:\*\*)?/;
 
+// The author's questions in the PR body: a line that ends with "?", or a list item or line under a heading
+// that names questions, up to the next heading. Code fences are skipped. Capped, so a long body stays cheap.
+export function authorQuestions(body) {
+  const out = [];
+  let fence = null, under = false;
+  for (const raw of String(body ?? "").split(/\r?\n/)) {
+    const line = raw.trim();
+    // A fence closes only on the same char, at least as long (CommonMark), so a nested ``` block stays code.
+    const m = line.match(/^(`{3,}|~{3,})/);
+    if (m) { if (!fence) fence = m[1]; else if (m[1][0] === fence[0] && m[1].length >= fence.length) fence = null; continue; }
+    if (fence || !line) continue;
+    // a heading about answers or replies to questions holds answers, not questions
+    if (/^#{1,6}\s/.test(line)) { under = /question/i.test(line) && !/answer|repl/i.test(line); continue; }
+    const text = line.replace(/^(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/, "");
+    if (text && (under || text.endsWith("?"))) out.push(text.slice(0, 300));
+  }
+  return out.slice(0, 10);
+}
+
 export const git = (cwd, args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
 export const gitOk = (cwd, args) => { try { git(cwd, args); return true; } catch { return false; } };
 /** Every file under dir (ctx/guidance), joined; "" when the folder is missing. */
@@ -244,7 +263,8 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
     .map((l) => ({ sha: l.slice(0, l.indexOf(" ")), subject: wrap(l.slice(l.indexOf(" ") + 1)) }));
   const issues = p.closingIssues.map((i) => issue(repo, i, wrap));
   const linked = linkedIssues(p, n).map((i) => issue(repo, i, wrap)).filter((i) => "title" in i); // unreadable: nothing reaches ctx
-  json(ctxDir, "pr.json", { number: n, ...p, headRef: wrap(p.headRef), title: wrap(p.title), body: wrap(p.body), commits, closingIssues: issues, linkedIssues: linked });
+  const questions = authorQuestions(p.body);
+  json(ctxDir, "pr.json", { number: n, ...p, headRef: wrap(p.headRef), title: wrap(p.title), body: wrap(p.body), questions: questions.map(wrap), commits, closingIssues: issues, linkedIssues: linked });
   // Text authors in ctx: [login, association]. A seat with a shell reads all of it, so each one must be trusted.
   const authors = [...issues, ...linked].map((i) => [i.author, i.association]);
 
@@ -267,7 +287,8 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
   for (const t of threads) for (const c of t.comments) authors.push([c.author, c.authorAssociation]);
   json(ctxDir, "threads.json", threads.map((t) => ({ ...t, comments: t.comments.map((c) => ({ ...c, body: mine(c.author, c.body) })) })));
   // The viewer's open earlier findings.
-  json(ctxDir, "earlier.json", threads.filter((t) => !t.isResolved && t.comments[0]?.author === viewer).map((t) => ({
+  // A thread we retracted (prState.retracted) is closed, also when GitHub would not let us resolve it.
+  json(ctxDir, "earlier.json", threads.filter((t) => !t.isResolved && t.comments[0]?.author === viewer && !(prState.retracted ?? []).includes(t.id)).map((t) => ({
     threadId: t.id, commentId: t.comments[0].id, path: t.path, line: t.line, originalLine: t.originalLine, isOutdated: t.isOutdated,
     severity: SEVERITY.exec(t.comments[0].body ?? "")?.[1] ?? null, body: t.comments[0].body,
   })));
@@ -305,7 +326,7 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
   const f = {
     headSha: head, baseRef: p.baseRef, trusted, ownPr: p.author === viewer,
     shellOk: trusted && authors.every(([login, a]) => (login && login === viewer) || TRUSTED.has(a)),
-    reviewNumber: (prState.reviews ?? 0) + 1, delta, ctxDir, worktree, changedPaths, chunks, ci, repoConfigText, nonce,
+    reviewNumber: (prState.reviews ?? 0) + 1, delta, ctxDir, worktree, changedPaths, chunks, ci, repoConfigText, nonce, questions,
   };
   json(runDir, "frame.json", f);
   markDone(runDir, "frame");

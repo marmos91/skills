@@ -43,7 +43,7 @@ function context(frame, extra = "", from) {
     `Review guidance of the repo, from the base branch, is in ${c("guidance")}/. Follow it.`,
     "",
     prData([
-      `PR title, body, commits and linked issues: ${c("pr.json")}`,
+      `PR title, body, the author's questions, commits and linked issues: ${c("pr.json")}`,
       `Diff: ${c("diff.patch")}`,
       `Review threads and comments: ${c("threads.json")}`,
       `CI state: ${c("ci.json")}. Log of failed CI jobs, if it exists: ${c("ci-failed.log")}`,
@@ -112,7 +112,7 @@ export function round1Prompt(frame, lenses, maxTurns, part) {
     "- `file` is relative to the repo root. `line` is a line number in the head version of that file.",
     "- Add `symbol` (the function or type) when the finding is about one symbol.",
     ...(frame.reviewNumber > 1 && !part?.whole
-      ? [`- Earlier findings of this reviewer that are still open are in ${earlier}. Check each one against the head. Report each in \`earlier\` with its \`thread_id\`, \`status\` (fixed or open), and \`evidence\` (the line that fixes it, or the line that still has the defect). Do not repeat them in \`findings\`.`]
+      ? [`- Earlier findings of this reviewer that are still open are in ${earlier}. Check each one against the head. Report each in \`earlier\` with its \`thread_id\`, \`status\` (fixed, open, or wrong when the code shows that the finding was never right), and \`evidence\` (the line that fixes it, the line that still has the defect, or the line that proves it wrong). Do not repeat them in \`findings\`.`]
       : []),
     "",
     ...lenses.flatMap((l) => [`## Lens: ${l}`, "", lens(l, frame.shellOk), ""]),
@@ -120,7 +120,7 @@ export function round1Prompt(frame, lenses, maxTurns, part) {
     "",
     "## Output",
     OUT,
-    `{"findings": [${finding(sev.join("|"))}]${n > 1 ? ', "earlier": [{"thread_id": "...", "status": "fixed|open", "evidence": "..."}]' : ""}${tracking ? ', "no_tracking": false' : ""}}`,
+    `{"findings": [${finding(sev.join("|"))}]${n > 1 ? ', "earlier": [{"thread_id": "...", "status": "fixed|open|wrong", "evidence": "..."}]' : ""}${tracking ? ', "no_tracking": false' : ""}}`,
     `Use only these lens names: ${lenses.join(", ")}. No findings is a valid result: {"findings": []}.`,
     'If you cannot read the context files or the worktree, set `error` to the reason, for example {"findings": [], "error": "cannot read ctx/diff.patch"}. A review you could not do is never "no findings".',
   ].join("\n");
@@ -183,8 +183,11 @@ export function mergePrompt(frame, findingsBySeat, earlierAgreed = [], maxTurns)
   ].join("\n");
 }
 
-// Open points, dropped seats and the tracking line are engine text (review.mjs bodyOf), never the judge's.
-export function composePrompt(frame, agreed, guidance) {
+// Open points, dropped seats, the tracking line, the pass line and the thread index layout are engine text
+// (review.mjs bodyOf), never the judge's. retracted: earlier threads of ours that the seats now judge wrong;
+// blocking: earlier must threads of ours that are still open, so they block the merge.
+export function composePrompt(frame, agreed, guidance, { retracted = [], blocking = [] } = {}) {
+  const n = frame.reviewNumber ?? 1, questions = frame.questions ?? [];
   return [
     "You are the judge of a review council. Write the review of this PR from the agreed findings.",
     "",
@@ -199,23 +202,37 @@ export function composePrompt(frame, agreed, guidance) {
     "## Agreed findings",
     seatData(json(agreed)),
     "",
+    ...(questions.length ? ["## The author's questions", prData(questions.map((q, i) => `${i + 1}. ${q}`).join("\n")), ""] : []),
+    ...(retracted.length ? ["## Earlier findings of ours that the seats now judge wrong", seatData(json(retracted)), ""] : []),
+    ...(blocking.length ? ["## Earlier must findings of ours that are still open", seatData(json(blocking)), ""] : []),
     "## Rules",
     "- Write 1 inline comment for each finding, with the finding `id` as `id`. Use the inline comment layout of the writing rules.",
     "- When 2 or more findings on the same file and line have the same root cause and the same fix (for example 2 lenses), write 1 comment for all of them. Use the id of one as `id`, and put the other ids in `also`. An id in `also` gets no comment of its own.",
     "- A `suggestion` block replaces only the commented line. When the fix changes more lines, use a plain code snippet.",
     "- A finding with `ask_author: true` is a question to the author. State each other finding directly.",
-    "- Findings with lens `hygiene` get no inline comment. Put them in the summary as one short list.",
-    "- Write the summary body with the summary layout of the writing rules.",
-    ...((frame.reviewNumber ?? 1) > 1
-      ? [`- This is review ${frame.reviewNumber} of this PR. An earlier review already said what the PR does: do not say it again. The summary lists only the new \`must\` items and the other items that cannot go inline. Only when the finding list below is empty, the body is "No new findings."`]
+    "- Findings with lens `hygiene` get no inline comment. Put them in `body` as one short list.",
+    blocking.length
+      ? "- `verdict`: one line. Say what blocks the merge and why. The earlier must findings that are still open block it: name them. Never write \"Nothing blocks.\"."
+      : "- `verdict`: one line. Say what blocks the merge and why, or write \"Nothing blocks.\" when no finding is `must`.",
+    questions.length
+      ? `- \`answers\`: one short answer for each of the author's questions, in order. Check each answer against the code.`
+      : "- `answers`: [] (the PR body has no questions).",
+    "- `index`: group the ids of your inline comments by theme (what the findings are about, not the lens or the severity). One line of text for each id, no location: the engine adds the line of the thread. Do not index a finding with `outside: true` or lens `hygiene`.",
+    "- `praise`: 1 or 2 lines on a specific thing that the author got right, only when it is earned. Else \"\".",
+    "- `body`: other items that cannot go inline, with the review body rules of the writing rules. It can be \"\".",
+    ...(n > 1
+      ? [`- This is review ${n} of this PR. An earlier review already said what the PR does: do not say it again. In \`body\`, say for each earlier thread of ours where the author replied (in ${join(frame.ctxDir, "threads.json")}) whether the reply checks out. Only when the finding list below is empty and nothing else needs saying, \`body\` is "No new findings."`]
       : []),
-    "- A finding with `outside: true` is not on a diff line. The engine lists it under \"Outside the diff\" from your comment: do not list it in the summary.",
+    ...(retracted.length
+      ? ["- `corrections`: for each earlier finding that the seats now judge wrong, one line with its `thread_id` that says plainly that our finding was wrong and why. The engine puts these first."]
+      : []),
+    "- A finding with `outside: true` is not on a diff line. The engine lists it under \"Outside the diff\" from your comment: do not list it in `body`.",
     "- Keep each claim, severity and fix of the findings. Add no findings.",
     "- Add no signature and no marker. The engine adds the marker.",
     "",
     "## Output",
     OUT,
-    '{"body": "summary body", "comments": [{"id": "<finding id>", "also": [], "body": "comment text"}]}',
+    '{"verdict": "one line", "answers": ["..."], "index": [{"theme": "short theme", "items": [{"id": "<finding id>", "text": "one line"}]}], "praise": "", "body": "", "corrections": [{"thread_id": "...", "text": "..."}], "comments": [{"id": "<finding id>", "also": [], "body": "comment text"}]}',
   ].join("\n");
 }
 
