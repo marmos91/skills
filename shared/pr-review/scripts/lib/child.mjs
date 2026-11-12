@@ -84,6 +84,10 @@ export function salvageJson(text, ok) {
 }
 
 let routerProbe;
+/** The harness a seat will really use (auto resolves through the router probe), before its prompt is written. */
+export async function harnessFor(seat, routerUp) {
+  return seat.harness === "auto" ? resolveHarness(seat, routerUp ?? (await probeRouter())) : seat.harness;
+}
 const ROUTER_HEALTH = () => process.env.PR_REVIEW_ROUTER_HEALTH || "http://127.0.0.1:4000/router/health";
 function probeRouter() {
   routerProbe ??= fetch(ROUTER_HEALTH(), {
@@ -135,6 +139,8 @@ export async function runChild({ seat, tools = "read", promptFile, outFile, work
   }
   const cwd = dirname(outFile); // neutral run folder: the PR checkout must not supply CLAUDE.md or .claude/
   let model = seat.model;
+  // pi's bash has no sandbox (writes anywhere the user can): a pi seat never gets a shell
+  if (harness === "pi") tools = "read";
   if (harness === "pi") {
     const [prov, ...rest] = model.split("/");
     env.SEAT_PROVIDER = seat.provider ?? (rest.length ? prov : "");

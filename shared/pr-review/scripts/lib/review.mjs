@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import * as github from "./github.mjs";
-import { runChild as realRunChild, ChildFailed, SeatDropped, stopping } from "./child.mjs";
+import { runChild as realRunChild, ChildFailed, SeatDropped, stopping, harnessFor } from "./child.mjs";
 import { LENSES, applyEffort, loadConfig, pickEffort, plannedChildren, seatId, seatsForLens, userConfigPath, withLimits } from "./config.mjs";
 import { frame as realFrame, git, readTree, HeadMoved, DiffTooLarge } from "./frame.mjs";
 import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.mjs";
@@ -85,13 +85,18 @@ async function child(ctx, stage, key, { seat, prompt, schema, tools = "read", le
   mkdirSync(dir, { recursive: true });
   const promptFile = join(dir, `${key}.prompt`);
   const limited = withLimits(ctx.config, seat, lens, stage);
-  writeFileSync(promptFile, prompt(limited));
+  // pi has no sandboxed shell: decide before the prompt, so a pi seat is never told it can run a repro
+  const pi = (await harnessFor(limited, ctx.routerUp)) === "pi";
+  if (pi) tools = "read";
+  writeFileSync(promptFile, prompt(limited, pi ? { ...ctx.frame, shellOk: false } : ctx.frame));
   let v;
   try { v = await ctx.runChild({ trusted: ctx.frame.shellOk, seat: limited, tools, promptFile, outFile, worktree: ctx.frame.worktree, ctxDir: ctx.frame.ctxDir, schema, routerUp: ctx.routerUp, droppable: council }); } catch (e) {
     if (!(e instanceof SeatDropped) || !council) throw e;
     ctx.drop(seat, e.reason, stage);
     return null;
   }
+  // a vote run without a shell carries no run evidence, whatever it claims (tally: evidence beats drops)
+  if (stage === "round2" && tools !== "shell" && Array.isArray(v)) v = v.map((x) => ({ ...x, evidence_run: false }));
   save(outFile, v);
   markDone(ctx.runDir, stage, key);
   return v;
@@ -221,7 +226,7 @@ async function once(o, restart) {
   const jobs = round1Jobs(config, run.lenses);
   const hygFile = join(runDir, "hygiene-result.json");
   const [outs, hyg] = await settled([
-    settled(jobs.map((j) => child(ctx, "round1", j.key, { seat: j.seat, tools: toolsFor(j), schema: "round1", lens: j.lenses.length === 1 ? j.lenses[0] : undefined, prompt: (s) => round1Prompt(f, j.lenses, s.max_turns) }).then((v) => ({ ...j, v })))).then((all) => all.filter((x) => x.v && !isDropped(x.seat))),
+    settled(jobs.map((j) => child(ctx, "round1", j.key, { seat: j.seat, tools: toolsFor(j), schema: "round1", lens: j.lenses.length === 1 ? j.lenses[0] : undefined, prompt: (s, fr = f) => round1Prompt(fr, j.lenses, s.max_turns) }).then((v) => ({ ...j, v })))).then((all) => all.filter((x) => x.v && !isDropped(x.seat))),
     existsSync(hygFile) ? readJson(hygFile) : o.hygiene(f, config, run.effort, { routerUp: o.routerUp }).then((h) => { save(hygFile, h); return h; }),
   ]);
   enoughSeats();
@@ -273,7 +278,7 @@ async function once(o, restart) {
   const ballots = await settled(voters.map((seat, i) => {
     const id = seatId(seat), mine = clusters.filter((c) => c.seats.includes(id) && !c.found.includes(id));
     if (!mine.length) return { id, votes: [] };
-    return child(ctx, "round2", `v~${i}`, { seat, tools: f.shellOk ? "shell" : "read", schema: "vote", prompt: (s) => votePrompt(f, mine.map(view), s.max_turns) }).then((votes) => ({ id, votes: votes ?? [] }));
+    return child(ctx, "round2", `v~${i}`, { seat, tools: f.shellOk ? "shell" : "read", schema: "vote", prompt: (s, fr = f) => votePrompt(fr, mine.map(view), s.max_turns) }).then((votes) => ({ id, votes: votes ?? [] }));
   }));
   enoughSeats();
   markDone(runDir, "round2");
