@@ -29,9 +29,14 @@ export function alive(pid) {
   try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; }
 }
 
-// Start time of pid per ps, "" when unknown; with the pid it names one process even after the pid is reused.
+// Start time of pid, "" when unknown; with the pid it names one process even after the pid is reused.
+// Linux: start ticks since boot (/proc/<pid>/stat field 22), immune to clock steps; elsewhere ps lstart, pinned to UTC
+// so holder and checker agree across TZ and DST.
 export function startOf(pid) {
-  const r = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", env: { ...process.env, LC_ALL: "C" } });
+  if (existsSync("/proc/self/stat")) {
+    try { const s = readFileSync(`/proc/${pid}/stat`, "utf8"); return s.slice(s.lastIndexOf(")") + 2).split(" ")[19] ?? ""; } catch { return ""; } // comm may hold ") ": fields restart after the last one
+  }
+  const r = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", env: { ...process.env, LC_ALL: "C", TZ: "UTC" } });
   return r.status === 0 ? r.stdout.trim() : "";
 }
 let myStart;

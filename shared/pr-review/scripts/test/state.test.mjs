@@ -101,6 +101,18 @@ const RACER = `import { acquireLock } from ${JSON.stringify(stateUrl)};
   try { acquireLock(process.argv[1]); console.log("WIN"); setTimeout(() => {}, 1500); }
   catch (e) { console.log(e.name); }`;
 
+test("a lock recorded under one TZ is still held when checked under another", async () => {
+  const s = tmp();
+  const holder = spawn(process.execPath, ["--input-type=module", "-e", `import { acquireLock } from ${JSON.stringify(stateUrl)};
+    acquireLock(process.argv[1]); console.log("HELD"); setTimeout(() => {}, 30000);`, s], { stdio: ["ignore", "pipe", "inherit"], env: { ...process.env, TZ: "UTC" } });
+  try {
+    await new Promise((res) => holder.stdout.once("data", res));
+    const r = spawnSync(process.execPath, ["--input-type=module", "-e", `import { acquireLock } from ${JSON.stringify(stateUrl)};
+      try { acquireLock(process.argv[1]); console.log("TOOK"); } catch (e) { console.log(e.name); }`, s], { encoding: "utf8", env: { ...process.env, TZ: "Asia/Tokyo" } });
+    assert.equal(r.stdout.trim(), "Locked");
+  } finally { holder.kill(); }
+});
+
 test("racers on a stale lock: exactly one wins (dead pid, or a legacy lock with no pid file older than 60 s)", async () => {
   const seeds = {
     deadPid: (s) => { mkdirSync(join(s, "lock")); writeFileSync(join(s, "lock", "pid"), String(deadPid())); },

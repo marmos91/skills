@@ -543,8 +543,12 @@ The state records the review count and the reply count per thread, and
 ## 8. State, lock and resume
 
 - State root: `${XDG_STATE_HOME:-~/.local/state}/pr-review/<owner>__<repo>/`.
-- `lock/`: made with `mkdir`, holds the PID. A lock with a dead PID is stale
-  and is removed. `/pr-review` and the loop use the same lock.
+- `lock/`: made with `mkdir`, holds the PID and a `start` file with the
+  holder's start time (Linux: start ticks from `/proc/<pid>/stat`; macOS:
+  `ps -o lstart=` under `TZ=UTC`). A lock is stale when its PID is dead, or
+  when the PID is alive but its start time differs (the PID was reused by
+  another process); a stale lock is removed. `/pr-review` and the loop use
+  the same lock.
 - Per PR: `pr/<n>/cache.json` (head SHA and newest comment ID, used only to
   skip unchanged PRs) and `pr/<n>/runs/<sha>-<ts>/` with a folder per stage
   and a `.done` marker per stage. GitHub is the source of truth for what was
@@ -570,7 +574,8 @@ The state records the review count and the reply count per thread, and
   the state on disk.
 - **Interrupt.** On SIGINT or SIGTERM the engine stops its children (section
   9.1), writes no marker for unfinished work, releases the lock and exits.
-  A stale lock (dead PID) is taken over by the next run.
+  A stale lock (dead PID, or a PID reused by another process) is taken over
+  by the next run.
 - A child that exits non-zero, times out, or returns output that fails the
   stage schema is a failed stage. The engine retries it. After the retry
   limit it stops that PR and reports the failure. It never posts a review
