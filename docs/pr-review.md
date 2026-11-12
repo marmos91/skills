@@ -353,7 +353,8 @@ PR head.
    counts as untrusted. One third-party comment makes every seat read-only.
    Then each round-1 job that runs the adversarial lens
    gets a shell (`Bash` or `bash`) to run a repro in the worktree, with a
-   timeout that kills the whole process group. Votes get a shell too, so a
+   timeout that sends SIGTERM to the whole process group, then SIGKILL after
+   3 s. Votes get a shell too, so a
    keep vote can carry run evidence. Otherwise every seat is
    read-only, and the repro command is written into the finding. A shell
    seat (`--allowedTools Bash`) can read any file that you can read: the
@@ -480,7 +481,8 @@ State root: `${XDG_STATE_HOME:-~/.local/state}/pr-review/<owner>__<repo>/`.
   no marker for unfinished work, releases the lock and exits.
 - **Failures.** A child that exits non-zero, times out, or returns output
   that fails the schema is retried. After the retries the run stops with exit
-  `4`. A review with a missing lens is never posted. An empty or crashed
+  `4`. A missing harness binary (ENOENT, or exit `127` from the adapter
+  script) fails at once, with no retry. A review with a missing lens is never posted. An empty or crashed
   child, or a round-1 seat that sets `error` (for example because it could
   not read the context), is never read as "no findings": it is a failed
   child.

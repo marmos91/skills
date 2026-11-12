@@ -100,25 +100,42 @@ function probeRouter() {
   return routerProbe;
 }
 
+const KILL_GRACE_MS = 3000;
 function runOnce(script, args, env, cwd, timeoutMs) {
   return new Promise((resolve, reject) => {
     const p = spawn(script, args, { cwd, env, detached: true, stdio: ["ignore", "ignore", "pipe"] });
-    track(p.pid);
-    let err = "", timedOut = false;
+    if (p.pid) track(p.pid);
+    let err = "", timedOut = false, exited = null, grace, drain;
+    const kill = (sig) => { try { process.kill(-p.pid, sig); } catch {} };
     p.stderr.on("data", (d) => { err += d; });
     const t = setTimeout(() => {
       timedOut = true;
-      try { process.kill(-p.pid, "SIGKILL"); } catch {}
+      kill("SIGTERM");
+      // never cancelled: a descendant that ignores TERM and holds no stderr outlives an early close
+      grace = setTimeout(() => { kill("SIGKILL"); untrack(p.pid); }, KILL_GRACE_MS);
     }, timeoutMs);
-    p.on("error", reject);
-    p.on("close", (code) => {
-      clearTimeout(t);
-      untrack(p.pid);
-      try { process.kill(-p.pid, "SIGKILL"); } catch {} // reap stragglers
+    const settle = () => {
+      clearTimeout(drain);
       if (timedOut) reject(Object.assign(new Error(`timed out after ${timeoutMs}ms`), { timedOut: true }));
-      else if (code !== 0) reject(new Error(`exit ${code}: ${err.trim().slice(-500)}`));
+      // sh exits 127 when the harness binary (claude, pi) is not on PATH
+      else if (exited === 127) reject(Object.assign(new Error(`exit 127 (command not found): ${err.trim().slice(-500)}`), { missing: true }));
+      else if (exited !== 0) reject(new Error(`exit ${exited}: ${err.trim().slice(-500)}`));
       else resolve();
+    };
+    // The outcome is fixed at exit. Settle at close (stderr fully read), or 1 s after exit: a re-grouped grandchild can hold stderr forever.
+    p.on("exit", (code, sig) => {
+      exited = code ?? sig;
+      clearTimeout(t);
+      // the leader is the harness wrapper: after a timeout the real binary keeps its grace; the grace timer kills it
+      if (!timedOut) { kill("SIGKILL"); untrack(p.pid); } // reap stragglers, which also closes stderr
+      drain = setTimeout(() => { p.stderr.destroy(); settle(); }, 1000);
     });
+    p.on("error", (e) => {
+      clearTimeout(t);
+      if (p.pid) untrack(p.pid);
+      reject(e.code === "ENOENT" ? Object.assign(new Error(`${script}: not found (ENOENT)`), { missing: true }) : e);
+    });
+    p.on("close", () => { if (exited !== null) settle(); });
   });
 }
 
@@ -167,6 +184,8 @@ export async function runChild({ seat, tools = "read", promptFile, outFile, work
       // A retry hits the same limit: the seat drops at once. claude prints this and exits 1 at --max-turns.
       // only council seats drop; judge, compose and reply children keep their retries
       if (droppable && e.timedOut) throw new SeatDropped(seat, "timeout", e.message);
+      // a missing binary never succeeds on retry
+      if (e.missing) throw new ChildFailed(`${fake ? "fake" : harness}:${seat.model}: harness binary missing: ${e.message}`);
       // claude -p prints only this line at --max-turns; a seat that merely quotes it in longer output is not matched
       const out = (await readFile(outFile, "utf8").catch(() => "")).trim();
       if (harness === "claude" && (/error_max_turns/.test(e.message) || /^Error: Reached max turns \(\d+\)$/.test(out))) {
