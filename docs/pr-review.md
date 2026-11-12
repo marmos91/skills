@@ -194,7 +194,8 @@ API.
 
 The judge writes the review from the agreed findings, with the rules in
 `shared/pr-review/writing.md` (short sentences, the case first, a code
-snippet or a GitHub `suggestion` block, no filler, no praise, no dashes).
+snippet or a GitHub `suggestion` block, no filler, praise only when earned
+and specific, no dashes).
 
 - Findings stay inline. One finding per inline comment: severity label and a
   title that states the conclusion with a verb, the case in one line with the
@@ -214,7 +215,10 @@ snippet or a GitHub `suggestion` block, no filler, no praise, no dashes).
 - A later review opens with "Second pass, on `<sha>`." It does not describe
   the PR again, and says if the author's replies check out. An earlier
   finding of ours that 2 seats now judge wrong (none open) is retracted first,
-  as "Correction: ...", and no longer blocks. Otherwise the body says "No new
+  as "Correction: ...". Its thread is resolved and recorded, so it no longer
+  blocks and a later pass does not judge it again. An earlier `must` of ours
+  that is still open goes to compose, and the verdict names it; the engine
+  never lets the verdict say "Nothing blocks." while it blocks. Otherwise the body says "No new
   findings." Fixed earlier findings get their link in the thread.
 - A finding off the diff lines is listed once, under "Outside the diff".
 - A finding from a single seat, or one the author must clarify, is written
