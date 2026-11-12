@@ -15,8 +15,11 @@ set -- --restricted --strict-mcp-config
 set -- "$@" --disallowedTools "Read(~/.ssh/**)" "Read(~/.config/**)" "Read(~/.aws/**)" "Read(~/.gnupg/**)"
 # --restricted reads no settings files, so without this every piped or compound command waits for an
 # approval that never comes. Shell seats run only for trusted authors: Bash can read any file the user can.
-# The Bash sandbox (macOS seatbelt / Linux bubblewrap) keeps writes in the cwd and temp dirs: without it a seat
-# can run install scripts or edit files anywhere in $HOME. No unsandboxed escape hatch.
-[ "$tools" = shell ] && set -- "$@" --allowedTools Bash \
-  --settings '{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false}}'
+# The Bash sandbox (macOS seatbelt / Linux bubblewrap) keeps writes to the temp dirs: no write in $HOME, and none
+# in the shared worktree, ctx or stage folder that other seats read. No unsandboxed escape hatch.
+if [ "$tools" = shell ]; then
+  sandbox=$(node -e 'console.log(JSON.stringify({ sandbox: { enabled: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false,
+    filesystem: { denyWrite: process.argv.slice(1).filter(Boolean) } } }))' "${SEAT_WORKTREE:-}" "${SEAT_CTX:-}" "$PWD")
+  set -- "$@" --allowedTools Bash --settings "$sandbox"
+fi
 claude -p "$@" --model "$model" --effort "$thinking" --tools "$list" <"$prompt" >"$out"

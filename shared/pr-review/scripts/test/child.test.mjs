@@ -109,7 +109,9 @@ test("tools=read gives no shell; tools=shell adds Bash/bash", async () => {
   assert.match(argv(), /--restricted --strict-mcp-config/);
   await runChild(base(claudeSeat, { tools: "shell" }));
   assert.match(argv(), /--tools Read,Grep,Glob,Bash/);
-  assert.match(argv(), /--settings \{"sandbox":\{"enabled":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false\}\}/, "a shell seat runs sandboxed");
+  const settings = JSON.parse(argv().match(/--settings (\{.*\}) --model/)[1]);
+  assert.deepEqual({ ...settings.sandbox, filesystem: undefined }, { enabled: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false, filesystem: undefined }, "a shell seat runs sandboxed");
+  assert.ok(settings.sandbox.filesystem.denyWrite.length >= 1, "the shared stage folder is not writable");
   await runChild(base(piSeat, { tools: "read", routerUp: false }));
   assert.match(argv(), /--tools read,grep,find,ls\b(?!,)/);
   assert.match(argv(), /--provider cubbit --model mimir --thinking high/);

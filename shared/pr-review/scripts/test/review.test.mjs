@@ -1035,3 +1035,25 @@ test("no lens left to run (all disabled, or --lens names a disabled one) is exit
   assert.equal(posts(fx).length, 0);
   rmSync(join(process.env.XDG_CONFIG_HOME, "pr-review", "config.json"));
 });
+
+test("a seat that resolves to pi is never told it has a shell, and its votes carry no run evidence", async () => {
+  const fx = fixture(); routes(fx);
+  const r0 = R(fx); r0["api repos/o/r/pulls/5"] = { stdout: { author_association: "OWNER" } }; W(fx, r0);
+  // routerUp false: the auto:cubbit seats resolve to pi
+  const ev = [{ ...keep("c1"), evidence_run: true }];
+  const answers = happy({ "v~0": ev, "v~1": ev, "v~2": ev });
+  const { r, run } = await go(fx, answers, { routerUp: false });
+  const piCalls = run.calls.filter((c) => c.seat.harness === "auto");
+  assert.ok(piCalls.length > 0);
+  for (const c of piCalls) {
+    assert.equal(c.tools, "read", c.k);
+    assert.doesNotMatch(c.prompt, /ran a command in the worktree/, c.k);
+  }
+  const claudeCall = run.calls.find((c) => c.k.startsWith("all~") && c.seat.harness === "claude");
+  assert.equal(claudeCall.tools, "shell", "the claude seat keeps its sandboxed shell: " + run.calls.map((c) => `${c.k}:${c.seat.harness}:${c.tools}`).join(" "));
+  const votes = readdirSync(join(r.runDir, "round2")).filter((x) => /^v~\d+\.json$/.test(x));
+  const piVote = run.calls.find((c) => c.k.startsWith("v~") && c.seat.harness === "auto");
+  assert.ok(piVote, "a pi seat votes: " + votes.join(","));
+  const saved = JSON.parse(readFileSync(join(r.runDir, "round2", `${piVote.k}.json`), "utf8"));
+  assert.ok(saved.every((x) => x.evidence_run === false), "evidence from a read-only seat is cleared");
+});
