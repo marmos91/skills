@@ -525,3 +525,15 @@ test("a blocked PR started by a mention is reviewed again when the cap is raised
   await go({ gh: fakeGh({ rows: [row(1, ["mentions"])], threads: { 1: [t] } }), f, loadCfg: raised });
   assert.equal(f.reviews.length, 2, "the mention is already seen, but the blocked review runs again");
 });
+
+test("a setup error (bad repo config) is retried next tick, never cached as a block", async () => {
+  const rs = fresh();
+  withBaseline(rs);
+  let bad = true;
+  const f = fakes({ reviewResult: () => { if (bad) { const e = new Error("no lens runs"); e.name = "SetupError"; throw e; } return { exit: 0 }; } });
+  await go({ gh: fakeGh({ rows: [row(1, ["review-requested"])] }), f });
+  assert.equal(prState(rs, 1).cache.blocked, undefined);
+  bad = false;
+  await go({ gh: fakeGh({ rows: [row(1, ["review-requested"])] }), f });
+  assert.equal(f.reviews.length, 2, "the fixed config is used on the next tick");
+});

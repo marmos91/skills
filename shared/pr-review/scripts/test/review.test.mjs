@@ -1030,9 +1030,8 @@ test("no lens left to run (all disabled, or --lens names a disabled one) is exit
   mkdirSync(join(process.env.XDG_CONFIG_HOME, "pr-review"), { recursive: true });
   const off = Object.fromEntries(["adversarial", "correctness", "simplification", "architecture"].map((l) => [l, { enabled: true }]));
   writeFileSync(join(process.env.XDG_CONFIG_HOME, "pr-review", "config.json"), JSON.stringify({ lenses: { ...off, security: { enabled: false } } }));
-  const { r } = await go(fx, happy(), { lenses: ["security"] });
-  assert.equal(r.exit, 1);
-  assert.match(r.summary, /no lens runs/);
+  // a setup error throws (main.mjs exits 1); the loop retries a throw next tick instead of caching a block
+  await assert.rejects(go(fx, happy(), { lenses: ["security"] }), (e) => e.name === "SetupError" && /no lens runs/.test(e.message));
   assert.equal(posts(fx).length, 0);
   rmSync(join(process.env.XDG_CONFIG_HOME, "pr-review", "config.json"));
 });

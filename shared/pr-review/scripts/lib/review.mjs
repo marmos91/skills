@@ -69,7 +69,6 @@ export async function review(opts) {
   } catch (e) {
     // Too large is the user's call, not a failed stage: nothing ran, so exit 1 with the way out.
     if (e instanceof DiffTooLarge) return { exit: 1, summary: `${e.message}. Review it anyway with --max-diff-lines N, or raise review.max_diff_lines in the config.` };
-    if (e instanceof SetupError) return { exit: 1, summary: e.message };
     if (e instanceof ChildFailed || e instanceof HeadMoved) return { exit: 4, summary: e.message };
     throw e;
   } finally { release(); }
