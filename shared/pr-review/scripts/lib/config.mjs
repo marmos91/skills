@@ -106,10 +106,11 @@ function need(ok, path, what) {
 }
 
 function checkStages(t, where, ok, label = "", stages = ["round1", "vote", "merge"]) {
+  const list = stages.length > 1 ? `${stages.slice(0, -1).join(", ")} or ${stages.at(-1)}` : stages[0];
   if (t === undefined) return;
   need(isObj(t), `${where}.thinking_by_stage`, "an object");
   for (const [k, v] of Object.entries(t)) {
-    need(stages.includes(k), `${where}.thinking_by_stage.${k}`, `a stage: ${stages.join(", ")}`);
+    need(stages.includes(k), `${where}.thinking_by_stage.${k}`, `a stage: ${list}`);
     need(ok.includes(v), `${where}.thinking_by_stage.${k}${label}`, `one of ${ok.join("|")}`);
   }
 }
@@ -209,7 +210,7 @@ const STAGE_KEY = { round1: "round1", round2: "vote", vote: "vote", merge: "merg
 export const withLimits = (config, s, lens, stage) => ({
   ...s,
   thinking: STAGE_KEY[stage]
-    ? s.thinking_by_stage?.[STAGE_KEY[stage]] ?? config.lenses[lens]?.thinking_by_stage?.[STAGE_KEY[stage]]
+    ? s.thinking_by_stage?.[STAGE_KEY[stage]] ?? (stage === "round1" ? config.lenses[lens]?.thinking_by_stage?.round1 : undefined)
       ?? (s.harness !== "claude" && s.model.startsWith("cubbit/") && STAGE_KEY[stage] !== "round1" ? "off" : s.thinking)
     : s.thinking,
   max_turns: s.max_turns ?? config.lenses[lens]?.max_turns ?? config.review.max_turns,

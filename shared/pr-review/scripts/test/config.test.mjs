@@ -173,11 +173,14 @@ test("thinking_by_stage: seat, then lens, then the default (cubbit seats think o
   assert.deepEqual([t(mimir, "round1"), t(mimir, "vote"), t(mimir, "merge")], ["medium", "low", "off"]);
   assert.equal(t(pro, "round1", "security"), "medium", "lens xhigh capped to medium");
   assert.equal(t(mimir, "round1", "security"), "medium", "seat beats lens");
+  const u = applyEffort(c0, "max"); // no cap: seat max vs lens xhigh stay apart
+  assert.equal(withLimits(u, u.seats[2], "security", "round1").thinking, "max", "seat beats lens, uncapped");
+  assert.equal(withLimits(u, u.seats[1], "security", "round1").thinking, "xhigh", "lens beats the default, uncapped");
   assert.equal(t(pro, "vote", "security"), "off", "a lens sets round 1 only");
   assert.equal(withLimits(c, pro).thinking, "medium", "no stage: the seat's thinking");
   for (const [text, re] of [
     ['{"seats":[{"harness":"claude","model":"opus","thinking":"high","thinking_by_stage":{"vote":"off"}}]}', /seats\[0\].thinking_by_stage.vote \(claude seat\) must be one of low/],
-    ['{"seats":[{"harness":"pi","model":"m","thinking":"high","thinking_by_stage":{"compose":"low"}}]}', /seats\[0\].thinking_by_stage.compose must be a stage: round1, vote, merge/],
+    ['{"seats":[{"harness":"pi","model":"m","thinking":"high","thinking_by_stage":{"compose":"low"}}]}', /seats\[0\].thinking_by_stage.compose must be a stage: round1, vote or merge/],
     ['{"seats":[{"harness":"pi","model":"m","thinking":"high","thinking_by_stage":"low"}]}', /seats\[0\].thinking_by_stage must be an object/],
     ['{"lenses":{"security":{"enabled":true,"thinking_by_stage":{"round1":"huge"}}}}', /lenses.security.thinking_by_stage.round1 must be one of/],
     ['{"lenses":{"security":{"enabled":true,"thinking_by_stage":{"vote":"off"}}}}', /lenses.security.thinking_by_stage.vote must be a stage: round1$/],
