@@ -155,3 +155,14 @@ test("a CLI without the exec bit runs from the copy that stays after a partial u
   const r = spawnSync(join(env.BIN_DIR, "repo-audit"), ["status"], { env: { ...env, REPO: root, WORKTREE: join(root, "wt") }, encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
 });
+
+test("--link from the npx cache stops: npm can delete the cache under the links", (t) => {
+  const { root, env, run } = setup(t);
+  const pkg = join(root, ".npm", "_npx", "0123abcd", "node_modules", "@marmos91", "skills");
+  for (const p of ["package.json", "bin", "shared", "pi"]) cpSync(join(REPO, p), join(pkg, p), { recursive: true, verbatimSymlinks: true });
+  const r = run(pkg, "install", "--claude", "--link", "jev");
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /--link needs a lasting copy/);
+  assert.ok(!existsSync(env.CLAUDE_DIR), "nothing installed");
+  assert.equal(run(pkg, "install", "--claude", "jev").status, 0, "a copy from npx still works");
+});

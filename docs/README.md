@@ -31,7 +31,7 @@ npx @marmos91/skills uninstall          # remove what the package installed
 ```
 
 The installer copies each skill into the folders below and links its CLIs
-into `~/.local/bin`. Use `--link` to link instead of copy. A re-install
+into `~/.local/bin`. In a git clone or a global npm install, `--link` links instead of copies; under `npx` it stops with an error, because npm can delete its cache. A re-install
 replaces the copy. A local copy that the package did not write is moved to
 `<skill>.pre-skills-repo` one time. Each `SKILL.md` has the release version
 in `metadata.version`, and `pr-review doctor` prints it.
