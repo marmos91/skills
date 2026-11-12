@@ -1289,3 +1289,21 @@ test("compose `also`: a chain loses no finding; another line of the same file is
   const st = prState(fx.state, N);
   for (const o of [{}, { lens: "security", title: "Leak" }, { lens: "simplification", title: "Dead" }, { lens: "adversarial", title: "Other line", line: 3 }]) assert.ok(st.settled.includes(fp(o)));
 });
+
+test("a host held by the secret scan does not swallow its folded findings: they post on their own", async () => {
+  const fx = fixture(); routes(fx);
+  const token = "ghp_" + "A".repeat(36);
+  const sec = { lens: "security", title: "Leak" };
+  const { r } = await go(fx, happy({
+    merge: [C("c1"), C("c2", sec)], "v~2": [keep("c1"), keep("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c1", also: ["c2"], body: `**must:** token ${token} leaks` }] },
+  }), { mode: "loop" });
+  assert.equal(r.exit, 0, r.summary);
+  const t = posts(fx)[0].threads;
+  assert.equal(t.length, 1, "the held host is not posted; c2 is");
+  assert.match(t[0].body, /\*\*must:\*\* Leak[\s\S]*use 2/);
+  assert.ok(t[0].body.endsWith(`fp=${fingerprint(F(sec))} -->`));
+  assert.ok(!JSON.stringify(mutations(fx)).includes(token));
+  assert.equal(openQuestions(fx.state).length, 1, "the host is a question");
+  assert.ok(prState(fx.state, N).settled.includes(fingerprint(F(sec))));
+});
