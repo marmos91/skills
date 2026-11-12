@@ -604,8 +604,10 @@ function heldText(repoState, n, runId, fp) {
   const dir = join(repoState, "pr", String(n), "runs", runId ?? "");
   try {
     const c = readJson(join(dir, "clusters.json")).clusters.find((x) => x.fp === fp);
-    // a folded finding has no composed comment of its own: rebuild it from the cluster, as the post did
-    const body = readJson(join(dir, "compose", "compose.json")).comments.find((x) => x.id === c?.id)?.body
+    // Rebuild from the cluster when there is no composed comment of its own (a folded finding), or when the
+    // comment merged others (a held host): those were posted on their own, and must not be posted twice.
+    const cmt = readJson(join(dir, "compose", "compose.json")).comments.find((x) => x.id === c?.id);
+    const body = (cmt && !cmt.also?.length ? cmt.body : undefined)
       ?? (c && `**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}`);
     return body ? redact(body) : null;
   } catch { return null; }

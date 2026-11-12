@@ -1326,3 +1326,22 @@ test("a folded finding held on its own: answer post sends it with the secret red
   assert.match(all, /\[REDACTED:github-token\] is logged/);
   assert.ok(!JSON.stringify(mutations(fx)).includes(token));
 });
+
+test("a held host answered post goes out with its own text only, not the folded finding again", async () => {
+  const fx = fixture(); routes(fx);
+  const token = "ghp_" + "C".repeat(36);
+  const sec = { lens: "security", title: "Leak" };
+  const answers = happy({
+    merge: [C("c1"), C("c2", sec)], "v~2": [keep("c1"), keep("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c1", also: ["c2"], body: `**must:** off by one, and Leak via ${token}` }] },
+  });
+  await go(fx, answers, { mode: "loop" });
+  const q = openQuestions(fx.state).find((x) => x.fingerprint === fingerprint(F()));
+  answer(fx.state, q.id, "post");
+  const again = await go(fx, answers, { mode: "loop" });
+  assert.equal(again.r.exit, 0, again.r.summary);
+  const t = posts(fx).slice(1).flatMap((p) => p.threads);
+  assert.equal(t.length, 1);
+  assert.match(t[0].body, /^\*\*must:\*\* Off by one/);
+  assert.doesNotMatch(t[0].body, /Leak/, "the folded finding is not posted twice");
+});
