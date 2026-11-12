@@ -447,7 +447,7 @@ async function once(o, restart) {
   const folded = posted.filter((c) => hostOf.has(c.id));
   const items = posted.filter((c) => !hostOf.has(c.id)).map((c) => ({
     ...c, fps: [c.fp, ...folded.filter((o) => hostOf.get(o.id) === c.id).map((o) => o.fp)],
-    body: text.get(c.id) ?? `**${c.severity}:** ${c.title}\n\n${c.case}`,
+    body: text.get(c.id) ?? `**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}`,
   }));
   const earlierAll = readJson(join(f.ctxDir, "earlier.json"));
   // Misses of this run's final round 1: a resume that finished the part clears it.

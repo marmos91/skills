@@ -1275,7 +1275,6 @@ test("compose `also`: a chain loses no finding; another line of the same file is
     compose: { body: "Changes a.", comments: [
       { id: "c1", also: ["c2"], body: "**must:** one" },
       { id: "c3", also: ["c1", "c4"], body: "**must:** three" },
-      { id: "c4", body: "**must:** four" },
     ] },
   }));
   const t = posts(fx)[0].threads;
@@ -1283,7 +1282,10 @@ test("compose `also`: a chain loses no finding; another line of the same file is
   const by = (re) => t.find((x) => re.test(x.body));
   assert.ok(by(/one/).body.endsWith(`fp=${fp({})},${fp({ lens: "security", title: "Leak" })} -->`), "c2 folds into c1");
   assert.ok(by(/three/), "c1 keeps its own comment: a host is never folded");
-  assert.ok(by(/four/), "c4, on another line, is not folded");
+  assert.ok(by(/three/).body.endsWith(`fp=${fp({ lens: "simplification", title: "Dead" })} -->`), "c3 carries only its own fp");
+  const c4 = t.find((x) => x.line === 3);
+  assert.ok(c4, "c4, on another line, is not folded");
+  assert.match(c4.body, /Other line[\s\S]*use 2/, "a refused fold still posts its fix");
   const st = prState(fx.state, N);
   for (const o of [{}, { lens: "security", title: "Leak" }, { lens: "simplification", title: "Dead" }, { lens: "adversarial", title: "Other line", line: 3 }]) assert.ok(st.settled.includes(fp(o)));
 });
