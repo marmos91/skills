@@ -190,7 +190,7 @@ See [pr-review.md](pr-review.md) for the pipeline, effort levels and config.
 2. Export a fine-grained PAT with pull-request write access on the target repos as `GH_TOKEN`.
 3. Start it:
    - Claude Code: `/loop 30m /pr-review-loop owner/repo`
-   - A shell: `while :; do pr-review-loop owner/repo; sleep 1800; done`
+   - A shell, in a clone of the repo: `while :; do pr-review-loop owner/repo; sleep 1800; done`
 4. Answer the queued questions with `/pr-review-loop answer`. The next tick applies them.
 5. `pr-review-loop pause` and `pr-review-loop resume` stop and restart it.
 

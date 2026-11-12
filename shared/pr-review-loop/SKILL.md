@@ -16,8 +16,11 @@ the skills repo, section "The loop".
   `sh "$SKILL_DIR/scripts/pr-review-loop" [owner/repo]` once.
 - pi or any shell: one tick is `pr-review-loop [owner/repo]`. Repeat it with
   cron, launchd, or `while :; do pr-review-loop; sleep 1800; done`. Run it in
-  a clone of the repo (cron: `cd /path/to/clone && pr-review-loop`): the tick
-  fetches the PR heads there.
+  a clone of the repo: the tick fetches the PR heads there. cron and launchd
+  start with a bare PATH and none of your exports, so the job must set them:
+  `cd /path/to/clone && PATH=<dir of node>:$HOME/.local/bin:$PATH
+  && . ~/.config/pr-review/env && pr-review-loop`, where the env file (mode
+  600) exports `GH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN`.
 
 Without `owner/repo`, the loop uses the GitHub remote of the current
 directory, `origin` first. `pause`, `resume` and the tick use the same rule,
