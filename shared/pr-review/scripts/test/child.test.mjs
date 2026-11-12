@@ -308,3 +308,26 @@ test("salvageJson keeps fences inside JSON strings", () => {
   assert.equal(salvageJson("```json\n" + JSON.stringify({ comments: [{ body }] }) + "\n```").comments[0].body, body);
   assert.deepEqual(salvageJson('Here it is:\n```json\n{"a": "```suggestion\\nx\\n```"}\n```\nDone.'), { a: "```suggestion\nx\n```" });
 });
+
+test("a child that exits while a grandchild holds stderr open is not a timeout", async () => {
+  stub("claude", `sleep 30 &\nprintf '%s' '${OK}'`);
+  const t0 = Date.now();
+  assert.ok(await runChild(base(claudeSeat, { timeoutMs: 3000 })));
+  assert.ok(Date.now() - t0 < 2000, "resolved at exit, not at the timeout");
+});
+
+test("timeout sends SIGTERM first, then SIGKILL after a grace period", async () => {
+  const term = join(dir, "term");
+  stub("claude", `trap 'echo term >"${term}"' TERM\nwhile :; do sleep 0.1; done`);
+  await assert.rejects(runChild(base(claudeSeat, { timeoutMs: 300 })), (e) => e instanceof ChildFailed && /timed out after 300ms/.test(e.message));
+  assert.equal(readFileSync(term, "utf8").trim().split("\n")[0], "term");
+});
+
+test("a missing harness binary fails at once, without retries", async () => {
+  await assert.rejects(runChild(base({ harness: "nope", model: "m", thinking: "high" }, { retries: 2 })), (e) => e instanceof ChildFailed && /harness binary missing: .*nope\.sh: not found/.test(e.message));
+  const count = join(dir, "127.count");
+  writeFileSync(count, "");
+  stub("claude", `echo x >>"${count}"; exit 127`);
+  await assert.rejects(runChild(base(claudeSeat, { retries: 2 })), /harness binary missing: exit 127/);
+  assert.equal(readFileSync(count, "utf8").trim().split("\n").length, 1);
+});

@@ -100,23 +100,39 @@ function probeRouter() {
   return routerProbe;
 }
 
+const KILL_GRACE_MS = 3000;
 function runOnce(script, args, env, cwd, timeoutMs) {
   return new Promise((resolve, reject) => {
     const p = spawn(script, args, { cwd, env, detached: true, stdio: ["ignore", "ignore", "pipe"] });
-    track(p.pid);
-    let err = "", timedOut = false;
+    if (p.pid) track(p.pid);
+    let err = "", timedOut = false, exited = null, grace;
+    const kill = (sig) => { try { process.kill(-p.pid, sig); } catch {} };
     p.stderr.on("data", (d) => { err += d; });
     const t = setTimeout(() => {
       timedOut = true;
-      try { process.kill(-p.pid, "SIGKILL"); } catch {}
+      kill("SIGTERM");
+      grace = setTimeout(() => kill("SIGKILL"), KILL_GRACE_MS);
     }, timeoutMs);
-    p.on("error", reject);
-    p.on("close", (code) => {
+    // The outcome is fixed at exit: close waits for stderr, which a background grandchild can hold open until the timeout.
+    p.on("exit", (code) => {
+      exited = { code, timedOut };
       clearTimeout(t);
+      // the leader is the harness wrapper: after a timeout the real binary keeps its grace; the grace timer kills it
+      if (!timedOut) kill("SIGKILL"); // reap stragglers, which also closes stderr
+    });
+    p.on("error", (e) => {
+      clearTimeout(t); clearTimeout(grace);
+      if (p.pid) untrack(p.pid);
+      reject(e.code === "ENOENT" ? Object.assign(new Error(`${script}: not found (ENOENT)`), { missing: true }) : e);
+    });
+    p.on("close", (code) => {
+      clearTimeout(grace);
       untrack(p.pid);
-      try { process.kill(-p.pid, "SIGKILL"); } catch {} // reap stragglers
-      if (timedOut) reject(Object.assign(new Error(`timed out after ${timeoutMs}ms`), { timedOut: true }));
-      else if (code !== 0) reject(new Error(`exit ${code}: ${err.trim().slice(-500)}`));
+      const r = exited ?? { code, timedOut };
+      if (r.timedOut) reject(Object.assign(new Error(`timed out after ${timeoutMs}ms`), { timedOut: true }));
+      // sh exits 127 when the harness binary (claude, pi) is not on PATH
+      else if (r.code === 127) reject(Object.assign(new Error(`exit 127 (command not found): ${err.trim().slice(-500)}`), { missing: true }));
+      else if (r.code !== 0) reject(new Error(`exit ${r.code}: ${err.trim().slice(-500)}`));
       else resolve();
     });
   });
@@ -167,6 +183,8 @@ export async function runChild({ seat, tools = "read", promptFile, outFile, work
       // A retry hits the same limit: the seat drops at once. claude prints this and exits 1 at --max-turns.
       // only council seats drop; judge, compose and reply children keep their retries
       if (droppable && e.timedOut) throw new SeatDropped(seat, "timeout", e.message);
+      // a missing binary never succeeds on retry
+      if (e.missing) throw new ChildFailed(`${fake ? "fake" : harness}:${seat.model}: harness binary missing: ${e.message}`);
       // claude -p prints only this line at --max-turns; a seat that merely quotes it in longer output is not matched
       const out = (await readFile(outFile, "utf8").catch(() => "")).trim();
       if (harness === "claude" && (/error_max_turns/.test(e.message) || /^Error: Reached max turns \(\d+\)$/.test(out))) {
