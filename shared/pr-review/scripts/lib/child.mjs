@@ -105,36 +105,37 @@ function runOnce(script, args, env, cwd, timeoutMs) {
   return new Promise((resolve, reject) => {
     const p = spawn(script, args, { cwd, env, detached: true, stdio: ["ignore", "ignore", "pipe"] });
     if (p.pid) track(p.pid);
-    let err = "", timedOut = false, exited = null, grace;
+    let err = "", timedOut = false, exited = null, grace, drain;
     const kill = (sig) => { try { process.kill(-p.pid, sig); } catch {} };
     p.stderr.on("data", (d) => { err += d; });
     const t = setTimeout(() => {
       timedOut = true;
       kill("SIGTERM");
-      grace = setTimeout(() => kill("SIGKILL"), KILL_GRACE_MS);
+      // never cancelled: a descendant that ignores TERM and holds no stderr outlives an early close
+      grace = setTimeout(() => { kill("SIGKILL"); untrack(p.pid); }, KILL_GRACE_MS);
     }, timeoutMs);
-    // The outcome is fixed at exit: close waits for stderr, which a background grandchild can hold open until the timeout.
-    p.on("exit", (code) => {
-      exited = { code, timedOut };
+    const settle = () => {
+      clearTimeout(drain);
+      if (timedOut) reject(Object.assign(new Error(`timed out after ${timeoutMs}ms`), { timedOut: true }));
+      // sh exits 127 when the harness binary (claude, pi) is not on PATH
+      else if (exited === 127) reject(Object.assign(new Error(`exit 127 (command not found): ${err.trim().slice(-500)}`), { missing: true }));
+      else if (exited !== 0) reject(new Error(`exit ${exited}: ${err.trim().slice(-500)}`));
+      else resolve();
+    };
+    // The outcome is fixed at exit. Settle at close (stderr fully read), or 1 s after exit: a re-grouped grandchild can hold stderr forever.
+    p.on("exit", (code, sig) => {
+      exited = code ?? sig;
       clearTimeout(t);
       // the leader is the harness wrapper: after a timeout the real binary keeps its grace; the grace timer kills it
-      if (!timedOut) kill("SIGKILL"); // reap stragglers, which also closes stderr
+      if (!timedOut) { kill("SIGKILL"); untrack(p.pid); } // reap stragglers, which also closes stderr
+      drain = setTimeout(() => { p.stderr.destroy(); settle(); }, 1000);
     });
     p.on("error", (e) => {
-      clearTimeout(t); clearTimeout(grace);
+      clearTimeout(t);
       if (p.pid) untrack(p.pid);
       reject(e.code === "ENOENT" ? Object.assign(new Error(`${script}: not found (ENOENT)`), { missing: true }) : e);
     });
-    p.on("close", (code) => {
-      clearTimeout(grace);
-      untrack(p.pid);
-      const r = exited ?? { code, timedOut };
-      if (r.timedOut) reject(Object.assign(new Error(`timed out after ${timeoutMs}ms`), { timedOut: true }));
-      // sh exits 127 when the harness binary (claude, pi) is not on PATH
-      else if (r.code === 127) reject(Object.assign(new Error(`exit 127 (command not found): ${err.trim().slice(-500)}`), { missing: true }));
-      else if (r.code !== 0) reject(new Error(`exit ${r.code}: ${err.trim().slice(-500)}`));
-      else resolve();
-    });
+    p.on("close", () => { if (exited !== null) settle(); });
   });
 }
 

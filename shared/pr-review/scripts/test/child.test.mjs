@@ -331,3 +331,18 @@ test("a missing harness binary fails at once, without retries", async () => {
   await assert.rejects(runChild(base(claudeSeat, { retries: 2 })), /harness binary missing: exit 127/);
   assert.equal(readFileSync(count, "utf8").trim().split("\n").length, 1);
 });
+
+test("an early close after a timeout does not cancel the grace SIGKILL", async () => {
+  const mark = join(dir, "alive");
+  stub("claude", `( trap '' TERM; sleep 4; echo alive >"${mark}" ) >/dev/null 2>&1 &\nwait`);
+  await assert.rejects(runChild(base(claudeSeat, { timeoutMs: 300 })), /timed out after 300ms/);
+  await new Promise((r) => setTimeout(r, 5000));
+  assert.ok(!existsSync(mark), "a TERM-ignoring descendant was SIGKILLed after the grace");
+});
+
+test("a re-grouped grandchild that holds stderr does not leave the child pending", { timeout: 15000 }, async () => {
+  const pidFile = join(dir, "detached.pid");
+  stub("claude", `node -e 'const c=require("child_process").spawn("sleep",["60"],{detached:true,stdio:["ignore","ignore","inherit"]});require("fs").writeFileSync(process.argv[1],String(c.pid));c.unref()' "${pidFile}"\nprintf '%s' '${OK}'`);
+  try { assert.ok(await runChild(base(claudeSeat, { timeoutMs: 10000 }))); }
+  finally { try { process.kill(Number(readFileSync(pidFile, "utf8")), "SIGKILL"); } catch {} }
+});
