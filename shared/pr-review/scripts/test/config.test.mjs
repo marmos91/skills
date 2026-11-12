@@ -227,8 +227,7 @@ test("a bad user lens file is a config error that names the file", () => {
   for (const [file, text, re] of [
     ["Perf.md", "x", /Perf\.md: the name must use only a-z, 0-9 and -/],
     ["my_lens.md", "x", /my_lens\.md: the name/],
-    ["security.md", "x", /security\.md: security is a built-in lens/],
-    ["hygiene.md", "x", /hygiene\.md: hygiene is a built-in lens/],
+    ...["security", "hygiene", "all", "v", "merge", "compose", "constructor", "prototype"].map((n) => [`${n}.md`, "x", new RegExp(`${n}\\.md: ${n} is a built-in or reserved name`)]),
     ["big.md", "x\n".repeat(41), /big\.md: over 40 lines/],
     ["wide.md", "x".repeat(4001), /wide\.md: over 40 lines or 4000 characters/],
     ["empty.md", "\n", /empty\.md: the file is empty/],
@@ -237,8 +236,19 @@ test("a bad user lens file is a config error that names the file", () => {
 });
 
 test("a repo config cannot add a lens: only user lens files are lenses", () => {
-  assert.throws(() => loadConfig({ repoText: '{"lenses":{"perf":{"enabled":true}}}' }), /lenses\.perf must be a known lens/);
+  assert.deepEqual(Object.keys(loadConfig({ repoText: '{"lenses":{"perf":{"enabled":true}}}' }).lenses), LENSES);
   const dirs = lensDir({ "perf.md": "x" });
   assert.equal(loadConfig({ ...dirs, repoText: '{"lenses":{"perf":{"enabled":false}}}' }).lenses.perf.enabled, false);
   assert.throws(() => loadConfig({ ...dirs, repoText: '{"lenses":{"perf":{"seats":[]}}}' }), /not allowed at repo level: lenses\.perf\.seats/);
+});
+
+test("the lens folder skips dot files and files that are not .md", () => {
+  const c = loadConfig({ ...lensDir({ "perf.md": "x", ".#perf.md": "x", "._perf.md": "x", "notes.txt": "x", "README": "x" }) });
+  assert.deepEqual(Object.keys(c.lenses), [...LENSES, "perf"]);
+});
+
+test("a repo may turn off a lens this reviewer does not have: a no-op", () => {
+  const c = loadConfig({ repoText: '{"lenses":{"perf":{"enabled":false},"security":{"enabled":false}}}' });
+  assert.deepEqual(Object.keys(c.lenses), LENSES);
+  assert.equal(c.lenses.security.enabled, false);
 });

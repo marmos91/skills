@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync,
 import { basename, join, resolve, sep } from "node:path";
 import * as github from "./github.mjs";
 import { runChild as realRunChild, ChildFailed, SeatDropped, stopping, harnessFor } from "./child.mjs";
-import { WHOLE_PR_LENSES, applyEffort, loadConfig, lowerEffort, pickEffort, plannedChildren, seatId, seatsForLens, userConfigPath, userLensDir, withLimits } from "./config.mjs";
+import { WHOLE_PR_LENSES, applyEffort, loadUserConfig, lowerEffort, pickEffort, plannedChildren, seatId, seatsForLens, withLimits } from "./config.mjs";
 import { frame as realFrame, git, readTree, cleanupWorktree, HeadMoved, DiffTooLarge } from "./frame.mjs";
 import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.mjs";
 import { tally } from "./tally.mjs";
@@ -38,7 +38,7 @@ export class SetupError extends Error { constructor(m) { super(m); this.name = "
 // maxDiffLines (--max-diff-lines) wins over review.max_diff_lines at every level.
 const config0 = (o, maxDiffLines) => {
   let c;
-  try { c = loadConfig({ ...o, lensDir: userLensDir() }); } catch (e) { throw new SetupError(e.message); }
+  try { c = loadUserConfig(o); } catch (e) { throw new SetupError(e.message); }
   if (maxDiffLines) c.review.max_diff_lines = maxDiffLines;
   return c;
 };
@@ -200,8 +200,7 @@ function ciState(c) {
 
 async function once(o, restart) {
   const { repo, n, mode, gh, log, repoState } = o;
-  const userPath = userConfigPath();
-  const userConfig = config0({ userPath, cliPath: o.configPath }, o.maxDiffLines);
+  const userConfig = config0({ cliPath: o.configPath }, o.maxDiffLines);
   let config = userConfig;
   // User lenses load with the config, so --lens is checked here; a repo config cannot add a lens.
   const bad = o.lenses?.filter((l) => !Object.hasOwn(userConfig.lenses, l));
@@ -220,7 +219,7 @@ async function once(o, restart) {
     return { exit: 0, runDir, skipped: true, summary: `already reviewed ${head}; use --restart to review it again` };
   }
   const f = await o.frame({ repo, n, repoDir: o.repoDir ?? process.cwd(), runDir, config, gh, prState: prState(repoState, n) });
-  config = config0({ userPath, cliPath: o.configPath, repoText: f.repoConfigText ?? undefined }, o.maxDiffLines);
+  config = config0({ cliPath: o.configPath, repoText: f.repoConfigText ?? undefined }, o.maxDiffLines);
 
   // A resumed run keeps its effort and lenses: its finished children depend on them.
   const runFile = join(runDir, "run.json");

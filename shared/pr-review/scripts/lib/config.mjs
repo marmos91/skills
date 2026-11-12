@@ -136,14 +136,16 @@ function checkSeat(s, where) {
   for (const k of ["max_turns", "timeout_minutes"]) need(s[k] === undefined || posInt(s[k]), `${where}.${k}`, "a positive integer");
 }
 
+// Built-in lenses, and names with a meaning in child keys (all~0, v~0, merge, compose) or on Object.prototype.
+const RESERVED = [...LENSES, "hygiene", "all", "v", "merge", "compose", "constructor", "prototype"];
 // User lenses: <dir>/<name>.md, the same size cap as a built-in lens. Only the user folder: a repo cannot add prompt text.
 function userLenses(dir) {
   if (!existsSync(dir)) return [];
-  const names = readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3)).sort();
+  const names = readdirSync(dir).filter((f) => f.endsWith(".md") && !f.startsWith(".")).map((f) => f.slice(0, -3)).sort();
   for (const name of names) {
     const file = join(dir, `${name}.md`);
     if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) throw new Error(`lens file ${file}: the name must use only a-z, 0-9 and -`);
-    if (LENSES.includes(name) || name === "hygiene") throw new Error(`lens file ${file}: ${name} is a built-in lens; use a different name`);
+    if (RESERVED.includes(name)) throw new Error(`lens file ${file}: ${name} is a built-in or reserved name; use a different name`);
     let text;
     try { text = readFileSync(file, "utf8").trim(); } catch (e) { throw new Error(`lens file ${file}: ${e.message}`); }
     if (!text) throw new Error(`lens file ${file}: the file is empty`);
@@ -185,6 +187,9 @@ function validate(c, known) {
   for (const k of ["max_diff_lines", "chunk_lines", "max_children", "max_parallel", "max_turns", "timeout_minutes"]) need(posInt(c.review[k]), `review.${k}`, "a positive integer");
 }
 
+/** The config of this user: config file, lens folder, and the optional --config file and repo text. */
+export const loadUserConfig = (o = {}) => loadConfig({ userPath: userConfigPath(), lensDir: userLensDir(), ...o });
+
 export function loadConfig({ userPath, repoText, cliPath, lensDir } = {}) {
   let cfg = structuredClone(DEFAULTS);
   const known = [...LENSES, ...(lensDir ? userLenses(lensDir) : [])];
@@ -196,6 +201,8 @@ export function loadConfig({ userPath, repoText, cliPath, lensDir } = {}) {
   if (repoText) {
     const repo = parse(repoText, ".pr-review.json");
     checkRepoKeys(repo);
+    // A repo may name a lens that this reviewer does not have: turning it off is then a no-op.
+    if (isObj(repo.lenses)) for (const k of Object.keys(repo.lenses)) if (!known.includes(k)) delete repo.lenses[k];
     const extra = repo.effort_auto?.high_paths;
     if (extra !== undefined) need(strList(extra), "effort_auto.high_paths", "an array of strings");
     const userHigh = cfg.effort_auto.high_paths;

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import * as github from "./github.mjs";
 import { COLLABORATOR, reply as realReply } from "./reply.mjs";
 import { frame as realFrame, SEVERITY } from "./frame.mjs";
-import { loadConfig, pickEffort, lowerEffort, userConfigPath } from "./config.mjs";
+import { loadUserConfig, pickEffort, lowerEffort } from "./config.mjs";
 import { budgetLeft } from "./convergence.mjs";
 import { FINAL_STAGE, acquireLock, Locked, markDone, prState, savePrState, runDir, stateRoot, writeAtomic } from "./state.mjs";
 import { limiter } from "./limit.mjs";
@@ -55,7 +55,7 @@ function baseConfigText(repoDir) {
 export async function tick({ repo, repoDir = process.cwd(), gh = github, review, reply = realReply, frame = realFrame, sweep, loadCfg, log = (m) => console.error(m), now = Date.now }) {
   review ??= async (o) => (await import("./review.mjs")).review(o);
   sweep ??= async (rs) => (await import("./review.mjs")).sweepWorktrees(rs);
-  loadCfg ??= (repoText = baseConfigText(repoDir)) => loadConfig({ userPath: userConfigPath(), repoText });
+  loadCfg ??= (repoText = baseConfigText(repoDir)) => loadUserConfig({ repoText: repoText ?? undefined });
   const rs = stateRoot(repo);
   const out = { processed: 0, skipped: 0, questions: 0, todos: 0 };
   if (existsSync(join(rs, "paused"))) { log(`pr-review-loop: paused; run "pr-review-loop resume" to continue`); return { ...out, paused: true }; }

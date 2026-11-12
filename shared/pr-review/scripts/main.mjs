@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { installSignalHandlers, runChild as realRunChild } from "./lib/child.mjs";
-import { DEFAULTS, EFFORTS, LENSES, applyEffort, loadConfig, plannedChildren, seatId, userConfigPath, userLensDir } from "./lib/config.mjs";
+import { DEFAULTS, EFFORTS, LENSES, applyEffort, loadUserConfig, plannedChildren, seatId } from "./lib/config.mjs";
 import { redact } from "./lib/secrets.mjs";
 import { askJev as realAskJev, findJev as realFindJev } from "./lib/decider.mjs";
 import { review, SetupError, STAGES } from "./lib/review.mjs";
@@ -126,7 +126,7 @@ async function doctor(v, { runChild = realRunChild, askJev = realAskJev, findJev
   let repoText;
   try { repoText = execFileSync("git", ["show", "origin/HEAD:.pr-review.json"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }); } catch {}
   let config;
-  try { config = loadConfig({ userPath: userConfigPath(), cliPath: v.config, repoText, lensDir: userLensDir() }); } catch (e) { throw new Usage(e.message); }
+  try { config = loadUserConfig({ cliPath: v.config, repoText }); } catch (e) { throw new Usage(e.message); }
   // only known keys: unknown keys in a user file may hold secrets
   console.log(JSON.stringify(Object.fromEntries(Object.keys(DEFAULTS).map((k) => [k, config[k]])), null, 2));
   let fail = false;
