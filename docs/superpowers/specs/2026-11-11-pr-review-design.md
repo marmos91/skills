@@ -384,8 +384,10 @@ The judge writes the review from the agreed findings, with the rules in
   labels such as `nit:` or Conventional Comments).
 - Inline comments: one finding per comment. Layout: severity label, the case
   in one line, then a code snippet or a GitHub `suggestion` block.
-- Summary body: what the PR does in 2 sentences, then the `must` items. When
-  something is held for Marco: "1 point is still open with the reviewer."
+- Summary body: what the PR does in 2 sentences, then the `must` items. The
+  engine, not the judge, adds the state lines from the real state: "1 point
+  is still open with the reviewer.", dropped seats, lenses not run, findings
+  left out, and "No tracking issue or plan."
 - A finding from a single seat, or one that the author must clarify, is
   phrased as a question to the author.
 
