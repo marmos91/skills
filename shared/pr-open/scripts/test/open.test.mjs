@@ -1,16 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initRepo, commit, git } from "./repo.mjs";
 import { ghStub } from "./gh.mjs";
-import { Blocked, runTests } from "../lib/counts.mjs";
+import { Blocked, Usage, runTests } from "../lib/counts.mjs";
 import { buildBody, openPr, parentOf } from "../lib/open.mjs";
 
 // Pin the scanner: a secret-scan on the developer's PATH must not replace the fallback under test.
-const PATH0 = process.env.PATH.split(":").filter((d) => !existsSync(join(d, "secret-scan"))).join(":");
-process.env.PATH = PATH0;
+process.env.PR_OPEN_SECRET_SCAN = "pr-open-no-such-scanner";
 const TOKEN = "ghp_" + "A1b2C3d4".repeat(5); // built at runtime: no token literal in the repo
 
 // main <- feat/a (pushed, PR #7) <- feat/b (current, tested)
@@ -51,6 +50,8 @@ test("buildBody: the tests line comes from the record and replaces an agent-writ
   assert.match(out, /## Tests\n\n`npm test` at abcdef1: 5 passed, 0 failed, 1 skipped\./);
   const fenced = buildBody({ body: "Template:\n\n```md\n## Tests\n\nEdit me.\n```\n\n## Why\n\nBecause.\n", record });
   assert.match(fenced, /```md\n## Tests\n\nEdit me\.\n```\n\n## Why\n\nBecause\./);
+  const tilde = buildBody({ body: "Intro.\n\n~~~md\n## Tests\n\nEdit me.\n~~~\n\n   ```md\n## Tests\n   ```\n\n## Why\n\nBecause.\n", record });
+  assert.match(tilde, /~~~md\n## Tests\n\nEdit me\.\n~~~\n\n   ```md\n## Tests\n   ```\n\n## Why/);
   const none = buildBody({ body: "x", record: { ...record, counts: null } });
   assert.match(none, /`npm test` at abcdef1: counts not found in the output\./);
 });
@@ -196,7 +197,7 @@ test("secret-scan on PATH is used, and its hit blocks", async (t) => {
   const bin = mkdtempSync(join(tmpdir(), "pr-open-scan-"));
   writeFileSync(join(bin, "secret-scan"), "#!/bin/sh\ncat >/dev/null\necho 'rule-x: abcd…' >&2\nexit 1\n");
   chmodSync(join(bin, "secret-scan"), 0o755);
-  process.env.PATH = `${bin}:${PATH0}`; t.after(() => { process.env.PATH = PATH0; });
+  process.env.PR_OPEN_SECRET_SCAN = join(bin, "secret-scan"); t.after(() => { process.env.PR_OPEN_SECRET_SCAN = "pr-open-no-such-scanner"; });
   const gh = ghStub(routes());
   await assert.rejects(openPr(dir, { title: "feat: b", bodyFile, base: "feat/a" }), (e) => e instanceof Blocked && e.detail.hits[0] === "rule-x: abcd…");
   assert.equal(created(gh), undefined);
@@ -211,6 +212,43 @@ test("a base that exists only on origin is fetched", async () => {
   const r = await openPr(dir, { title: "feat: b", bodyFile, base: "release/x" });
   assert.equal(r.base, "release/x");
   assert.ok(created(gh));
+});
+
+test("the branch moves while open runs: blocked, nothing pushed", async (t) => {
+  const { dir, bodyFile } = await stack();
+  const bin = mkdtempSync(join(tmpdir(), "pr-open-scan-"));
+  writeFileSync(join(bin, "secret-scan"), `#!/bin/sh\ncat >/dev/null\ngit -C '${dir}' commit -q --allow-empty --no-gpg-sign -m sneaky\nexit 0\n`);
+  chmodSync(join(bin, "secret-scan"), 0o755);
+  process.env.PR_OPEN_SECRET_SCAN = join(bin, "secret-scan"); t.after(() => { process.env.PR_OPEN_SECRET_SCAN = "pr-open-no-such-scanner"; });
+  const gh = ghStub(routes());
+  await assert.rejects(openPr(dir, { title: "feat: b", bodyFile, base: "feat/a" }), (e) => e instanceof Blocked && /moved/.test(e.message));
+  assert.equal(created(gh), undefined);
+  assert.equal(remoteHas(dir, "feat/b"), false);
+});
+
+test("an AI word that the test command adds to the body: blocked", async () => {
+  const { dir, bodyFile } = await stack({ test: false });
+  await runTests(dir, 'echo "ℹ pass 1" # not llm', { quiet: true });
+  const gh = ghStub(routes());
+  await assert.rejects(openPr(dir, { title: "feat: b", bodyFile, base: "feat/a" }), (e) => e instanceof Blocked && e.detail.ai?.some((x) => x.where === "body"));
+  assert.equal(created(gh), undefined);
+});
+
+test("a base origin does not have is a Usage error; a broken remote is not", async () => {
+  const { dir, bodyFile } = await stack();
+  ghStub(routes());
+  await assert.rejects(openPr(dir, { title: "feat: b", bodyFile, base: "nope" }), (e) => e instanceof Usage && /origin has no branch nope/.test(e.message));
+  git(dir, "remote", "set-url", "origin", join(dir, "..", "no-such-origin"));
+  await assert.rejects(openPr(dir, { title: "feat: b", bodyFile, base: "feat/a" }), (e) => !(e instanceof Usage) && /git fetch origin feat\/a failed/.test(e.message));
+});
+
+test("a single-branch clone fetches the base into origin/<base>", async () => {
+  const { dir, bodyFile } = await stack();
+  git(dir, "config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main");
+  git(dir, "update-ref", "-d", "refs/remotes/origin/feat/a");
+  ghStub(routes());
+  const r = await openPr(dir, { title: "feat: b", bodyFile, base: "feat/a" });
+  assert.equal(r.parent, "feat/a");
 });
 
 test("a PR is already open: returned, no push, no create", async () => {

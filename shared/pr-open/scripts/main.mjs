@@ -5,9 +5,9 @@ import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { checkBranch } from "./lib/check.mjs";
-import { Blocked, runTests } from "./lib/counts.mjs";
+import { Blocked, Usage, runTests } from "./lib/counts.mjs";
 import { detect, readOverride } from "./lib/detect.mjs";
-import { Usage, openPr, resolveBase } from "./lib/open.mjs";
+import { openPr, resolveBase } from "./lib/open.mjs";
 
 const USAGE = `usage: pr-open detect
        pr-open test [--command "<cmd>"]
@@ -34,7 +34,8 @@ async function run(cmd, v) {
     return r.exit === 0 && !(r.counts?.failed > 0) ? 0 : 2;
   }
   if (cmd === "check") {
-    const body = v["body-file"] ? readFileSync(v["body-file"], "utf8") : "";
+    let body = "";
+    try { if (v["body-file"]) body = readFileSync(v["body-file"], "utf8"); } catch (e) { throw new Usage(`cannot read the body file: ${e.message}`); }
     const r = checkBranch(dir, resolveBase(dir, v.base).ref, { title: v.title ?? "", body, allow: readOverride(dir).allow ?? [] });
     print(r);
     return r.ok ? 0 : 2;

@@ -4,6 +4,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { detect, readOverride } from "../lib/detect.mjs";
+import { Usage } from "../lib/counts.mjs";
 
 const tmp = (files) => {
   const d = mkdtempSync(join(tmpdir(), "pr-open-detect-"));
@@ -15,6 +16,11 @@ const pick = ({ format, lint, test }) => ({ format, lint, test });
 test("package.json scripts with a pnpm lockfile", () => {
   const d = tmp({ "package.json": JSON.stringify({ scripts: { fmt: "x", lint: "y", test: "z" } }), "pnpm-lock.yaml": "" });
   assert.deepEqual(pick(detect(d, {})), { format: "pnpm run fmt", lint: "pnpm run lint", test: "pnpm run test" });
+});
+
+test("bun.lock (text lockfile) uses bun", () => {
+  const d = tmp({ "package.json": JSON.stringify({ scripts: { test: "z" } }), "bun.lock": "" });
+  assert.equal(detect(d, {}).test, "bun run test");
 });
 
 test("package.json without a lockfile uses npm", () => {
@@ -46,5 +52,5 @@ test("nothing found: all null", () => {
 
 test("readOverride: missing file is empty, invalid JSON throws with the file name", () => {
   assert.deepEqual(readOverride(tmp({})), {});
-  assert.throws(() => readOverride(tmp({ ".pr-open.json": "{" })), /\.pr-open\.json/);
+  assert.throws(() => readOverride(tmp({ ".pr-open.json": "{" })), (e) => e instanceof Usage && /\.pr-open\.json/.test(e.message));
 });

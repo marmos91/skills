@@ -23,7 +23,8 @@ P="sh $SKILL_DIR/scripts/pr-open"
 1. **Base.** The PR goes to the default branch. For a stack, the base is the
    parent branch. A base with an open PR of its own is a stack; any other
    base (for example `develop`) is a plain base, and `open` warns that it
-   has no parent marker. Open the parent's PR first.
+   has no parent marker. For a stack, open the parent's PR first; a plain
+   base such as `develop` needs no PR of its own.
    When the branch does not start from the default branch and the user did
    not say, ask.
 2. **Format and lint.** Run `$P detect`. It finds the commands in env

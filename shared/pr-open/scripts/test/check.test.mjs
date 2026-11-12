@@ -41,6 +41,11 @@ test("checkBranch: a signed commit in a sha256 repo is signed", () => {
   assert.deepEqual(checkBranch(dir, "main").unsigned, []);
 });
 
+test("file names are not hits; hyphen forms still are", () => {
+  assert.deepEqual(aiMentions("docs: update CLAUDE.md, GEMINI.md and llm.py"), []);
+  assert.deepEqual(aiMentions("Claude-written, see claude-3"), ["claude"]);
+});
+
 test("plain words are not hits", () => {
   assert.deepEqual(aiMentions("fix: cursor position in the editor; recall the llama farm; email"), []);
 });

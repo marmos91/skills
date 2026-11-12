@@ -1,4 +1,6 @@
 import { test } from "node:test";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import assert from "node:assert/strict";
 import { initRepo, commit, git } from "./repo.mjs";
 import { ghStub } from "./gh.mjs";
@@ -47,6 +49,17 @@ test("test: no command found exits 1; a passing --command exits 0 with the recor
   assert.equal(await main(["test"]), 1);
   assert.equal(await main(["test", "--command", 'echo "ℹ pass 4"']), 0);
   assert.deepEqual(json().counts, { passed: 4, failed: 0, skipped: 0 });
+});
+
+test("a missing body file or a bad .pr-open.json exits 1", async (t) => {
+  const dir = initRepo({ origin: true });
+  git(dir, "checkout", "-q", "-b", "feat/x");
+  ghStub({ "repo view": { stdout: { defaultBranchRef: { name: "main" } } } });
+  const cwd = process.cwd(); process.chdir(dir); t.after(() => process.chdir(cwd));
+  capture(t);
+  assert.equal(await main(["check", "--body-file", "nope.md"]), 1);
+  writeFileSync(join(dir, ".pr-open.json"), "{");
+  assert.equal(await main(["detect"]), 1);
 });
 
 test("unknown command exits 1", async (t) => {

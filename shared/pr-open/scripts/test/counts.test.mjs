@@ -42,6 +42,10 @@ test("several runs (a monorepo) are summed", () => {
   assert.deepEqual(parseCounts("==== 2 passed in 0.1s ====\n==== 3 passed, 1 skipped in 0.2s ====\n"), c(5, 0, 1));
 });
 
+test("mixed runners in one command are summed", () => {
+  assert.deepEqual(parseCounts("ℹ pass 2\nℹ fail 0\n==== 3 passed, 1 failed in 0.2s ====\n"), c(5, 1, 0));
+});
+
 test("no summary: null", () => {
   assert.equal(parseCounts("no summary here\n"), null);
 });
@@ -59,6 +63,15 @@ test("runTests records a failed run with its exit code", async () => {
   const dir = initRepo();
   const r = await runTests(dir, "exit 1", { quiet: true });
   assert.equal(r.exit, 1); assert.equal(r.counts, null);
+});
+
+test("a run that commits or edits tracked files is blocked and writes no record", async () => {
+  for (const cmd of ["git commit -q --allow-empty --no-gpg-sign -m sneaky", "echo y > README.md"]) {
+    const dir = initRepo();
+    const sha = git(dir, "rev-parse", "HEAD");
+    await assert.rejects(runTests(dir, cmd, { quiet: true }), (e) => e instanceof Blocked && /changed/.test(e.message));
+    assert.equal(readRecord(dir, sha), null);
+  }
 });
 
 test("runTests on a dirty tree is blocked and writes no record", async () => {

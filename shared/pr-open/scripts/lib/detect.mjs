@@ -1,6 +1,7 @@
 // Find the format, lint and test commands of a project. First hit wins per key.
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { Usage } from "./counts.mjs";
 
 const KEYS = ["format", "lint", "test"];
 const NAMES = { format: ["format", "fmt"], lint: ["lint"], test: ["test"] };
@@ -10,7 +11,7 @@ export function readOverride(dir) {
   const f = join(dir, ".pr-open.json");
   if (!existsSync(f)) return {};
   try { return JSON.parse(readFileSync(f, "utf8")); }
-  catch (e) { throw new Error(`bad .pr-open.json: ${e.message}`); }
+  catch (e) { throw new Usage(`bad .pr-open.json: ${e.message}`); }
 }
 
 const read = (dir, f) => (existsSync(join(dir, f)) ? readFileSync(join(dir, f), "utf8") : null);
@@ -19,8 +20,8 @@ function fromPackage(dir) {
   const txt = read(dir, "package.json");
   if (txt === null) return null;
   const scripts = JSON.parse(txt).scripts ?? {};
-  const pm = ["pnpm-lock.yaml", "pnpm"], yarn = ["yarn.lock", "yarn"], bun = ["bun.lockb", "bun"];
-  const run = [pm, yarn, bun].find(([lock]) => existsSync(join(dir, lock)))?.[1] ?? "npm";
+  const pm = ["pnpm-lock.yaml", "pnpm"], yarn = ["yarn.lock", "yarn"], bun = ["bun.lockb", "bun"], bunText = ["bun.lock", "bun"];
+  const run = [pm, yarn, bun, bunText].find(([lock]) => existsSync(join(dir, lock)))?.[1] ?? "npm";
   return (key) => { const n = NAMES[key].find((x) => scripts[x]); return n ? `${run} run ${n}` : null; };
 }
 

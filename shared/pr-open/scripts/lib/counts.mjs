@@ -3,6 +3,11 @@ import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+/** The user must fix the input or the setup: exit 1. */
+export class Usage extends Error {
+  constructor(msg) { super(msg); this.name = "Usage"; }
+}
+
 /** A check stops the run: exit 2. */
 export class Blocked extends Error {
   constructor(msg, detail) { super(msg); this.name = "Blocked"; this.detail = detail; }
@@ -17,18 +22,21 @@ const add = (a, b) => ({ passed: a.passed + b.passed, failed: a.failed + b.faile
 const sum = (lines) => (lines.length ? lines.map(words).reduce(add, zero) : null);
 const sumOf = (re, s) => all(re, s).reduce((a, x) => a + Number(x), 0);
 
-/** { passed, failed, skipped } from a test run's output, or null when no known summary is in it. */
+/** { passed, failed, skipped } from a test run's output, summed over every runner in it, or null when no known summary is in it. */
 export function parseCounts(out) {
-  if (/^[ℹ#] pass \d+$/m.test(out)) return { passed: sumOf(/^[ℹ#] pass (\d+)$/gm, out), failed: sumOf(/^[ℹ#] fail (\d+)$/gm, out), skipped: sumOf(/^[ℹ#] skipped (\d+)$/gm, out) };
-  const found = sum(all(/^Tests:\s+(.*\d+ total)\s*$/gm, out))
-    ?? sum(all(/^\s*Tests\s+(.*\d+ \w+.*)\(\d+\)\s*$/gm, out))
-    ?? sum(all(/^=+ (.*\d+ (?:passed|failed|skipped|errors?).*) in [\d.]+s.*=+\s*$/gm, out));
-  if (found) return found;
-  const cargo = [...out.matchAll(/test result: \w+\. (\d+) passed; (\d+) failed; (\d+) ignored/g)];
-  if (cargo.length) return cargo.reduce((a, m) => ({ passed: a.passed + +m[1], failed: a.failed + +m[2], skipped: a.skipped + +m[3] }), { passed: 0, failed: 0, skipped: 0 });
+  const node = /^[ℹ#] pass \d+$/m.test(out) ? { passed: sumOf(/^[ℹ#] pass (\d+)$/gm, out), failed: sumOf(/^[ℹ#] fail (\d+)$/gm, out), skipped: sumOf(/^[ℹ#] skipped (\d+)$/gm, out) } : null;
+  const cargo = [...out.matchAll(/test result: \w+\. (\d+) passed; (\d+) failed; (\d+) ignored/g)].map((m) => ({ passed: +m[1], failed: +m[2], skipped: +m[3] }));
   const go = [...out.matchAll(/^\s*--- (PASS|FAIL|SKIP):/gm)].map((m) => m[1]);
-  if (go.length) return { passed: go.filter((x) => x === "PASS").length, failed: go.filter((x) => x === "FAIL").length, skipped: go.filter((x) => x === "SKIP").length };
-  return null;
+  const goCounts = go.length ? { passed: go.filter((x) => x === "PASS").length, failed: go.filter((x) => x === "FAIL").length, skipped: go.filter((x) => x === "SKIP").length } : null;
+  const found = [
+    node,
+    sum(all(/^Tests:\s+(.*\d+ total)\s*$/gm, out)),
+    sum(all(/^\s*Tests\s+(.*\d+ \w+.*)\(\d+\)\s*$/gm, out)),
+    sum(all(/^=+ (.*\d+ (?:passed|failed|skipped|errors?).*) in [\d.]+s.*=+\s*$/gm, out)),
+    cargo.length ? cargo.reduce(add, zero) : null,
+    goCounts,
+  ].filter(Boolean);
+  return found.length ? found.reduce(add, zero) : null;
 }
 
 const git = (dir, ...args) => execFileSync("git", args, { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -52,6 +60,8 @@ export async function runTests(dir, command, { quiet = false } = {}) {
     p.on("error", reject);
     p.on("close", (code, signal) => resolve(code ?? (signal ? 128 : 1)));
   });
+  // The record must describe the tree that ran: a run that commits or edits tracked files gets none.
+  if (git(dir, "rev-parse", "HEAD") !== sha || git(dir, "status", "--porcelain")) throw new Blocked("the test run changed HEAD or the tree: commit the changes, then run the tests again");
   const record = { sha, command, exit, counts: parseCounts(out), at: new Date().toISOString() };
   const f = recordPath(dir, sha);
   mkdirSync(join(f, ".."), { recursive: true });
