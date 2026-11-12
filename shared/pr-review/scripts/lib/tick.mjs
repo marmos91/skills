@@ -173,7 +173,10 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
         n++;
       };
       const slot = limiter(config.loop.max_parallel_prs);
-      await Promise.all(j.queue.filter((r) => !j.done.includes(r.number)).map((r) => slot(() => one(r))));
+      // Wait for every PR before a throw ends the tick: the lock must outlive every review still running.
+      const all = await Promise.allSettled(j.queue.filter((r) => !j.done.includes(r.number)).map((r) => slot(() => one(r))));
+      const bad = all.find((x) => x.status === "rejected");
+      if (bad) throw bad.reason;
       if (paused) return null;
       rmSync(jf, { force: true });
       return n;

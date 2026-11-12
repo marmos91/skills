@@ -493,7 +493,7 @@ State root: `${XDG_STATE_HOME:-~/.local/state}/pr-review/<owner>__<repo>/`.
 | `pr/<n>/runs/<sha>-<ts>/` | One folder per run: a folder per stage, one output file and `.done` marker per child |
 | `questions/<id>.md`, `.json` | Open and answered questions |
 | `todo.md` | Points you accepted on your own PRs |
-| `tick.json` | Queue of the current tick: PRs done, PR in progress |
+| `tick.json` | Queue of the current tick: PRs done, PRs in progress |
 | `paused` | Present while the loop is paused |
 
 - **A review resumes.** `pr-review review <n>` on a PR with an unfinished run
