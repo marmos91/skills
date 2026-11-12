@@ -143,6 +143,16 @@ function issue(repo, number, wrap) {
   } catch { return { number, author: null, association: null }; }
 }
 
+// Same-repo issues the body (#12, fixes #12) or branch (fix/12-x, issue-12) names, beyond the closing ones; capped.
+// Branch: an issue word then the number, or a number that opens the name, as GitHub's branch from an issue
+// (12-fix-login). A wrong link can turn the shell off, so dates, years and versions never match.
+export function linkedIssues(p, n) {
+  // shortcut: a year-like number (1900-2099) in a branch never links; #2024 in the body still does.
+  const branch = /(?:^|\/)(?:fix|issue|bug|hotfix|gh|closes|fixes|resolves)[-_/](?!(?:19|20)\d\d(?!\d))(\d+)(?=[-_][a-z]|\/|$)|^(?!(?:19|20)\d\d(?!\d))(\d+)(?=[-_][a-z])/gi;
+  const nums = [...String(p.body ?? "").matchAll(/(?<![\w/.-])#(\d+)\b/g), ...String(p.headRef ?? "").matchAll(branch)];
+  return [...new Set(nums.map((m) => Number(m[1] ?? m[2])))].filter((i) => i !== n && !p.closingIssues.includes(i)).slice(0, 5);
+}
+
 // The repo's own guidance list counts too: frame runs before the caller merges repoConfigText.
 function repoGuidance(text) {
   try { const g = JSON.parse(stripComments(text)).review?.guidance; return Array.isArray(g) ? g.filter((x) => typeof x === "string") : []; } catch { return []; }
@@ -213,9 +223,10 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
   const commits = git(repoDir, ["log", "--format=%H %s", `${base}..${head}`]).split("\n").filter(Boolean)
     .map((l) => ({ sha: l.slice(0, l.indexOf(" ")), subject: wrap(l.slice(l.indexOf(" ") + 1)) }));
   const issues = p.closingIssues.map((i) => issue(repo, i, wrap));
-  json(ctxDir, "pr.json", { number: n, ...p, title: wrap(p.title), body: wrap(p.body), commits, closingIssues: issues });
+  const linked = linkedIssues(p, n).map((i) => issue(repo, i, wrap)).filter((i) => "title" in i); // unreadable: nothing reaches ctx
+  json(ctxDir, "pr.json", { number: n, ...p, headRef: wrap(p.headRef), title: wrap(p.title), body: wrap(p.body), commits, closingIssues: issues, linkedIssues: linked });
   // Text authors in ctx: [login, association]. A seat with a shell reads all of it, so each one must be trusted.
-  const authors = issues.map((i) => [i.author, i.association]);
+  const authors = [...issues, ...linked].map((i) => [i.author, i.association]);
 
   const repoConfigText = show(repoDir, base, ".pr-review.json");
   const guidance = [...new Set([...GUIDANCE, ...config.review.guidance, ...repoGuidance(repoConfigText ?? "")])].filter(safePath);

@@ -4,7 +4,7 @@
    "login": "marmos91"
   }
  },
- "pr view 5 -R o/r --json id,headRefOid,baseRefName,author,isDraft,body,title,closingIssuesReferences": {
+ "pr view 5 -R o/r --json id,headRefOid,baseRefName,author,isDraft,body,title,closingIssuesReferences,headRefName": {
   "stdout": {
    "id": "PR_node1",
    "headRefOid": "abc123",
@@ -19,7 +19,8 @@
     {
      "number": 7
     }
-   ]
+   ],
+   "headRefName": "feat/thing"
   }
  },
  "api repos/o/r/pulls/5": {
@@ -251,76 +252,6 @@
  },
  "run view 200 -R o/r --log-failed": {
   "stdout": "line1\nline2\nline3\nline4\n"
- },
- "graphql MarkerComments": {
-  "stdout": {
-   "data": {
-    "viewer": {
-     "login": "marmos91"
-    },
-    "repository": {
-     "pullRequest": {
-      "comments": {
-       "pageInfo": {
-        "hasPreviousPage": false,
-        "startCursor": null
-       },
-       "nodes": [
-        {
-         "body": "hi\n<!-- pr-review run=r1 sha=abc123 key=k1 -->",
-         "author": {
-          "login": "marmos91"
-         }
-        },
-        {
-         "body": "<!-- pr-review run=r1 sha=abc123 key=other -->",
-         "author": {
-          "login": "mallory"
-         }
-        }
-       ]
-      }
-     }
-    }
-   }
-  }
- },
- "graphql MarkerReviews": {
-  "stdout": {
-   "data": {
-    "viewer": {
-     "login": "marmos91"
-    },
-    "repository": {
-     "pullRequest": {
-      "reviews": {
-       "pageInfo": {
-        "hasPreviousPage": false,
-        "startCursor": null
-       },
-       "nodes": [
-        {
-         "body": "",
-         "author": {
-          "login": "marmos91"
-         },
-         "comments": {
-          "nodes": [
-           {
-            "body": "x key=k2 -->",
-            "author": {
-             "login": "marmos91"
-            }
-           }
-          ]
-         }
-        }
-       ]
-      }
-     }
-    }
-   }
-  }
  },
  "pr view 5 -R o/r --json headRefOid,updatedAt": {
   "stdout": {

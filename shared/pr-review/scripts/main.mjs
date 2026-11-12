@@ -12,7 +12,7 @@ import { redact } from "./lib/secrets.mjs";
 import { askJev as realAskJev, findJev as realFindJev } from "./lib/decider.mjs";
 import { review, SetupError, STAGES } from "./lib/review.mjs";
 import { answer, markAsked, openQuestions, questionWarnings } from "./lib/questions.mjs";
-import { FINAL_STAGE, Locked, alive, done, prState, stateRoot } from "./lib/state.mjs";
+import { FINAL_STAGE, Locked, done, holderAlive, prState, stateRoot } from "./lib/state.mjs";
 import { remoteRepos } from "./lib/github.mjs";
 
 // The one signal path: stop the children, then exit; the lock is released on exit.
@@ -81,7 +81,7 @@ function status(repo) {
   const raw = readJson(join(rs, "lock", "pid")) ?? (existsSync(join(rs, "lock")) ? null : undefined);
   // a lock dir with no pid is stale only after 60 s, as acquireLock treats it
   const young = () => { try { return Date.now() - statSync(join(rs, "lock")).mtimeMs < 60000; } catch { return false; } };
-  const lock = raw === undefined ? null : { pid: raw, stale: raw === null ? !young() : !alive(raw) };
+  const lock = raw === undefined ? null : { pid: raw, stale: raw === null ? !young() : !holderAlive(join(rs, "lock"), raw) };
   const questions = openQuestions(rs).map((q) => ({ id: q.id, pr: q.pr, file: join(rs, "questions", `${q.id}.md`) }));
   const todo = existsSync(join(rs, "todo.md")) ? readFileSync(join(rs, "todo.md"), "utf8") : "";
   const t = readJson(join(rs, "tick.json"));

@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync, renameSync, rmSync, existsSync,
 import { homedir } from "node:os";
 import { randomBytes } from "node:crypto";
 import { join, dirname } from "node:path";
+import { spawnSync } from "node:child_process";
 import { installSignalHandlers } from "./child.mjs";
 
 // A run is finished once its last stage has a marker.
@@ -26,6 +27,27 @@ export class Locked extends Error {
 
 export function alive(pid) {
   try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; }
+}
+
+// Start time of pid, "" when unknown; with the pid it names one process even after the pid is reused.
+// Linux: start ticks since boot (/proc/<pid>/stat field 22), immune to clock steps; elsewhere ps lstart, pinned to UTC
+// so holder and checker agree across TZ and DST.
+export function startOf(pid) {
+  if (existsSync("/proc/self/stat")) {
+    try { const s = readFileSync(`/proc/${pid}/stat`, "utf8"); return s.slice(s.lastIndexOf(")") + 2).split(" ")[19] ?? ""; } catch { return ""; } // comm may hold ") ": fields restart after the last one
+  }
+  const r = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", env: { ...process.env, LC_ALL: "C", TZ: "UTC" } });
+  return r.status === 0 ? r.stdout.trim() : "";
+}
+let myStart;
+
+// A holder is live when its pid is, and that pid still has the start time the holder recorded (none recorded or unknown: trust the pid).
+export function holderAlive(dir, pid) {
+  if (!alive(pid)) return false;
+  let rec;
+  try { rec = readFileSync(join(dir, "start"), "utf8"); } catch { return true; }
+  const now = rec && startOf(pid);
+  return !rec || !now || now === rec;
 }
 
 const held = new Set(); // lock dirs this process owns
@@ -56,6 +78,7 @@ function claim(dir) {
   const tmp = `${dir}.tmp.${process.pid}.${rand()}`;
   mkdirSync(tmp);
   writeFileSync(join(tmp, "pid"), String(process.pid));
+  writeFileSync(join(tmp, "start"), (myStart ??= startOf(process.pid)));
   try { renameSync(tmp, dir); return true; } catch (e) {
     rmSync(tmp, { recursive: true, force: true });
     if (["EEXIST", "ENOTEMPTY"].includes(e.code)) return false;
@@ -75,7 +98,7 @@ function moveAside(dir, deadRaw) {
 // Best effort: temp and moved-aside dirs whose named pid is dead, and a takeover mutex whose holder died.
 function sweep(repoState) {
   const mutex = join(repoState, "lock.takeover"), m = rawPid(mutex);
-  if (m && !alive(Number(m))) moveAside(mutex, m);
+  if (m && !holderAlive(mutex, Number(m))) moveAside(mutex, m);
   try {
     for (const f of readdirSync(repoState)) {
       const pid = Number(/^lock(?:\.takeover)?\.(?:tmp|stale)\.(\d+)\./.exec(f)?.[1]);
@@ -91,7 +114,7 @@ function takeOver(repoState, dir, deadRaw) {
   const mutex = join(repoState, "lock.takeover");
   if (!claim(mutex)) {
     const m = rawPid(mutex);
-    if (!m || alive(Number(m)) || !moveAside(mutex, m) || !claim(mutex)) return false;
+    if (!m || holderAlive(mutex, Number(m)) || !moveAside(mutex, m) || !claim(mutex)) return false;
   }
   try {
     return rawPid(dir) === deadRaw && moveAside(dir, deadRaw) && claim(dir);
@@ -109,9 +132,9 @@ export function acquireLock(repoState) {
     const raw = rawPid(dir);
     let age;
     try { age = Date.now() - statSync(dir).mtimeMs; } catch (e) { if (e.code === "ENOENT") continue; throw e; } // released meanwhile: retry once
-    // Stale = its pid is dead. A lock dir with no pid file only comes from an older version or a manual mkdir:
+    // Stale = its holder is dead (pid gone, or reused by another process). A lock dir with no pid file only comes from an older version or a manual mkdir:
     // the one time-based rule treats it as stale after 60 s.
-    if (raw ? alive(Number(raw)) : age < 60000) throw new Locked(raw ? Number(raw) : null);
+    if (raw ? holderAlive(dir, Number(raw)) : age < 60000) throw new Locked(raw ? Number(raw) : null);
     if (takeOver(repoState, dir, raw)) return own(dir);
     throw new Locked(null);
   }

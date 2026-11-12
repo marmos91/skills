@@ -74,4 +74,9 @@ reset
 jev_save_revision E1 "B: tb" "$STATE/E1/plan.tmp" "$STATE/E1/plan.md" 2>/dev/null || true
 check "save fails: nothing flagged" "$(cat "$STATE/E1/jev-flagged")" ""
 
+# fix.sh wiring: a revised plan goes through jev_save_revision, else a flagged gap is never recorded
+FIX="$HERE/../fix.sh"
+check "fix.sh saves the revised plan via jev_save_revision" "$(grep -c '^ *jev_save_revision "$_ep" "$_gaps" "$_dir/plan.tmp" "$_dir/plan.md"$' "$FIX")" 1
+check "fix.sh moves plan.tmp directly only for the first draft" "$(grep -c 'mv "$_dir/plan.tmp" "$_dir/plan.md"' "$FIX")" 1
+
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

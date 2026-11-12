@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, readFil
 import { spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { stateRoot, acquireLock, Locked, runDir, done, markDone, prState, savePrState } from "../lib/state.mjs";
+import { stateRoot, acquireLock, Locked, startOf, runDir, done, markDone, prState, savePrState } from "../lib/state.mjs";
 
 const deadPid = () => spawnSync("true").pid;
 const tmp = () => mkdtempSync(join(tmpdir(), "prr-state-"));
@@ -34,6 +34,25 @@ test("second lock holder gets Locked; stale pid lock is taken", () => {
   const r2 = acquireLock(s);
   assert.throws(() => acquireLock(s), Locked);
   r2();
+});
+
+test("a lock whose pid was reused by another live process is stale; one with a matching start time is held", () => {
+  const s = tmp();
+  const other = spawn("sleep", ["30"]); // live, unrelated: stands in for a reused pid
+  try {
+    mkdirSync(join(s, "lock"));
+    writeFileSync(join(s, "lock", "pid"), String(other.pid));
+    writeFileSync(join(s, "lock", "start"), "Mon Jan  1 00:00:00 2001");
+    acquireLock(s)();
+
+    let start = "";
+    for (let i = 0; i < 50 && !start; i++) start = startOf(other.pid); // ps sees the child once it has started
+    assert.ok(start, "ps reports a start time");
+    mkdirSync(join(s, "lock"));
+    writeFileSync(join(s, "lock", "pid"), String(other.pid));
+    writeFileSync(join(s, "lock", "start"), start);
+    assert.throws(() => acquireLock(s), Locked);
+  } finally { other.kill(); }
 });
 
 test("runDir returns the unfinished run for the same sha, a new one for a new sha or with restart", () => {
@@ -81,6 +100,18 @@ const output = (p) => new Promise((res) => { let out = ""; p.stdout.on("data", (
 const RACER = `import { acquireLock } from ${JSON.stringify(stateUrl)};
   try { acquireLock(process.argv[1]); console.log("WIN"); setTimeout(() => {}, 1500); }
   catch (e) { console.log(e.name); }`;
+
+test("a lock recorded under one TZ is still held when checked under another", async () => {
+  const s = tmp();
+  const holder = spawn(process.execPath, ["--input-type=module", "-e", `import { acquireLock } from ${JSON.stringify(stateUrl)};
+    acquireLock(process.argv[1]); console.log("HELD"); setTimeout(() => {}, 30000);`, s], { stdio: ["ignore", "pipe", "inherit"], env: { ...process.env, TZ: "UTC" } });
+  try {
+    await new Promise((res) => holder.stdout.once("data", res));
+    const r = spawnSync(process.execPath, ["--input-type=module", "-e", `import { acquireLock } from ${JSON.stringify(stateUrl)};
+      try { acquireLock(process.argv[1]); console.log("TOOK"); } catch (e) { console.log(e.name); }`, s], { encoding: "utf8", env: { ...process.env, TZ: "Asia/Tokyo" } });
+    assert.equal(r.stdout.trim(), "Locked");
+  } finally { holder.kill(); }
+});
 
 test("racers on a stale lock: exactly one wins (dead pid, or a legacy lock with no pid file older than 60 s)", async () => {
   const seeds = {
