@@ -376,3 +376,8 @@ test("authorQuestions: lines that end with ? and lines under a questions heading
   assert.deepEqual(authorQuestions(null), []);
   assert.equal(authorQuestions(Array(20).fill("Why?").join("\n")).length, 10);
 });
+
+test("authorQuestions: a fence closes only on the same char and length, so nested code stays out", () => {
+  assert.deepEqual(authorQuestions(["````md", "Here is the fix:", "```js", "x?", "````", "", "Is this a real question?"].join("\n")), ["Is this a real question?"]);
+  assert.deepEqual(authorQuestions(["````md", "```js", "x?", "```", "y?", "````", "Why?"].join("\n")), ["Why?"]);
+});

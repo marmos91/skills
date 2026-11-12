@@ -7,8 +7,7 @@ is the author of the PR. The author knows the code, so start with the point.
 
 - Write short sentences. Put one idea in each sentence. Use active voice.
 - Use plain words: "use", not "leverage"; "is", not "serves as".
-- Show code instead of prose when code is shorter.
-- Write each claim one time. Do not end with a line that repeats it.
+- Show code when it is shorter. Write each claim one time, with no recap.
 - Name the file, the function and the input. Do not write "this may cause
   issues"; write what breaks and when.
 - Use a qualifier ("may", "probably") only for real doubt.
@@ -24,8 +23,8 @@ is the author of the PR. The author knows the code, so start with the point.
 - These words: crucial, key (as an adjective), robust (unless technical),
   delve, leverage, seamless, enhance, ensure, comprehensive, meticulous,
   pivotal, underscore, showcase, valuable, additionally, actually.
-- Praise or thanks: "Great PR", "Nice work", "Thanks for". Chat residue:
-  "I hope this helps", "Let me know", "Happy to help".
+- Vague praise or thanks ("Great PR", "Thanks for"). Chat residue: "I hope
+  this helps", "Let me know".
 - Em dashes or en dashes. Use a period, a comma, a colon or parentheses.
 - Bold labels on each list item, emojis, title case in headings.
 - A signature, a note that a tool or a model wrote the text, or a marker.
@@ -41,6 +40,7 @@ One finding per comment, in this order:
 3. A paste-ready fix: a `suggestion` block when it replaces only the
    commented line, else a `diff` block or the exact text to add.
 
+A finding marked `ask_author` is a question; state each other finding directly.
 A question says what each answer changes: "question: Can `id` be empty? If yes,
 line 42 reads past the end; if no, drop the check." Credit what the author got
 right, and link the PR or commit that settles a point.

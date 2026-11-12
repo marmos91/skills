@@ -32,10 +32,12 @@ export const SEVERITY = /^\s*(?:\*\*)?(must|should|nit):(?:\*\*)?/;
 // that names questions, up to the next heading. Code fences are skipped. Capped, so a long body stays cheap.
 export function authorQuestions(body) {
   const out = [];
-  let fence = false, under = false;
+  let fence = null, under = false;
   for (const raw of String(body ?? "").split(/\r?\n/)) {
     const line = raw.trim();
-    if (/^(```|~~~)/.test(line)) { fence = !fence; continue; }
+    // A fence closes only on the same char, at least as long (CommonMark), so a nested ``` block stays code.
+    const m = line.match(/^(`{3,}|~{3,})/);
+    if (m) { if (!fence) fence = m[1]; else if (m[1][0] === fence[0] && m[1].length >= fence.length) fence = null; continue; }
     if (fence || !line) continue;
     if (/^#{1,6}\s/.test(line)) { under = /question/i.test(line); continue; }
     const text = line.replace(/^(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/, "");
@@ -264,7 +266,8 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
   for (const t of threads) for (const c of t.comments) authors.push([c.author, c.authorAssociation]);
   json(ctxDir, "threads.json", threads.map((t) => ({ ...t, comments: t.comments.map((c) => ({ ...c, body: mine(c.author, c.body) })) })));
   // The viewer's open earlier findings.
-  json(ctxDir, "earlier.json", threads.filter((t) => !t.isResolved && t.comments[0]?.author === viewer).map((t) => ({
+  // A thread we retracted (prState.retracted) is closed, also when GitHub would not let us resolve it.
+  json(ctxDir, "earlier.json", threads.filter((t) => !t.isResolved && t.comments[0]?.author === viewer && !(prState.retracted ?? []).includes(t.id)).map((t) => ({
     threadId: t.id, commentId: t.comments[0].id, path: t.path, line: t.line, originalLine: t.originalLine, isOutdated: t.isOutdated,
     severity: SEVERITY.exec(t.comments[0].body ?? "")?.[1] ?? null, body: t.comments[0].body,
   })));

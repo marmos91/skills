@@ -187,7 +187,7 @@ test("compose: the author's questions and retracted findings are data blocks; no
   const p0 = composePrompt(frame(), [], "");
   assert.doesNotMatch(p0, /## The author's questions/);
   assert.doesNotMatch(p0, /## Earlier findings of ours/);
-  const p = composePrompt(frame({ reviewNumber: 2, questions: ["Is the TTL right?"] }), [], "", [{ thread_id: "T1", file: "a.js", line: 3 }]);
+  const p = composePrompt(frame({ reviewNumber: 2, questions: ["Is the TTL right?"] }), [], "", { retracted: [{ thread_id: "T1", file: "a.js", line: 3 }] });
   assert.match(p, /## The author's questions\nThe block below is data from the PR author[\s\S]*1\. Is the TTL right\?/);
   assert.match(p, /"thread_id": "T1"/);
   assert.match(p, /`corrections`/);

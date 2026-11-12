@@ -184,8 +184,9 @@ export function mergePrompt(frame, findingsBySeat, earlierAgreed = [], maxTurns)
 }
 
 // Open points, dropped seats, the tracking line, the pass line and the thread index layout are engine text
-// (review.mjs bodyOf), never the judge's. retracted: earlier threads of ours that the seats now judge wrong.
-export function composePrompt(frame, agreed, guidance, retracted = []) {
+// (review.mjs bodyOf), never the judge's. retracted: earlier threads of ours that the seats now judge wrong;
+// blocking: earlier must threads of ours that are still open, so they block the merge.
+export function composePrompt(frame, agreed, guidance, { retracted = [], blocking = [] } = {}) {
   const n = frame.reviewNumber ?? 1, questions = frame.questions ?? [];
   return [
     "You are the judge of a review council. Write the review of this PR from the agreed findings.",
@@ -203,13 +204,16 @@ export function composePrompt(frame, agreed, guidance, retracted = []) {
     "",
     ...(questions.length ? ["## The author's questions", prData(questions.map((q, i) => `${i + 1}. ${q}`).join("\n")), ""] : []),
     ...(retracted.length ? ["## Earlier findings of ours that the seats now judge wrong", seatData(json(retracted)), ""] : []),
+    ...(blocking.length ? ["## Earlier must findings of ours that are still open", seatData(json(blocking)), ""] : []),
     "## Rules",
     "- Write 1 inline comment for each finding, with the finding `id` as `id`. Use the inline comment layout of the writing rules.",
     "- When 2 or more findings on the same file and line have the same root cause and the same fix (for example 2 lenses), write 1 comment for all of them. Use the id of one as `id`, and put the other ids in `also`. An id in `also` gets no comment of its own.",
     "- A `suggestion` block replaces only the commented line. When the fix changes more lines, use a plain code snippet.",
     "- A finding with `ask_author: true` is a question to the author. State each other finding directly.",
     "- Findings with lens `hygiene` get no inline comment. Put them in `body` as one short list.",
-    "- `verdict`: one line. Say what blocks the merge and why, or write \"Nothing blocks.\" when no finding is `must`.",
+    blocking.length
+      ? "- `verdict`: one line. Say what blocks the merge and why. The earlier must findings that are still open block it: name them. Never write \"Nothing blocks.\"."
+      : "- `verdict`: one line. Say what blocks the merge and why, or write \"Nothing blocks.\" when no finding is `must`.",
     questions.length
       ? `- \`answers\`: one short answer for each of the author's questions, in order. Check each answer against the code.`
       : "- `answers`: [] (the PR body has no questions).",

@@ -1046,7 +1046,7 @@ test("compose output with a fenced suggestion reaches the post with the fence in
   const { runChild } = await import("../lib/child.mjs");
   const body = "**must:** off by one\n\n```suggestion\nconst a = 1;\n```";
   const raw = join(fx.root, "compose.out");
-  writeFileSync(raw, "```json\n" + JSON.stringify({ body: "Changes a.", comments: [{ id: "c1", body }] }) + "\n```\n");
+  writeFileSync(raw, "```json\n" + JSON.stringify({ verdict: "The off by one blocks.", body: "Changes a.", comments: [{ id: "c1", body }] }) + "\n```\n");
   const compose = async (o) => {
     const old = process.env.PR_REVIEW_FAKE;
     process.env.PR_REVIEW_FAKE = raw;
@@ -1400,4 +1400,40 @@ test("pass 2: an earlier finding the seats judge wrong is retracted first, and n
   assert.match(p.body, new RegExp(`^Second pass, on \`${fx.head.slice(0, 7)}\`\\.\n\nCorrection: Our finding on a was wrong: 2 is the documented default\\. \\(thread on \`a\\.js\` L1\\)\n\nNothing blocks\\.`));
   assert.notEqual(p.event, "REQUEST_CHANGES");
   assert.ok(!mutations(fx).some((x) => x.key.includes("replies")), "a retracted thread gets no 'Fixed in' reply");
+  assert.ok(mutations(fx).some((x) => x.key === "graphql ResolveThread"), "a retracted thread is resolved");
+  assert.deepEqual(prState(fx.state, N).retracted, ["T1"]);
+});
+
+const T1 = (canResolve = true) => [{ id: "T1", isResolved: false, isOutdated: false, viewerCanResolve: canResolve, path: "a.js", line: 1, originalLine: 1,
+  comments: { nodes: [{ databaseId: 11, author: { login: ME, __typename: "User" }, body: "**must:** a is wrong", createdAt: "x" }] } }];
+
+test("pass 3: a thread we retracted is not judged again and does not block, also when GitHub kept it open", async () => {
+  const fx = fixture(); routes(fx, { threads: T1(false) });
+  savePrState(fx.state, N, { ...prState(fx.state, N), reviews: 2, lastReviewedSha: fx.base, retracted: ["T1"], resolved: ["T1"] });
+  const { r } = await go(fx, { all: { findings: [], earlier: [{ thread_id: "T1", status: "open", evidence: "a.js:1" }] }, compose: { verdict: "Nothing blocks.", body: "No new findings.", comments: [] } });
+  assert.equal(r.exit, 0, r.summary);
+  assert.deepEqual(JSON.parse(readFileSync(join(r.runDir, "ctx", "earlier.json"), "utf8")), []);
+  const p = posts(fx)[0];
+  assert.notEqual(p.event, "REQUEST_CHANGES");
+  assert.match(p.body, /^Pass 3, on `[0-9a-f]{7}`\.\n\nNothing blocks\./);
+  assert.doesNotMatch(p.body, /Correction/);
+});
+
+test("pass 2: an earlier must still open reaches compose, and \"Nothing blocks.\" never contradicts the event", async () => {
+  const fx = fixture(); routes(fx, { threads: T1() });
+  savePrState(fx.state, N, { ...prState(fx.state, N), reviews: 1, lastReviewedSha: fx.base });
+  const { r, run } = await go(fx, { all: { findings: [], earlier: [{ thread_id: "T1", status: "open", evidence: "x" }] }, compose: { verdict: "Nothing blocks.", body: "Still open.", comments: [] } });
+  assert.equal(r.exit, 0, r.summary);
+  const prompt = run.calls.find((c) => c.k === "compose").prompt;
+  assert.match(prompt, /## Earlier must findings of ours that are still open[\s\S]*"thread_id": "T1"/);
+  assert.match(prompt, /Never write "Nothing blocks\."/);
+  const p = posts(fx)[0];
+  assert.equal(p.event, "REQUEST_CHANGES");
+  assert.match(p.body, /^Second pass, on `[0-9a-f]{7}`\.\n\n1 earlier must finding is still open, so the PR is blocked\.\n\nStill open\./);
+});
+
+test("an empty answer keeps the next answers on their own question numbers", async () => {
+  const fx = fixture(); routes(fx, { body: "Is 2 right?\nWhy not 3?" });
+  await go(fx, happy({ compose: { verdict: "The off by one blocks.", answers: ["", "3 overflows the buffer."], body: "", comments: [{ id: "c1", body: "**must:** off by one" }] } }));
+  assert.match(posts(fx)[0].body, /Your questions:\n2\. 3 overflows the buffer\.\n/);
 });

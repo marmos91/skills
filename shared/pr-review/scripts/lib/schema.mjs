@@ -45,7 +45,7 @@ const stages = {
   compose(v, errs) {
     // body may be "" when the verdict carries the review.
     if (!str(v?.body) && !(typeof v?.body === "string" && str(v?.verdict))) errs.push("body: required");
-    if (v?.verdict !== undefined && typeof v.verdict !== "string") errs.push("verdict: must be a string");
+    if (!str(v?.verdict)) errs.push("verdict: required");
     if (v?.praise !== undefined && typeof v.praise !== "string") errs.push("praise: must be a string");
     if (v?.answers !== undefined && !(Array.isArray(v.answers) && v.answers.every((x) => typeof x === "string"))) errs.push("answers: must be an array of strings");
     if (v?.index !== undefined) list(v.index, "index", errs, (g, p) => {

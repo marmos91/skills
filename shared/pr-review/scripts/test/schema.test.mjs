@@ -14,7 +14,9 @@ test("validate covers the other stages", () => {
   assert.deepEqual(validate("vote", [{ id: "a", vote: "keep", counter_case: "" }]), []);
   assert.ok(validate("vote", [{ id: "a", vote: "maybe", counter_case: "" }]).length);
   assert.deepEqual(validate("merge", [{ id: "a", lens: "l", severity: "nit", file: "f", line: 1, title: "t", found: [] }]), []);
-  assert.deepEqual(validate("compose", { body: "b", comments: [{ id: "a", body: "b" }] }), []);
+  assert.deepEqual(validate("compose", { verdict: "Nothing blocks.", body: "b", comments: [{ id: "a", body: "b" }] }), []);
+  assert.deepEqual(validate("compose", { verdict: "Nothing blocks.", body: "", comments: [] }), []);
+  assert.match(validate("compose", { body: "b", comments: [] }).join(), /verdict: required/);
   assert.deepEqual(validate("reply", { position: "ask", body: "b" }), []);
   assert.ok(validate("reply", { position: "x", body: "" }).length);
   assert.ok(validate("nope", {}).length);
