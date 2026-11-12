@@ -888,6 +888,7 @@ test("hygiene warnings are in the run summary; run.json keeps the planned child 
   assert.equal(r.exit, 0, r.summary);
   assert.match(r.summary, /warning: hygiene child failed/);
   assert.equal(JSON.parse(readFileSync(join(r.runDir, "run.json"), "utf8")).planned, r.planned);
+  assert.match(JSON.parse(readFileSync(join(r.runDir, "run.json"), "utf8")).version, /^\d+\.\d+\.\d+$/);
   assert.ok(r.planned > 0);
 });
 

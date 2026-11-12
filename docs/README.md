@@ -20,18 +20,35 @@ The skills:
 
 ## Install
 
-1. Clone the repository.
-2. Run `./install.sh` from the repository root.
-3. To remove the links, run `./install.sh --rm`.
+Install a release from npm:
 
-`install.sh` creates symlinks. It does not copy files.
+```sh
+npx @marmos91/skills install            # every skill, for Claude Code and pi
+npx @marmos91/skills install --claude   # Claude Code only (--pi: pi only)
+npx @marmos91/skills install pr-review-loop   # one skill and the skills it needs
+npx @marmos91/skills list               # installed version per skill and agent
+npx @marmos91/skills uninstall          # remove what the package installed
+```
+
+The installer copies each skill into the folders below and links its CLIs
+into `~/.local/bin`. Use `--link` to link instead of copy. A re-install
+replaces the copy. A local copy that the package did not write is moved to
+`<skill>.pre-skills-repo` one time. Each `SKILL.md` has the release version
+in `metadata.version`, and `pr-review doctor` prints it.
+
+`npm install -g @marmos91/skills` also works: npm puts the CLIs on your PATH,
+and `skills install` copies the skills.
+
+For a dev clone, run `./install.sh` from the repository root. It creates
+symlinks to the working tree, so an edit is live at once. To remove the
+links, run `./install.sh --rm`.
 
 | Source | Link target | Override |
 |---|---|---|
 | `pi/<skill>` | `~/.pi/agent/skills/<skill>` | `PI_DIR` |
 | `claude/<skill>` | `~/.claude/skills/<skill>` | `CLAUDE_DIR` |
 | `shared/<skill>` | both directories above | |
-| `shared/<skill>/bin/*` | `~/.local/bin/` (for example `jev`, `pr-review` and `pr-review-loop`) | `BIN_DIR` |
+| CLIs (`bin` in `package.json`) | `~/.local/bin/` (for example `jev`, `pr-review` and `pr-review-loop`) | `BIN_DIR` |
 
 - You can run `install.sh` again after a pull. It is idempotent.
 - If a real directory has the same name, `install.sh` moves it to `<name>.pre-skills-repo`.

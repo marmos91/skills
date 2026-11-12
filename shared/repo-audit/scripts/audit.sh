@@ -11,7 +11,10 @@
 #        status clean all
 set -eu
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# follow symlinks (npm and the installer link this file as `repo-audit`) with POSIX readlink
+f=$0
+while [ -L "$f" ]; do l=$(readlink "$f"); case $l in /*) f=$l ;; *) f=$(dirname "$f")/$l ;; esac; done
+SCRIPT_DIR="$(cd "$(dirname "$f")" && pwd)"
 LIB="$SCRIPT_DIR/lib"
 REPO="$(cd "${REPO:-.}" && pwd)"
 REPO_NAME="$(basename "$REPO")"

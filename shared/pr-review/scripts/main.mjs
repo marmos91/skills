@@ -12,7 +12,7 @@ import { redact } from "./lib/secrets.mjs";
 import { askJev as realAskJev, findJev as realFindJev } from "./lib/decider.mjs";
 import { review, SetupError, STAGES } from "./lib/review.mjs";
 import { answer, markAsked, openQuestions, questionWarnings } from "./lib/questions.mjs";
-import { FINAL_STAGE, Locked, done, holderAlive, prState, stateRoot } from "./lib/state.mjs";
+import { FINAL_STAGE, Locked, VERSION, done, holderAlive, prState, stateRoot } from "./lib/state.mjs";
 import { remoteRepos } from "./lib/github.mjs";
 
 // The one signal path: stop the children, then exit; the lock is released on exit.
@@ -116,6 +116,7 @@ function gitleaksProbe(bin) {
 }
 
 async function doctor(v, { runChild = realRunChild, askJev = realAskJev, findJev = realFindJev, gitleaks = "gitleaks" } = {}) {
+  console.log(`pr-review ${VERSION} (${SKILL_DIR})`);
   let repoText;
   try { repoText = execFileSync("git", ["show", "origin/HEAD:.pr-review.json"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }); } catch {}
   let config;

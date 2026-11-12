@@ -17,7 +17,7 @@ import { hygiene as realHygiene } from "./hygiene.mjs";
 import { limiter } from "./limit.mjs";
 import { decide as realDecide } from "./decider.mjs";
 import { appliedAnswer, pendingAnswers, queueQuestion } from "./questions.mjs";
-import { FINAL_STAGE, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, writeAtomic } from "./state.mjs";
+import { FINAL_STAGE, VERSION, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, writeAtomic } from "./state.mjs";
 
 export const STAGES = ["frame", "round1", "merge", "round2", "tally", "decide", "compose", "post"];
 const RANK = { must: 0, should: 1, nit: 2 };
@@ -232,7 +232,7 @@ async function once(o, restart) {
     }
     // A lens the user runs but this run skips (--lens, or off in the repo config) counts as failed: no APPROVE.
     // planned: the count for this run's merged config, which status shows.
-    save(runFile, { effort, lenses, missing: LENSES.filter((l) => userConfig.lenses[l].enabled && !lenses.includes(l)), planned: count(effort) });
+    save(runFile, { version: VERSION, effort, lenses, missing: LENSES.filter((l) => userConfig.lenses[l].enabled && !lenses.includes(l)), planned: count(effort) });
   }
   const run = readJson(runFile);
   config = applyEffort(config, run.effort);

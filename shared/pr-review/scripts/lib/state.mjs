@@ -5,6 +5,11 @@ import { join, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 import { installSignalHandlers } from "./child.mjs";
 
+// The skill's version (metadata.version in SKILL.md, set by each release); a review records it in run.json.
+export const VERSION = (() => {
+  try { return readFileSync(new URL("../../SKILL.md", import.meta.url), "utf8").match(/^\s+version:\s*"?([^"\s#]+)/m)?.[1] ?? "unknown"; } catch { return "unknown"; }
+})();
+
 // A run is finished once its last stage has a marker.
 export const FINAL_STAGE = "post";
 
