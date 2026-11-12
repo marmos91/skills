@@ -69,6 +69,7 @@ export async function review(opts) {
   } catch (e) {
     // Too large is the user's call, not a failed stage: nothing ran, so exit 1 with the way out.
     if (e instanceof DiffTooLarge) return { exit: 1, summary: `${e.message}. Review it anyway with --max-diff-lines N, or raise review.max_diff_lines in the config.` };
+    if (e instanceof SetupError) return { exit: 1, summary: e.message };
     if (e instanceof ChildFailed || e instanceof HeadMoved) return { exit: 4, summary: e.message };
     throw e;
   } finally { release(); }
@@ -184,6 +185,7 @@ async function once(o, restart) {
     let effort = o.effort ?? (mode === "loop" ? config.loop.effort : config.effort);
     if (effort === "auto") effort = pickEffort(f.changedPaths, config);
     const lenses = LENSES.filter((l) => config.lenses[l].enabled && (!o.lenses || o.lenses.includes(l)));
+    if (!lenses.length) throw new SetupError("no lens runs: the requested lens is disabled in the config, or every lens is disabled");
     // A lens the user runs but this run skips (--lens, or off in the repo config) counts as failed: no APPROVE.
     // planned: the count for this run's merged config, which status shows.
     save(runFile, { effort, lenses, missing: LENSES.filter((l) => userConfig.lenses[l].enabled && !lenses.includes(l)), planned: plannedChildren(applyEffort(config, effort), lenses) });

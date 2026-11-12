@@ -1024,3 +1024,15 @@ test("trusted author: shell only in round-1 jobs that run the adversarial lens; 
   assert.ok(run.calls.some((c) => c.tools === "shell"), "the adversarial job gets a shell");
   assert.ok(run.calls.filter((c) => c.k.startsWith("v~")).every((c) => c.tools === "shell"), "votes keep run evidence (R2)");
 });
+
+test("no lens left to run (all disabled, or --lens names a disabled one) is exit 1 and posts nothing", async () => {
+  const fx = fixture(); routes(fx);
+  mkdirSync(join(process.env.XDG_CONFIG_HOME, "pr-review"), { recursive: true });
+  const off = Object.fromEntries(["adversarial", "correctness", "simplification", "architecture"].map((l) => [l, { enabled: true }]));
+  writeFileSync(join(process.env.XDG_CONFIG_HOME, "pr-review", "config.json"), JSON.stringify({ lenses: { ...off, security: { enabled: false } } }));
+  const { r } = await go(fx, happy(), { lenses: ["security"] });
+  assert.equal(r.exit, 1);
+  assert.match(r.summary, /no lens runs/);
+  assert.equal(posts(fx).length, 0);
+  rmSync(join(process.env.XDG_CONFIG_HOME, "pr-review", "config.json"));
+});

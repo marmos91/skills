@@ -361,3 +361,22 @@ test("a signal during jev queues nothing: its unsure is not an answer", async ()
   const r = go({ t: t2, jev, stopping: () => stop, answers: { draft: pos("push_back"), challenge: pos("push_back"), compose: pos("push_back", "Same as before.") } });
   await assert.rejects(r, /stopping/);
 });
+
+test("crash recovery with a newer human comment: finishes the bookkeeping, then answers the new comment", async () => {
+  const { runDir, frame } = setup();
+  const t = thread([human(111, ME, "**must:** leak"), human(112)]);
+  const gh = fakeGh(t);
+  gh.reply = async () => { throw new Error("crash after the post landed"); };
+  const answers = { draft: pos("accept"), challenge: pos("accept"), compose: pos("accept", "Right, a.js:4 guards it.") };
+  const args = { repo: REPO, n: N, threadId: "T1", mode: "loop", frame, config, runDir, runChild: fakeRun(answers), jev: async () => "unsure" };
+  await assert.rejects(reply({ ...args, gh }), /crash/);
+  const after = thread([...t.comments, human(113, ME, "Right, a.js:4 guards it."), human(114, "bob", "But what about b.js?")]);
+  const oldKey = prState(stateRoot(REPO), N).pending.T1.key;
+  const gh2 = fakeGh(after);
+  gh2.findMarker = async (_r, _n, key) => key === oldKey; // only the crashed reply is on GitHub
+  const ask = { draft: pos("ask"), challenge: pos("ask"), compose: pos("ask", "Which caller in b.js?") };
+  const out = await reply({ ...args, gh: gh2, runChild: fakeRun(ask) });
+  assert.equal(out.action, "replied");
+  assert.equal(gh2.calls.reply.length, 1, "the new comment gets its own answer: " + JSON.stringify(out));
+  assert.equal(prState(stateRoot(REPO), N).replies.T1, 2);
+});

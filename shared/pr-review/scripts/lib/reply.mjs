@@ -52,10 +52,15 @@ export async function reply({ repo, n, threadId, mode, frame, config, runDir, gh
   // Crash after the post, before the bookkeeping: GitHub has the reply, so only finish the state.
   const pending = prState(repoState, n).pending?.[threadId];
   if (pending) {
-    if (await gh.findMarker(repo, n, pending.key)) return result("replied", await finish(pending));
-    const s = prState(repoState, n);
-    delete s.pending[threadId];
-    savePrState(repoState, n, s);
+    if (await gh.findMarker(repo, n, pending.key)) {
+      const resolved = await finish(pending);
+      // our posted reply is still the newest comment: done; a newer human comment falls through to an answer
+      if (!last || last.author === me) return result("replied", resolved);
+    } else {
+      const s = prState(repoState, n);
+      delete s.pending[threadId];
+      savePrState(repoState, n, s);
+    }
   }
 
   // Rule 7.3: only a new human comment gets an answer; our own last comment means it was answered.

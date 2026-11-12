@@ -512,3 +512,16 @@ test("a reply-only tick keeps an unfinished review run at the same sha open", as
   await go({ gh: fakeGh({ rows: [row(1, ["author"], { author: ME })], threads }) });
   assert.equal(existsSync(join(dir, "post.done")), false);
 });
+
+test("a blocked PR started by a mention is reviewed again when the cap is raised", async () => {
+  const rs = fresh();
+  withBaseline(rs);
+  const t = { id: "T2", path: "b.js", line: 1, comments: [human(6, "bob", `@${ME} can you review this?`)] };
+  const f = fakes({ reviewResult: { exit: 1, summary: "diff too large" } });
+  await go({ gh: fakeGh({ rows: [row(1, ["mentions"])], threads: { 1: [t] } }), f });
+  assert.equal(f.reviews.length, 1);
+  assert.ok(prState(rs, 1).cache.blocked);
+  const raised = () => { const c = loadConfig(); c.review.max_diff_lines = 5000; return c; };
+  await go({ gh: fakeGh({ rows: [row(1, ["mentions"])], threads: { 1: [t] } }), f, loadCfg: raised });
+  assert.equal(f.reviews.length, 2, "the mention is already seen, but the blocked review runs again");
+});

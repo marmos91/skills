@@ -141,7 +141,7 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
       // (covers a cap raised in the repo's .pr-review.json, which this check does not load)
       const blockedStale = c.blocked && (c.blocked.cap !== config.review.max_diff_lines || now() - c.blocked.at > 24 * 3600e3);
       const changed = force || c.updatedAt !== r.updatedAt || blockedStale;
-      if (fresh && changed) rows.push(r); else out.skipped++;
+      if (fresh && changed) rows.push(blockedStale ? { ...r, blockedRetry: true } : r); else out.skipped++;
     }
     rows.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
     await runQueue({ startedAt: new Date(now()).toISOString(), queue: rows.slice(0, Math.max(0, budget)), done: [], current: null });
@@ -155,7 +155,8 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
         writeAtomic(jf, JSON.stringify({ ...j, current: r.number }, null, 2) + "\n");
         let res;
         try { res = await handle(r, forced.get(r.number)); } catch (e) { log(`#${r.number}: ${e.message}`); res = { acted: false, cache: false }; }
-        if (res.cache) update(r.number, (s) => { s.cache = { updatedAt: r.updatedAt, ...(res.blocked && { blocked: res.blocked }) }; });
+        // the block marker stays until a review really ran (or a new exit 1 replaces it)
+        if (res.cache) update(r.number, (s) => { const blocked = res.blocked ?? (res.reviewed ? undefined : s.cache?.blocked); s.cache = { updatedAt: r.updatedAt, ...(blocked && { blocked }) }; });
         res.acted ? out.processed++ : out.skipped++;
         j.done.push(r.number);
         writeAtomic(jf, JSON.stringify({ ...j, current: null }, null, 2) + "\n");
@@ -198,10 +199,12 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
       }
 
       // A forced PR (answered review question) is reviewed even when it is Marco's own, else the answer stays pending.
-      let doReview = !!force || (!own && (requested || wantReview || (r.reasons.includes("reviewed-by") && p.headSha !== s.lastReviewedSha)));
+      // A blocked PR (exit 1 earlier) that is due for a retry is reviewed again, whatever started the first attempt.
+      const retryBlocked = !!s.cache?.blocked && r.blockedRetry;
+      let doReview = !!force || retryBlocked || (!own && (requested || wantReview || (r.reasons.includes("reviewed-by") && p.headSha !== s.lastReviewedSha)));
       let queued = false, wait = false;
       // 7.5 rule 5: after the round budget only a new request from the author reviews again.
-      if (doReview && !requested && !force && !budgetLeft(s, config).review) {
+      if (doReview && !requested && !force && !retryBlocked && !budgetLeft(s, config).review) {
         doReview = false;
         queued = true;
         const musts = threads.filter((t) => !t.isResolved && t.comments[0]?.author === me && SEVERITY.exec(t.comments[0].body ?? "")?.[1] === "must").map((t) => commentUrl(repo, n, t.comments[0].id));
@@ -249,7 +252,7 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
         // The review ran with the answers: never force this PR again for them. review() queues approve? itself.
         else for (const id of force || []) appliedAnswer(rs, id);
       }
-      return { acted: true, cache: !wait };
+      return { acted: true, cache: !wait, reviewed: doReview && !wait };
     }
 
     // 7.4: check against the current head first; a moved head drops the answer with a note.
