@@ -144,11 +144,13 @@ function issue(repo, number, wrap) {
 }
 
 // Same-repo issues the body (#12, fixes #12) or branch (fix/12-x, issue-12) names, beyond the closing ones; capped.
-// Branch: an issue word then the number, or a bare number opening a later segment and followed by a word; dates and versions (release/2024-01-15, node-18) are no match.
+// Branch: an issue word then the number, or a number that opens the name, as GitHub's branch from an issue
+// (12-fix-login). A wrong link can turn the shell off, so dates, years and versions never match.
 export function linkedIssues(p, n) {
-  const branch = /(?:^|\/)(?:(?:fix|issue|bug|hotfix|gh|closes|fixes|resolves)[-_/]|(?<=\/))(\d+)(?=[-_][a-z]|\/|$)/gi;
+  // shortcut: a year-like number (1900-2099) in a branch never links; #2024 in the body still does.
+  const branch = /(?:^|\/)(?:fix|issue|bug|hotfix|gh|closes|fixes|resolves)[-_/](?!(?:19|20)\d\d\b)(\d+)(?=[-_][a-z]|\/|$)|^(?!(?:19|20)\d\d\b)(\d+)(?=[-_][a-z])/gi;
   const nums = [...String(p.body ?? "").matchAll(/(?<![\w/.-])#(\d+)\b/g), ...String(p.headRef ?? "").matchAll(branch)];
-  return [...new Set(nums.map((m) => Number(m[1])))].filter((i) => i !== n && !p.closingIssues.includes(i)).slice(0, 5);
+  return [...new Set(nums.map((m) => Number(m[1] ?? m[2])))].filter((i) => i !== n && !p.closingIssues.includes(i)).slice(0, 5);
 }
 
 // The repo's own guidance list counts too: frame runs before the caller merges repoConfigText.
