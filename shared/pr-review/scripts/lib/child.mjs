@@ -1,0 +1,170 @@
+import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { resolveHarness } from "./config.mjs";
+import { validate } from "./schema.mjs";
+
+const HARNESS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "harness");
+export { ENV_OK } from "./env.mjs";
+import { ENV_OK } from "./env.mjs";
+
+// Live child process groups: seats must not outlive the engine.
+const live = new Set();
+const killAll = (sig) => { for (const pid of live) try { process.kill(-pid, sig); } catch {} };
+let handlersInstalled = false;
+/** True once a signal arrived: callers must not save results that a killed child produced. */
+export let stopping = false;
+// The engine's one signal path: stop the children, then exit once; the "exit" listeners (lock release) run then.
+export function installSignalHandlers() {
+  if (handlersInstalled) return;
+  handlersInstalled = true;
+  process.on("exit", () => killAll("SIGKILL"));
+  for (const [sig, n] of [["SIGINT", 2], ["SIGTERM", 15]]) {
+    process.on(sig, () => {
+      if (stopping) return;
+      stopping = true;
+      killAll("SIGTERM");
+      const start = Date.now();
+      const iv = setInterval(() => {
+        for (const pid of live) try { process.kill(-pid, 0); } catch { live.delete(pid); }
+        if (!live.size || Date.now() - start > 5000) { clearInterval(iv); killAll("SIGKILL"); process.exit(128 + n); }
+      }, 100);
+    });
+  }
+}
+
+/** Register a detached child's process group so an engine signal kills it. */
+export function track(pid) { installSignalHandlers(); live.add(pid); }
+export function untrack(pid) { live.delete(pid); }
+
+export class ChildFailed extends Error {
+  constructor(msg) { super(msg); this.name = "ChildFailed"; }
+}
+
+/** A seat at its turn limit or timeout: not retried; a review leaves it out of the rest of the run. */
+export class SeatDropped extends ChildFailed {
+  constructor(seat, reason, detail = "") { super(`${seat.harness}:${seat.model} dropped (${reason})${detail ? `: ${detail}` : ""}`); this.name = "SeatDropped"; this.seat = seat; this.reason = reason; }
+}
+
+// Every top-level JSON value in the text: a model may quote a finding in its prose before the real output.
+// With ok (a schema is set) the LAST value counts, never an earlier one that passes: an earlier value may be a
+// quote that would hide the seat's real (invalid or error) output. A trailing list of numbers, a citation such as
+// "[1]", is not an output and is skipped. Without ok: the largest value.
+export function salvageJson(text, ok) {
+  // No fence stripping: the scan skips all but { and [, and a fence inside a JSON string (a comment body) must stay.
+  const s = String(text);
+  const found = [];
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] !== "{" && s[i] !== "[") continue;
+    let depth = 0, inStr = false, esc = false;
+    for (let j = i; j < s.length; j++) {
+      const c = s[j];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (c === "\\") esc = true;
+        else if (c === '"') inStr = false;
+        continue;
+      }
+      if (c === '"') inStr = true;
+      else if (c === "{" || c === "[") depth++;
+      else if (c === "}" || c === "]") {
+        if (--depth === 0) {
+          try { found.push({ v: JSON.parse(s.slice(i, j + 1)), size: j + 1 - i }); i = j; } catch {}
+          break;
+        }
+      }
+    }
+  }
+  // With a schema: only the LAST value counts. Falling back to an earlier one could pick a value the
+  // seat quoted (from the PR or its own prose) and hide its real, invalid or error output; fail and retry.
+  const footnote = (v) => Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === "number");
+  if (ok) return found.findLast((x) => !footnote(x.v))?.v ?? null; // the caller validates it and retries on failure
+  return found.reduce((a, b) => (b.size > a.size ? b : a), { v: null, size: -1 }).v;
+}
+
+let routerProbe;
+const ROUTER_HEALTH = () => process.env.PR_REVIEW_ROUTER_HEALTH || "http://127.0.0.1:4000/router/health";
+function probeRouter() {
+  routerProbe ??= fetch(ROUTER_HEALTH(), {
+    signal: AbortSignal.timeout(2000),
+  }).then((r) => r.ok, () => false);
+  return routerProbe;
+}
+
+function runOnce(script, args, env, cwd, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const p = spawn(script, args, { cwd, env, detached: true, stdio: ["ignore", "ignore", "pipe"] });
+    track(p.pid);
+    let err = "", timedOut = false;
+    p.stderr.on("data", (d) => { err += d; });
+    const t = setTimeout(() => {
+      timedOut = true;
+      try { process.kill(-p.pid, "SIGKILL"); } catch {}
+    }, timeoutMs);
+    p.on("error", reject);
+    p.on("close", (code) => {
+      clearTimeout(t);
+      untrack(p.pid);
+      try { process.kill(-p.pid, "SIGKILL"); } catch {} // reap stragglers
+      if (timedOut) reject(Object.assign(new Error(`timed out after ${timeoutMs}ms`), { timedOut: true }));
+      else if (code !== 0) reject(new Error(`exit ${code}: ${err.trim().slice(-500)}`));
+      else resolve();
+    });
+  });
+}
+
+// retries = extra attempts after the first.
+// The pi harness has no turn limit: there the timeout is the only bound on a long tool loop.
+export async function runChild({ seat, tools = "read", promptFile, outFile, worktree, ctxDir, schema, timeoutMs = (seat.timeout_minutes ?? 10) * 60000, retries = 2, routerUp, droppable = false, trusted = false }) {
+  const fake = process.env.PR_REVIEW_FAKE;
+  let harness = seat.harness;
+  if (!fake && harness === "auto") harness = resolveHarness(seat, routerUp ?? (await probeRouter()));
+  // pi has no file sandbox (no add-dir confinement or deny rules): a prompt injection in an untrusted PR could
+  // read any local file into a finding, so pi seats run only for trusted authors; fail closed otherwise.
+  if (!fake && harness === "pi" && !trusted) throw new ChildFailed(`${seat.harness}:${seat.model}: the pi harness has no file sandbox and runs only for trusted authors`);
+  const script = join(HARNESS_DIR, `${fake ? "fake" : harness}.sh`);
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => ENV_OK.test(k)));
+  if (worktree) env.SEAT_WORKTREE = worktree;
+  if (ctxDir) env.SEAT_CTX = ctxDir; // the PR context: outside the child cwd, so it must be an --add-dir folder
+  if (seat.max_turns) env.SEAT_MAX_TURNS = String(seat.max_turns);
+  // an auto seat that resolved to claude is a router model: point claude at the router, as claude-mimir does
+  if (seat.harness === "auto" && harness === "claude") {
+    env.ANTHROPIC_BASE_URL = new URL(ROUTER_HEALTH()).origin;
+    delete env.ANTHROPIC_CUSTOM_HEADERS;
+  }
+  const cwd = dirname(outFile); // neutral run folder: the PR checkout must not supply CLAUDE.md or .claude/
+  let model = seat.model;
+  if (harness === "pi") {
+    const [prov, ...rest] = model.split("/");
+    env.SEAT_PROVIDER = seat.provider ?? (rest.length ? prov : "");
+    if (!seat.provider && rest.length) model = rest.join("/");
+  }
+  // claude --effort has no off or minimal: a Mimir seat routed through claude thinks at low.
+  const thinking = harness === "claude" && ["off", "minimal"].includes(seat.thinking) ? "low" : seat.thinking;
+  let last;
+  for (let i = 0; i <= retries; i++) {
+    if (stopping) throw new ChildFailed("engine is stopping on a signal"); // a killed child is not retried
+    try {
+      await runOnce(script, [model, thinking, tools, promptFile, outFile], env, cwd, timeoutMs);
+      const value = salvageJson(await readFile(outFile, "utf8"), schema && ((v) => validate(schema, v).length === 0));
+      if (value === null) throw new Error("no JSON in output");
+      const errs = schema ? validate(schema, value) : [];
+      if (errs.length) throw new Error(`invalid ${schema}: ${errs.join("; ")}`);
+      return value;
+    } catch (e) {
+      last = e;
+      // A retry hits the same limit: the seat drops at once. claude prints this and exits 1 at --max-turns.
+      // only council seats drop; judge, compose and reply children keep their retries
+      if (droppable && e.timedOut) throw new SeatDropped(seat, "timeout", e.message);
+      // claude -p prints only this line at --max-turns; a seat that merely quotes it in longer output is not matched
+      const out = (await readFile(outFile, "utf8").catch(() => "")).trim();
+      if (harness === "claude" && (/error_max_turns/.test(e.message) || /^Error: Reached max turns \(\d+\)$/.test(out))) {
+        // a retry hits the same limit: never retried; only council seats drop, other children fail
+        if (droppable) throw new SeatDropped(seat, "turn limit", `max_turns (${seat.max_turns})`);
+        throw new ChildFailed(`${harness}:${seat.model} hit max_turns (${seat.max_turns})`);
+      }
+    }
+  }
+  throw new ChildFailed(`${fake ? "fake" : harness}:${seat.model} failed after ${retries + 1} attempts: ${last.message}`);
+}

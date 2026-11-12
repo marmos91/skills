@@ -1,0 +1,31 @@
+diff --git a/src/a.ts b/src/a.ts
+index 111..222 100644
+--- a/src/a.ts
++++ b/src/a.ts
+@@ -1,4 +1,5 @@
+ line1
+-old2
++new2
++new3
+ line3
+ line4
+@@ -50,3 +51,3 @@ function f() {
+ ctx51
+-old52
++new52
+ ctx53
+diff --git a/one.txt b/one.txt
+index 111..222 100644
+--- a/one.txt
++++ b/one.txt
+@@ -1 +1 @@
+-a
++b
+diff --git a/dir/x y.txt b/dir/x y.txt
+index 111..222 100644
+--- "a/dir/x y.txt"
++++ "b/dir/x y.txt"
+@@ -2,2 +2,3 @@
+ keep
++added
+ tail

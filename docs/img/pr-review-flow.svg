@@ -1,0 +1,159 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 960" width="860" height="960" role="img" aria-labelledby="t">
+  <title id="t">One pr-review run: frame, round 1, merge, vote, tally, jev or a question for split findings, compose, verdict, post</title>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#57606a"/>
+    </marker>
+    <marker id="arr-loop" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#bc4c00"/>
+    </marker>
+    <marker id="arr-jev" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8250df"/>
+    </marker>
+    <marker id="arr-fail" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#cf222e"/>
+    </marker>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 12px; fill: #1f2328; }
+      .h { font-size: 14px; font-weight: 600; }
+      .c { text-anchor: middle; }
+      .s { font-size: 11px; fill: #57606a; }
+      .box { fill: #f6f8fa; stroke: #57606a; stroke-width: 1.5; }
+      .code { fill: #effaf1; stroke: #1a7f37; stroke-width: 1.5; }
+      .doc { fill: #ffffff; stroke: #57606a; stroke-width: 1.5; stroke-dasharray: 4 3; }
+      .jev { fill: #f3eefe; stroke: #8250df; stroke-width: 2; }
+      .loop { fill: #fff8f0; stroke: #bc4c00; stroke-width: 1.5; }
+      .park { fill: #fff5f5; stroke: #cf222e; stroke-width: 1.5; }
+      .edge { stroke: #57606a; stroke-width: 1.5; fill: none; }
+      .ledge { stroke: #bc4c00; stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+      .jedge { stroke: #8250df; stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+      .fedge { stroke: #cf222e; stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+    </style>
+  </defs>
+  <rect width="860" height="960" rx="8" fill="#ffffff"/>
+
+  <!-- legend -->
+  <rect x="20" y="14" width="16" height="12" rx="2" class="box"/>
+  <text x="42" y="24">model children</text>
+  <rect x="150" y="14" width="16" height="12" rx="2" class="code"/>
+  <text x="172" y="24">engine code, no model</text>
+  <rect x="320" y="14" width="16" height="12" rx="2" class="jev"/>
+  <text x="342" y="24">jev step</text>
+  <rect x="420" y="14" width="16" height="12" rx="2" class="loop"/>
+  <text x="442" y="24">waits for you</text>
+  <rect x="540" y="14" width="16" height="12" rx="2" class="park"/>
+  <text x="562" y="24">never posted</text>
+  <rect x="660" y="14" width="16" height="12" rx="2" class="doc"/>
+  <text x="682" y="24">input</text>
+
+  <!-- input -->
+  <rect x="200" y="44" width="340" height="44" rx="6" class="doc"/>
+  <text x="370" y="64" class="h c">pr-review review &lt;n&gt;</text>
+  <text x="370" y="80" class="c">or one PR picked by the loop</text>
+
+  <!-- 1 frame -->
+  <rect x="200" y="112" width="340" height="68" rx="6" class="code"/>
+  <text x="370" y="134" class="h c">1. Frame</text>
+  <text x="370" y="153" class="c">pin the head SHA; diff, threads, CI, issues</text>
+  <text x="370" y="170" class="c">guidance from the base branch; worktree</text>
+
+  <!-- 2 round 1 -->
+  <rect x="200" y="204" width="340" height="68" rx="6" class="box"/>
+  <text x="370" y="226" class="h c">2. Round 1: seats x lenses</text>
+  <text x="370" y="245" class="c">each seat alone; per-seat or per-lens children</text>
+  <text x="370" y="262" class="c">no concrete case, no finding</text>
+
+  <!-- 3 merge -->
+  <rect x="200" y="296" width="340" height="68" rx="6" class="box"/>
+  <text x="370" y="318" class="h c">3. Merge (judge)</text>
+  <text x="370" y="337" class="c">cluster by root cause, never across lenses</text>
+  <text x="370" y="354" class="c">drop settled, reversed and repeated findings</text>
+
+  <!-- 4 vote -->
+  <rect x="200" y="388" width="340" height="68" rx="6" class="box"/>
+  <text x="370" y="410" class="h c">4. Round 2: vote</text>
+  <text x="370" y="429" class="c">a seat that found it = 1 keep; others vote</text>
+  <text x="370" y="446" class="c">a drop needs a counter-case</text>
+
+  <!-- 5 tally -->
+  <rect x="200" y="480" width="340" height="68" rx="6" class="code"/>
+  <text x="370" y="502" class="h c">5. Tally</text>
+  <text x="370" y="521" class="c">agreed: 2+ keeps, no drop with a counter-case</text>
+  <text x="370" y="538" class="c">rejected: majority drop; else split</text>
+
+  <!-- 7 compose -->
+  <rect x="200" y="690" width="340" height="68" rx="6" class="box"/>
+  <text x="370" y="712" class="h c">7. Compose (judge)</text>
+  <text x="370" y="731" class="c">writing.md; one finding per inline comment</text>
+  <text x="370" y="748" class="c">effort caps severities and count</text>
+
+  <!-- 8 verdict -->
+  <rect x="200" y="782" width="340" height="52" rx="6" class="code"/>
+  <text x="370" y="804" class="h c">8. Verdict</text>
+  <text x="370" y="823" class="c">REQUEST_CHANGES | COMMENT | APPROVE</text>
+
+  <!-- 9 post -->
+  <rect x="200" y="858" width="340" height="84" rx="6" class="code"/>
+  <text x="370" y="880" class="h c">9. Post (gh, under the repo lock)</text>
+  <text x="370" y="899" class="c">head recheck, hunk placement, secret scan</text>
+  <text x="370" y="916" class="c">marker check, then 1 review mutation</text>
+  <text x="370" y="933" class="c">earlier findings fixed: reply and resolve</text>
+
+  <!-- main arrows -->
+  <line x1="370" y1="88" x2="370" y2="110" class="edge" marker-end="url(#arr)"/>
+  <line x1="370" y1="180" x2="370" y2="202" class="edge" marker-end="url(#arr)"/>
+  <line x1="370" y1="272" x2="370" y2="294" class="edge" marker-end="url(#arr)"/>
+  <line x1="370" y1="364" x2="370" y2="386" class="edge" marker-end="url(#arr)"/>
+  <line x1="370" y1="456" x2="370" y2="478" class="edge" marker-end="url(#arr)"/>
+  <line x1="370" y1="548" x2="370" y2="688" class="edge" marker-end="url(#arr)"/>
+  <text x="378" y="622">agreed</text>
+  <line x1="370" y1="758" x2="370" y2="780" class="edge" marker-end="url(#arr)"/>
+  <line x1="370" y1="834" x2="370" y2="856" class="edge" marker-end="url(#arr)"/>
+
+  <!-- rejected -->
+  <rect x="610" y="470" width="230" height="56" rx="6" class="park"/>
+  <text x="725" y="493" class="h c">Rejected</text>
+  <text x="725" y="512" class="c">kept in the run state</text>
+  <line x1="540" y1="498" x2="608" y2="498" class="fedge" marker-end="url(#arr-fail)"/>
+  <text x="574" y="491" class="c">rejected</text>
+
+  <!-- 6 jev -->
+  <rect x="610" y="566" width="230" height="68" rx="6" class="jev"/>
+  <text x="725" y="588" class="h c">6. jev decider</text>
+  <text x="725" y="607" class="c">"a real defect that this PR</text>
+  <text x="725" y="623" class="c">introduces"; split findings only</text>
+  <path d="M540 534 H570 V600 H608" class="jedge" marker-end="url(#arr-jev)"/>
+  <text x="578" y="560" style="fill:#8250df">split</text>
+  <line x1="725" y1="566" x2="725" y2="528" class="jedge" marker-end="url(#arr-jev)"/>
+  <text x="733" y="552" style="fill:#8250df">no</text>
+  <path d="M640 634 V666 H585 V706 H542" class="jedge" marker-end="url(#arr-jev)"/>
+  <text x="593" y="660" style="fill:#8250df">yes</text>
+
+  <!-- question -->
+  <rect x="610" y="690" width="230" height="100" rx="6" class="loop"/>
+  <text x="725" y="712" class="h c">Question</text>
+  <text x="725" y="731" class="c">review: exit 3, you answer,</text>
+  <text x="725" y="747" class="c">run the same command again</text>
+  <text x="725" y="766" class="c">loop: queued; the review is</text>
+  <text x="725" y="782" class="c">posted without the finding</text>
+  <line x1="780" y1="634" x2="780" y2="688" class="ledge" marker-end="url(#arr-loop)"/>
+  <text x="788" y="660">unsure</text>
+  <text x="788" y="675">or no jev</text>
+  <path d="M610 760 H585 V740 H542" class="ledge" marker-end="url(#arr-loop)"/>
+  <text x="548" y="776" class="s">post or</text>
+  <text x="548" y="789" class="s">ask-author</text>
+
+  <!-- side notes -->
+  <text x="16" y="230" class="s">Each child writes its own</text>
+  <text x="16" y="245" class="s">output and a .done marker.</text>
+  <text x="16" y="260" class="s">A rerun starts only the</text>
+  <text x="16" y="275" class="s">children with no marker.</text>
+
+  <text x="16" y="806" class="s">Red or pending CI,</text>
+  <text x="16" y="821" class="s">a split or a question:</text>
+  <text x="16" y="836" class="s">never APPROVE.</text>
+
+  <text x="16" y="890" class="s">--dry-run: write the</text>
+  <text x="16" y="905" class="s">review to a file,</text>
+  <text x="16" y="920" class="s">post nothing.</text>
+</svg>

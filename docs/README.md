@@ -7,12 +7,14 @@
 | This page | Install, prerequisites, quick start for each skill, troubleshooting |
 | [jev.md](jev.md) | The jev algorithm, exit codes, and how the skills use jev |
 | [repo-audit-fix.md](repo-audit-fix.md) | The per-epic pipeline and its convergence limits |
+| [pr-review.md](pr-review.md) | The council review pipeline, convergence, config and resume |
 
 The skills:
 
 - `repo-audit` audits a repository and writes findings and epics.
 - `repo-audit-fix` reads those epics, fixes each one, and opens one PR per epic.
 - `jev` answers yes/no questions. `repo-audit-fix` uses it as a second check on plans.
+- `pr-review` reviews one GitHub PR with a council of different models and posts only the findings they agree on. It uses `jev` to settle splits.
 - `refute-root-cause` tries to disprove a claimed root cause. It stands alone.
 
 ## Install
@@ -28,7 +30,7 @@ The skills:
 | `pi/<skill>` | `~/.pi/agent/skills/<skill>` | `PI_DIR` |
 | `claude/<skill>` | `~/.claude/skills/<skill>` | `CLAUDE_DIR` |
 | `shared/<skill>` | both directories above | |
-| `shared/<skill>/bin/*` | `~/.local/bin/` (for example `~/.local/bin/jev`) | `BIN_DIR` |
+| `shared/<skill>/bin/*` | `~/.local/bin/` (for example `jev` and `pr-review`) | `BIN_DIR` |
 
 - You can run `install.sh` again after a pull. It is idempotent.
 - If a real directory has the same name, `install.sh` moves it to `<name>.pre-skills-repo`.
@@ -38,10 +40,12 @@ The skills:
 
 | Tool | Used by |
 |---|---|
-| `pi` CLI | `repo-audit`, `repo-audit-fix`, `review-lens.sh` (headless `pi -p` children); `refute-root-cause` (pi `subagent` tool) |
-| `gh` (logged in) | `audit.sh issues`, `fix.sh plan` (issue map), `fix.sh` PR stage |
-| `node` | JSON steps in `audit.sh` and `fix.sh` |
-| `python3` | `jev` |
+| `pi` CLI | `repo-audit`, `repo-audit-fix`, `review-lens.sh` (headless `pi -p` children); `refute-root-cause` (pi `subagent` tool); `pr-review` seats with `harness: pi`, and `auto` seats when no router answers (pi seats run only for trusted authors) |
+| `gh` (logged in) | `audit.sh issues`, `fix.sh plan` (issue map), `fix.sh` PR stage; `pr-review` and `pr-review-loop`: all GitHub reads and posts |
+| `node` | JSON steps in `audit.sh` and `fix.sh`; the `pr-review` engine |
+| `claude` CLI | `pr-review` seats with `harness: claude` (the default judge and first seat) |
+| `gitleaks` (optional) | `pr-review` outbound secret scan; built-in patterns without it |
+| `python3` | `jev` (also the optional `pr-review` decider) |
 | Mimir credentials | `jev`: `~/.config/mimir/api-key` and `~/.config/mimir/base-url` (ends in `/v1`) |
 
 The Mimir credentials come from sops. Run `rebuild` in the dotfiles to write them.
@@ -157,6 +161,28 @@ jev doubt "Water boils at 100 degrees Celsius at sea level." --json
 Tests: `python3 -m unittest discover shared/jev`. Set `JEV_LIVE=1` to add a test against the real endpoint.
 See [jev.md](jev.md) for the full algorithm.
 
+### pr-review
+
+1. Copy `shared/pr-review/config.example.json` to `~/.config/pr-review/config.json` and set your seats.
+2. Check the setup:
+
+   ```sh
+   P=~/.claude/skills/pr-review/scripts/pr-review
+   sh $P doctor
+   ```
+
+3. Try a review that posts nothing:
+
+   ```sh
+   sh $P review 42 --repo owner/repo --dry-run
+   ```
+
+4. Post it: run the same command without `--dry-run`.
+5. On exit `3`, answer the open questions with `sh $P answer`, then run the same command again.
+   In Claude Code or pi, ask "review PR 42" and the skill does this for you.
+
+See [pr-review.md](pr-review.md) for the pipeline, effort levels and config.
+
 ## Troubleshooting
 
 ### `pi -p` hangs
@@ -197,3 +223,20 @@ For example, a `security` finding can quote a hardcoded key.
 - FATAL: a stage failed and wrote no marker. The log line starts with `fix: FATAL:`. Run `fix.sh run` again to retry that stage.
 - Parked: the gate failed after `GATE_ROUNDS` revise rounds. Read `.fix/<epic>/blocked.md`.
   Fix by hand, or raise `GATE_ROUNDS` and run again.
+
+### `pr-review` exits 4
+
+A stage failed after its retries. Nothing was posted. The error names the child.
+Run the same command again: it continues from the last finished child.
+Run `pr-review doctor` to probe each seat.
+
+### A claude seat says "Not logged in"
+
+Seats run `claude -p --restricted`, which uses your normal login or a
+`CLAUDE_CODE_OAUTH_TOKEN` from the environment. Run `claude setup-token` and
+export the token for unattended runs, or unset a stale one.
+
+### The review says `Locked`
+
+Another run holds the repo lock. Wait for it. A lock with a dead PID is taken over by the next run.
+`pr-review status` shows the holder.

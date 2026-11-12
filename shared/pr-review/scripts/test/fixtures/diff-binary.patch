@@ -1,0 +1,13 @@
+diff --git a/img.png b/img.png
+index 111..222 100644
+Binary files a/img.png and b/img.png differ
+diff --git a/f.txt b/f.txt
+index 111..222 100644
+--- a/f.txt
++++ b/f.txt
+@@ -1,2 +1,2 @@
+ keep
+-old
+\ No newline at end of file
++new
+\ No newline at end of file
