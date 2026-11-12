@@ -137,12 +137,16 @@ and files that are not `.md`. The file has the same shape as a
 built-in lens and the same limit: 40 lines and 4000 characters. A user lens is
 on by default. Set `lenses.<name>` like a built-in lens (`enabled`, `seats`,
 `max_turns`, `thinking_by_stage`), and select it with `--lens <name>`. A bad
-lens file stops the run before any child starts, and the error names the file.
-`pr-review doctor` lists the loaded lenses.
+file of a lens that is on stops the run before any child starts, and the error
+names the file. The run does not read a lens that is off, so its file does not
+stop the run. `pr-review doctor` lists the loaded lenses and warns about a bad
+file of a lens that is off.
 
 Only your config folder can add a lens. A repo config cannot, because a lens is
-prompt text. A repo can only turn a lens off with `lenses.<name>.enabled`. When
-the repo names a lens that you do not have, that entry does nothing.
+prompt text. A repo can only turn a lens off with `lenses.<name>.enabled: false`.
+The loader ignores `enabled: true` from a repo, so a lens that you turned off
+stays off. When the repo names a lens that you do not have, that entry does
+nothing.
 
 The lens prompts are in `shared/pr-review/lenses/`. Every finding needs a
 concrete case: an input or situation and the wrong result. No case, no
@@ -611,7 +615,7 @@ The engine merges 3 levels; a later level wins:
 
 The file is JSON with `//` comments allowed. Objects merge deep; arrays
 (`seats`, `lenses.*.seats`) replace. The repo level may set only
-`lenses.*.enabled`, `loop.authors_ignore`, `loop.max_prs_per_run`,
+`lenses.*.enabled` (only `false` has an effect), `loop.authors_ignore`, `loop.max_prs_per_run`,
 `review.guidance`, `hygiene.enabled`, and additions to
 `effort_auto.high_paths`. The loader rejects any other repo key. Seats, judge,
 decider and `round1` belong to you.

@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadConfig, resolveHarness, seatsForLens, seatId, LENSES } from "../lib/config.mjs";
+import { lensFileProblem, loadConfig, resolveHarness, seatsForLens, seatId, LENSES } from "../lib/config.mjs";
 
 const example = new URL("../../config.example.json", import.meta.url);
 const tmp = (text) => {
@@ -251,4 +251,20 @@ test("a repo may turn off a lens this reviewer does not have: a no-op", () => {
   const c = loadConfig({ repoText: '{"lenses":{"perf":{"enabled":false},"security":{"enabled":false}}}' });
   assert.deepEqual(Object.keys(c.lenses), LENSES);
   assert.equal(c.lenses.security.enabled, false);
+});
+
+test("a repo can only turn a lens off: enabled true never turns on a lens the user turned off", () => {
+  const off = JSON.stringify({ lenses: { perf: { enabled: false }, security: { enabled: false } } });
+  const c = loadConfig({ ...lensDir({ "perf.md": "x" }, off), repoText: '{"lenses":{"perf":{"enabled":true},"security":{"enabled":true},"correctness":{"enabled":false}}}' });
+  assert.deepEqual([c.lenses.perf.enabled, c.lenses.security.enabled, c.lenses.correctness.enabled], [false, false, false]);
+});
+
+test("a bad file of a lens that is off does not stop the run", () => {
+  const dirs = lensDir({ "perf.md": "x\n".repeat(41), "empty.md": "" }, JSON.stringify({ lenses: { perf: { enabled: false }, empty: { enabled: false } } }));
+  const c = loadConfig(dirs);
+  assert.deepEqual([c.lenses.perf.enabled, c.lenses.empty.enabled], [false, false]);
+  assert.match(lensFileProblem(dirs.lensDir, "perf"), /perf\.md: over 40 lines/);
+  assert.equal(lensFileProblem(dirs.lensDir, "nope") !== null, true);
+  // on, the same file stops the run
+  assert.throws(() => loadConfig(lensDir({ "perf.md": "x\n".repeat(41) })), /perf\.md: over 40 lines/);
 });
