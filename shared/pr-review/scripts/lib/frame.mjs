@@ -35,7 +35,8 @@ export function readTree(dir) {
   try { return readdirSync(dir, { recursive: true }).map((p) => join(dir, p)).filter((p) => statSync(p).isFile()).map((p) => readFileSync(p, "utf8")).join("\n\n"); } catch { return ""; }
 }
 // Round 1 parts: a folder (a Go package, its tests with it) stays whole when it fits in max lines; folders are
-// packed in path order. sizes: [[path, lines]]. One part per file of a folder that does not fit.
+// packed in path order. sizes: [[path, lines]]. A folder that does not fit splits into units: a file with its test.
+const stem = (p) => p.replace(/(_test|\.test|\.spec)?\.[^./]+$/, "");
 export function planChunks(sizes, max) {
   const byDir = new Map();
   for (const [p, n] of sizes) {
@@ -53,9 +54,38 @@ export function planChunks(sizes, max) {
   for (const d of [...byDir.keys()].sort()) {
     const fs = byDir.get(d), n = fs.reduce((a, [, x]) => a + x, 0);
     if (n <= max) add(fs.map(([p]) => p), n);
-    else for (const [p, x] of fs) add([p], x);
+    else {
+      const units = new Map();
+      for (const [p, x] of fs) {
+        if (!units.has(stem(p))) units.set(stem(p), [[], 0]);
+        const u = units.get(stem(p));
+        u[0].push(p);
+        u[1] += x;
+      }
+      for (const [files, x] of units.values()) add(files, x);
+    }
   }
   return out;
+}
+
+// The map of a split PR: each part's files with the functions their hunks touch (git's hunk header),
+// so a seat sees what the other parts change and reads it when its own code uses it.
+export function prMap(diff, parts) {
+  const syms = new Map();
+  let file = null;
+  for (const l of diff.split("\n")) {
+    if (l.startsWith("--- a/")) file = l.slice(6);
+    else if (l.startsWith("+++ b/")) file = l.slice(6);
+    else if (l.startsWith("@@") && file) {
+      const h = /^@@ [^@]+ @@ ?(.*)$/.exec(l)?.[1]?.trim().slice(0, 80);
+      if (!syms.has(file)) syms.set(file, new Set());
+      if (h) syms.get(file).add(h);
+    }
+  }
+  return parts.map((c, i) => [`Part ${i}:`, ...c.files.map((f) => {
+    const s = [...(syms.get(f) ?? [])];
+    return `  ${f}${s.length ? `: ${s.slice(0, 8).join("; ")}${s.length > 8 ? `; and ${s.length - 8} more` : ""}` : ""}`;
+  })].join("\n")).join("\n");
 }
 
 // One patch per part, with the whole function around each change (-W), so a seat needs fewer reads.
@@ -69,13 +99,14 @@ function writeChunks(repoDir, range, lines, max, ctxDir) {
     parts = planChunks(sizes, max);
   }
   mkdirSync(join(ctxDir, "chunks"));
+  if (parts.length > 1) writeFileSync(join(ctxDir, "chunks", "map.txt"), prMap(git(repoDir, ["-c", "core.quotePath=false", "diff", "--no-color", "--no-renames", "-U0", range]), parts));
   return parts.map((c, i) => {
     const patch = join(ctxDir, "chunks", `${i}.patch`);
     const paths = c.files ? ["--no-renames", "--", ...c.files] : [];
     const diff = (w) => git(repoDir, ["--literal-pathspecs", "-c", "core.quotePath=false", "diff", "--no-color", ...w, range, ...paths]);
-    const wide = diff(["-W"]);
-    writeFileSync(patch, wide.split("\n").length > FUNCTION_CONTEXT_MAX ? diff([]) : wide);
-    return { patch, files: c.files, lines: c.lines };
+    const wide = diff(["-W"]), functions = wide.split("\n").length <= FUNCTION_CONTEXT_MAX;
+    writeFileSync(patch, functions ? wide : diff([]));
+    return { patch, files: c.files, lines: c.lines, functions };
   });
 }
 

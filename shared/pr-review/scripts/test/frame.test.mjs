@@ -264,6 +264,8 @@ test("planChunks keeps a folder whole when it fits, packs folders in path order,
     { files: ["c/big2.go"], lines: 400 },
   ]);
   assert.deepEqual(planChunks([["huge.go", 900]], 500), [{ files: ["huge.go"], lines: 900 }]);
+  // a folder that does not fit splits into units: a file stays with its test
+  assert.deepEqual(planChunks([["p/a.go", 300], ["p/a_test.go", 300], ["p/b.go", 100], ["p/b_test.go", 100]], 500).map((c) => c.files), [["p/a.go", "p/a_test.go"], ["p/b.go", "p/b_test.go"]]);
 });
 
 test("frame writes one patch per part: one part below chunk_lines, one per file above it", async () => {
@@ -281,6 +283,7 @@ test("frame writes one patch per part: one part below chunk_lines, one per file 
   assert.match(a, /^\+const b = 3;$/m);
   assert.doesNotMatch(a, /CLAUDE\.md/);
   assert.ok(existsSync(big.chunks[0].earlier), "each part gets its own earlier findings file");
+  assert.match(ctx(big, "chunks/map.txt"), /^Part 0:\n  \.pr-review\.json\nPart 1:\n  CLAUDE\.md\nPart 2:\n  a\.js/);
 });
 
 test("a part whose function context passes 2500 lines keeps the plain patch", async () => {
@@ -299,4 +302,10 @@ test("a part whose function context passes 2500 lines keeps the plain patch", as
   const p = readFileSync(f.chunks[0].patch, "utf8");
   assert.match(p, /^\+  y1500\(\);$/m);
   assert.ok(p.split("\n").length < 20, `plain patch expected, got ${p.split("\n").length} lines`);
+});
+
+test("prMap lists each part's files with the functions their hunks change", async () => {
+  const { prMap } = await import("../lib/frame.mjs");
+  const diff = ["diff --git a/x/a.go b/x/a.go", "--- a/x/a.go", "+++ b/x/a.go", "@@ -3 +3 @@ func A(n int) error {", "-a", "+b", "@@ -9 +9 @@ func A(n int) error {", "@@ -20 +20 @@", "diff --git a/y/old.go b/y/old.go", "--- a/y/old.go", "+++ /dev/null", "@@ -1,2 +0,0 @@ type Old struct{}"].join("\n");
+  assert.equal(prMap(diff, [{ files: ["x/a.go"] }, { files: ["y/old.go", "z.go"] }]), "Part 0:\n  x/a.go: func A(n int) error {\nPart 1:\n  y/old.go: type Old struct{}\n  z.go");
 });

@@ -6,6 +6,8 @@ import { join } from "node:path";
 export const userConfigPath = () => join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "pr-review", "config.json");
 
 export const LENSES = ["adversarial", "correctness", "simplification", "architecture", "security"];
+// Lenses about design across files: on a split PR they review the whole PR once, not part by part.
+export const WHOLE_PR_LENSES = ["architecture"];
 
 const CLAUDE_THINKING = ["low", "medium", "high", "xhigh", "max"];
 const PI_THINKING = ["off", "minimal", ...CLAUDE_THINKING];
@@ -267,17 +269,17 @@ export function lowerEffort(effort) {
 // Children for one PR: round 1 (one set per diff part) + one vote per distinct seat + 2 judge calls.
 // A lens with its own seats runs in its own children in per-seat mode.
 export function plannedChildren(config, lenses, parts = 1) {
-  const all = new Set();
+  const all = new Set(), shared = new Set(), sharedLenses = [];
+  // A job's children: one per part for its local lenses, plus one for its whole-PR lenses.
+  const times = (ls) => (parts === 1 ? 1 : (ls.some((l) => !WHOLE_PR_LENSES.includes(l)) ? parts : 0) + (ls.some((l) => WHOLE_PR_LENSES.includes(l)) ? 1 : 0));
   let round1 = 0;
-  const shared = new Set();
   for (const l of lenses) {
     const seats = seatsForLens(config, l);
     seats.forEach((s) => all.add(seatId(s)));
-    if (config.round1 === "per-lens") round1 += seats.length;
-    else if (config.lenses[l]?.seats) round1 += seats.length;
-    else seats.forEach((s) => shared.add(seatId(s)));
+    if (config.round1 === "per-lens" || config.lenses[l]?.seats) round1 += seats.length * times([l]);
+    else { seats.forEach((s) => shared.add(seatId(s))); sharedLenses.push(l); }
   }
-  return (round1 + shared.size) * parts + all.size + 2;
+  return round1 + shared.size * times(sharedLenses) + all.size + 2;
 }
 
 // Whole-path glob: `**` spans directories (or none), `*` and `?` stay in one segment.

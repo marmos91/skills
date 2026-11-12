@@ -1077,24 +1077,30 @@ test("a diff above chunk_lines: one round-1 child per seat and part, at most max
   const { r, run } = await go(fx, happy({ all }), { until: "round1" });
   assert.equal(r.exit, 0, r.summary);
   const keys = run.calls.map((c) => c.k).sort();
-  assert.deepEqual(keys, ["all~0@0", "all~0@1", "all~0@2", "all~1@0", "all~1@1", "all~1@2", "all~2@0", "all~2@1", "all~2@2"]);
+  assert.deepEqual(keys, ["all~0@0", "all~0@1", "all~0@2", "all~0@all", "all~1@0", "all~1@1", "all~1@2", "all~1@all", "all~2@0", "all~2@1", "all~2@2", "all~2@all"]);
+  const whole = run.calls.find((c) => c.k === "all~0@all").prompt;
+  assert.match(whole, /You review the whole PR for your lens/);
+  assert.match(whole, /## Lens: architecture/);
+  assert.doesNotMatch(whole, /## Lens: correctness/);
+
   assert.equal(most, 2);
   const y = run.calls.find((c) => c.k === "all~0@2").prompt;
   assert.match(y, /splits it into 3 parts/);
   assert.match(y, /Files of your part:\ny\/b\.go/);
   assert.match(y, /\+func B\(\) \{\}/);
-  assert.doesNotMatch(y, /func A/);
+  assert.doesNotMatch(y.slice(0, y.indexOf("Map of the PR")), /func A/);  assert.doesNotMatch(y, /## Lens: architecture/);
+  assert.match(y, /Map of the PR[\s\S]*Part 1:\n  x\/a\.go/);
 });
 
 test("too many children for the parts: a config effort steps down; an explicit --effort exits 1", async () => {
-  const fx = splitFixture({ max_children: 10 });
+  const fx = splitFixture({ max_children: 13 });
   const lines = [];
   const { r } = await go(fx, happy(), { until: "frame", log: (l) => lines.push(l) });
   assert.equal(r.exit, 0, r.summary);
-  assert.equal(r.planned, 2 * 3 + 2 + 2); // low: 2 seats x 3 parts + 2 votes + 2 judge
-  assert.ok(lines.some((l) => /effort medium needs 14 children for 3 diff parts.*using low/.test(l)), lines.join("\n"));
-  const fx2 = splitFixture({ max_children: 10 });
+  assert.equal(r.planned, 2 * 4 + 2 + 2); // low: 2 seats x (3 parts + 1 whole PR) + 2 votes + 2 judge
+  assert.ok(lines.some((l) => /effort medium needs 17 children for 3 diff parts.*using low/.test(l)), lines.join("\n"));
+  const fx2 = splitFixture({ max_children: 13 });
   const { r: r2 } = await go(fx2, happy(), { effort: "medium" });
   assert.equal(r2.exit, 1);
-  assert.match(r2.summary, /needs 14 children.*max_children \(10\)\. Use a lower --effort/);
+  assert.match(r2.summary, /needs 17 children.*max_children \(13\)\. Use a lower --effort/);
 });

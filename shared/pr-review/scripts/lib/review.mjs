@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSyn
 import { basename, join, resolve, sep } from "node:path";
 import * as github from "./github.mjs";
 import { runChild as realRunChild, ChildFailed, SeatDropped, stopping, harnessFor } from "./child.mjs";
-import { LENSES, applyEffort, loadConfig, lowerEffort, pickEffort, plannedChildren, seatId, seatsForLens, userConfigPath, withLimits } from "./config.mjs";
+import { LENSES, WHOLE_PR_LENSES, applyEffort, loadConfig, lowerEffort, pickEffort, plannedChildren, seatId, seatsForLens, userConfigPath, withLimits } from "./config.mjs";
 import { frame as realFrame, git, readTree, HeadMoved, DiffTooLarge } from "./frame.mjs";
 import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.mjs";
 import { tally } from "./tally.mjs";
@@ -248,9 +248,17 @@ async function once(o, restart) {
   // a shell only when every text author is trusted (frame shellOk): in round 1 only in jobs that run the adversarial lens; votes may run a
   // repro, because a keep with run evidence holds against a majority of drops (tally, spec R2)
   const toolsFor = (j) => (f.shellOk && j.lenses.includes("adversarial") ? "shell" : "read");
-  // One child per job and diff part; a PR in one part keeps the plain key, so older runs resume.
+  // A PR in one part keeps the plain key, so older runs resume. A split PR: one child per job and part for the
+  // local lenses, and one per job on the whole PR for the lenses about design across parts.
   const parts = f.chunks ?? [null];
-  const jobs = round1Jobs(config, run.lenses).flatMap((j) => parts.map((part, i) => ({ ...j, part, key: parts.length > 1 ? `${j.key}@${i}` : j.key })));
+  const jobs = round1Jobs(config, run.lenses).flatMap((j) => {
+    if (parts.length === 1) return [{ ...j, part: parts[0] }];
+    const whole = j.lenses.filter((l) => WHOLE_PR_LENSES.includes(l)), local = j.lenses.filter((l) => !WHOLE_PR_LENSES.includes(l));
+    return [
+      ...(local.length ? parts.map((part, i) => ({ ...j, lenses: local, part, key: `${j.key}@${i}` })) : []),
+      ...(whole.length ? [{ ...j, lenses: whole, part: { whole: true }, key: `${j.key}@all` }] : []),
+    ];
+  });
   const slot = limiter(config.review.max_parallel ?? jobs.length);
   const hygFile = join(runDir, "hygiene-result.json");
   const [outs, hyg] = await settled([

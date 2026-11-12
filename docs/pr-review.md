@@ -84,10 +84,15 @@ A diff above `review.max_diff_lines` (default 6000) stops the run with exit
 
 A diff above `review.chunk_lines` (default 500) splits into parts. A folder
 (a Go package, with its tests) stays in one part when it fits. Folders are
-packed in path order, and a folder that does not fit gets one part per file.
-Each round-1 job runs once per part and reports findings only in the files
-of its part. Merge then removes the duplicates across parts. Votes and the
-judge see the whole PR.
+packed in path order. A folder that does not fit splits into units, and a
+file stays in one unit with its test (`x.go` and `x_test.go`). Each round-1
+job runs once per part and reports findings only in the files of its part.
+Every part prompt holds a map of the PR: the files of each part and the
+functions that its hunks change. A seat reads the new version of a function
+that another part changes when its own code uses it. The architecture lens
+is about design across parts, so it reviews the whole PR once per seat.
+Merge then removes the duplicates across parts. Votes and the judge see the
+whole PR.
 
 Each part adds a full set of round-1 children. When the run needs more than
 `review.max_children` (default 60), an effort that the config chose steps

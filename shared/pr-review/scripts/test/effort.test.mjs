@@ -153,5 +153,7 @@ test("effort_auto arrays are validated", () => {
 });
 
 test("plannedChildren: each diff part repeats round 1, not the votes or the judge", () => {
-  assert.equal(plannedChildren(applyEffort(loadConfig({}), "medium"), LENSES, 3), 3 * 3 + 3 + 2);
+  assert.equal(plannedChildren(applyEffort(loadConfig({}), "medium"), LENSES, 3), 3 * (3 + 1) + 3 + 2); // + 1 whole-PR child per seat
+  assert.equal(plannedChildren(applyEffort(loadConfig({}), "high"), LENSES, 3), 4 * 3 * 3 + 3 + 3 + 2); // per-lens: architecture once
+  assert.equal(plannedChildren(applyEffort(loadConfig({}), "medium"), ["architecture"], 3), 3 + 3 + 2);
 });
