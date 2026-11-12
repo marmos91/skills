@@ -77,7 +77,8 @@ export async function review(opts) {
 // One child: a marker means its output is reused, never paid for twice (spec 8).
 // lens: the one lens of a round-1 child, for a lens-level max_turns.
 // A council seat (round 1, vote) that drops is recorded in run.json and gives null; the judge cannot drop.
-async function child(ctx, stage, key, { seat, prompt, schema, tools = "read", lens }) {
+// onePart: a round-1 child of a split PR; a drop loses that part only, and the seat stays for the rest.
+async function child(ctx, stage, key, { seat, prompt, schema, tools = "read", lens, onePart = false }) {
   const council = stage === "round1" || stage === "round2";
   if (council && ctx.dropped(seat)) return null;
   const dir = join(ctx.runDir, stage), outFile = join(dir, `${key}.json`);
@@ -92,6 +93,7 @@ async function child(ctx, stage, key, { seat, prompt, schema, tools = "read", le
   let v;
   try { v = await ctx.runChild({ trusted: ctx.frame.shellOk, seat: limited, tools, promptFile, outFile, worktree: ctx.frame.worktree, ctxDir: ctx.frame.ctxDir, schema, routerUp: ctx.routerUp, droppable: council }); } catch (e) {
     if (!(e instanceof SeatDropped) || !council) throw e;
+    if (onePart) { ctx.miss(seat, key, e.reason); return null; }
     ctx.drop(seat, e.reason, stage);
     return null;
   }
@@ -244,7 +246,14 @@ async function once(o, restart) {
       if (left.length < 2) throw new ChildFailed(`fewer than 2 seats left for lens ${l} (dropped: ${run.dropped.map((d) => `${d.seat} (${d.reason})`).join(", ")})`);
     }
   };
-  const ctx = { runDir, frame: f, runChild: o.runChild, routerUp: o.routerUp, config, dropped: isDropped, drop };
+  // A part a seat could not finish (split PR): recorded, retried on resume, and it blocks APPROVE like a drop.
+  run.missed ??= [];
+  const miss = (s, key, reason) => {
+    run.missed.push({ seat: seatId(s), key, reason });
+    save(runFile, run);
+    log(`seat ${seatId(s)} missed part ${key} (${reason})`);
+  };
+  const ctx = { runDir, frame: f, runChild: o.runChild, routerUp: o.routerUp, config, dropped: isDropped, drop, miss };
   // a shell only when every text author is trusted (frame shellOk): in round 1 only in jobs that run the adversarial lens; votes may run a
   // repro, because a keep with run evidence holds against a majority of drops (tally, spec R2)
   const toolsFor = (j) => (f.shellOk && j.lenses.includes("adversarial") ? "shell" : "read");
@@ -262,7 +271,7 @@ async function once(o, restart) {
   const slot = limiter(config.review.max_parallel ?? jobs.length);
   const hygFile = join(runDir, "hygiene-result.json");
   const [outs, hyg] = await settled([
-    settled(jobs.map((j) => slot(() => child(ctx, "round1", j.key, { seat: j.seat, tools: toolsFor(j), schema: "round1", lens: j.lenses.length === 1 ? j.lenses[0] : undefined, prompt: (s, fr = f) => round1Prompt(fr, j.lenses, s.max_turns, j.part) })).then((v) => ({ ...j, v })))).then((all) => all.filter((x) => x.v && !isDropped(x.seat))),
+    settled(jobs.map((j) => slot(() => child(ctx, "round1", j.key, { seat: j.seat, tools: toolsFor(j), schema: "round1", lens: j.lenses.length === 1 ? j.lenses[0] : undefined, onePart: parts.length > 1, prompt: (s, fr = f) => round1Prompt(fr, j.lenses, s.max_turns, j.part) })).then((v) => ({ ...j, v })))).then((all) => all.filter((x) => x.v && !isDropped(x.seat))),
     existsSync(hygFile) ? readJson(hygFile) : o.hygiene(f, config, run.effort, { routerUp: o.routerUp }).then((h) => { save(hygFile, h); return h; }),
   ]);
   enoughSeats();
@@ -411,11 +420,13 @@ async function once(o, restart) {
   const text = new Map(composed.comments.map((x) => [x.id, x.body]));
   const items = posted.map((c) => ({ ...c, body: text.get(c.id) ?? `**${c.severity}:** ${c.title}\n\n${c.case}` }));
   const earlierAll = readJson(join(f.ctxDir, "earlier.json"));
+  // Misses of this run's final round 1: a resume that finished the part clears it.
+  const missedNow = run.missed.filter((m) => !done(runDir, "round1", m.key) && !isDropped(m.seat));
   const fixed = earlierAll.filter((e) => { const r = earlier.get(e.threadId); return r && r.open.size === 0 && r.fixed.size >= 2; });
   let ci = ciOf(f);
   const v = () => verdict({
     agreed: [...agreed, ...hygItems], earlierMustOpen: earlierAll.filter((e) => e.severity === "must" && !fixed.includes(e)).length,
-    openQuestions: open.length, failedLenses: run.missing?.length ?? 0, droppedSeats: run.dropped.length, ci: ci.state, mode, trustedAuthor: f.shellOk, unanimousZero, ownPr: f.ownPr,
+    openQuestions: open.length, failedLenses: run.missing?.length ?? 0, droppedSeats: run.dropped.length + missedNow.length, ci: ci.state, mode, trustedAuthor: f.shellOk, unanimousZero, ownPr: f.ownPr,
   });
   const bodyOf = (outside, key) => [
     composed.body.trim(),
@@ -424,6 +435,10 @@ async function once(o, restart) {
     leftOut ? `${leftOut} ${leftOut === 1 ? "finding was" : "findings were"} left out by the effort limit.` : "",
     run.missing?.length ? `Lenses not run: ${run.missing.join(", ")}.` : "",
     ...run.dropped.map((d) => `Seat ${safeText(d.seat.slice(d.seat.indexOf(":") + 1))} was dropped (${d.reason}).`),
+    ...[...new Set(missedNow.map((m) => m.seat))].map((id) => {
+      const m = missedNow.filter((x) => x.seat === id), n = new Set(m.map((x) => x.key)).size;
+      return `Seat ${safeText(id.slice(id.indexOf(":") + 1))} missed ${n} ${n === 1 ? "part" : "parts"} of the split diff (${[...new Set(m.map((x) => x.reason))].join(", ")}).`;
+    }),
     ci.line ?? "", marker(runId, f.headSha, key),
   ].filter(Boolean).join("\n\n");
   const hunks = parseHunks(readFileSync(join(f.ctxDir, "diff.patch"), "utf8"));

@@ -92,7 +92,9 @@ functions that its hunks change. A seat reads the new version of a function
 that another part changes when its own code uses it. The architecture lens
 is about design across parts, so it reviews the whole PR once per seat.
 Merge then removes the duplicates across parts. Votes and the judge see the
-whole PR.
+whole PR. A seat that hits its turn limit or its timeout in one part loses that
+part only: it keeps its other parts and its vote. The summary names the
+missed parts, and a missed part blocks APPROVE, as a dropped seat does.
 
 Each part adds a full set of round-1 children. When the run needs more than
 `review.max_children` (default 60), an effort that the config chose steps

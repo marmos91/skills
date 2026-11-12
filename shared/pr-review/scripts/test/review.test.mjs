@@ -1104,3 +1104,16 @@ test("too many children for the parts: a config effort steps down; an explicit -
   assert.equal(r2.exit, 1);
   assert.match(r2.summary, /needs 17 children.*max_children \(13\)\. Use a lower --effort/);
 });
+
+test("split PR: a seat that misses one part keeps its other parts and its vote; the summary says so; no APPROVE", async () => {
+  const fx = splitFixture({});
+  const { r, run } = await go(fx, happy({ "all~2@1": dropOf("turn limit") }));
+  assert.equal(r.exit, 0, r.summary);
+  const st = JSON.parse(readFileSync(join(r.runDir, "run.json"), "utf8"));
+  assert.deepEqual(st.dropped, []);
+  assert.deepEqual(st.missed.map((m) => [m.seat, m.key]), [[S2, "all~2@1"]]);
+  assert.ok(run.calls.some((c) => c.k === "v~2"), "the seat still votes");
+  const p = posts(fx)[0];
+  assert.match(p.body, /Seat cubbit\/mimir-pro missed 1 part of the split diff \(turn limit\)\./);
+  assert.notEqual(p.event, "APPROVE");
+});
