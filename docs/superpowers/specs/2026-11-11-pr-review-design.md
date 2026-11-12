@@ -415,7 +415,10 @@ When Marco already reviewed the PR:
 - If it is not an ancestor (force-push or rebase), the engine runs a full
   review.
 - For each earlier finding that is now fixed, the engine replies "Fixed in
-  `<sha>`." and resolves the thread.
+  [`<short sha>`](<commit link>)." and resolves the thread. If the newest
+  comment of the thread is already ours, the engine adds the link to that
+  comment instead of a second reply. It reads the live thread at post time,
+  and it replies when the thread is longer than one page of comments.
 
 ### 6.10 Post
 
