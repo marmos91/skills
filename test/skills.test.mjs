@@ -25,9 +25,10 @@ function chmodTree(p, bits) {
 }
 
 // A copy of the package, read-only like the Nix store.
-function storeCopy(root) {
+function storeCopy(root, { clone = false } = {}) {
   const pkg = join(root, "store");
   for (const p of ["package.json", "bin", "shared", "pi"]) cpSync(join(REPO, p), join(pkg, p), { recursive: true, verbatimSymlinks: true });
+  if (clone) mkdirSync(join(pkg, ".git"));
   const strip = (p) => { const s = lstatSync(p); if (s.isSymbolicLink()) return; if (s.isDirectory()) readdirSync(p).forEach((e) => strip(join(p, e))); chmodSync(p, s.mode & ~0o222); };
   strip(pkg);
   return pkg;
@@ -102,7 +103,7 @@ test("uninstall removes only what the package installed", (t) => {
 
 test("--link from a read-only package links the skills and the CLIs", (t) => {
   const { root, env, run } = setup(t);
-  const pkg = storeCopy(root);
+  const pkg = storeCopy(root, { clone: true });
   // a chmod needs ownership: the Nix store is root's, so the package file must not be touched at all
   const target = join(pkg, "shared", "jev", "jev.py"), before = statSync(target).ctimeMs;
   const r = run(pkg, "install", "--claude", "--link", "jev");
@@ -156,13 +157,15 @@ test("a CLI without the exec bit runs from the copy that stays after a partial u
   assert.equal(r.status, 0, r.stderr);
 });
 
-test("--link from the npx cache stops: npm can delete the cache under the links", (t) => {
+test("--link from an installed package stops: npm can delete it under the links", (t) => {
   const { root, env, run } = setup(t);
-  const pkg = join(root, ".npm", "_npx", "0123abcd", "node_modules", "@marmos91", "skills");
-  for (const p of ["package.json", "bin", "shared", "pi"]) cpSync(join(REPO, p), join(pkg, p), { recursive: true, verbatimSymlinks: true });
-  const r = run(pkg, "install", "--claude", "--link", "jev");
-  assert.equal(r.status, 1);
-  assert.match(r.stderr, /--link needs a lasting copy/);
-  assert.ok(!existsSync(env.CLAUDE_DIR), "nothing installed");
-  assert.equal(run(pkg, "install", "--claude", "jev").status, 0, "a copy from npx still works");
+  for (const where of [[".npm", "_npx", "0123abcd"], ["proj"], ["pnpm", "dlx", "x"]]) {
+    const pkg = join(root, ...where, "node_modules", "@marmos91", "skills");
+    for (const p of ["package.json", "bin", "shared", "pi"]) cpSync(join(REPO, p), join(pkg, p), { recursive: true, verbatimSymlinks: true });
+    const r = run(pkg, "install", "--claude", "--link", "jev");
+    assert.equal(r.status, 1, where.join("/"));
+    assert.match(r.stderr, /--link needs a git clone/);
+    assert.ok(!existsSync(env.CLAUDE_DIR), "nothing installed");
+  }
+  assert.equal(run(join(root, "proj", "node_modules", "@marmos91", "skills"), "install", "--claude", "jev").status, 0, "a copy still works");
 });

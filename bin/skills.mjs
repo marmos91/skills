@@ -101,8 +101,8 @@ export function run(argv, { env = process.env, log = console.log } = {}) {
   });
   if (v.help) { log(USAGE); return 0; }
   if (!["install", "uninstall", "list"].includes(cmd)) { console.error(USAGE); return 1; }
-  // npm may delete its npx cache at any time, and the links would then point at nothing
-  if (v.link && ROOT.includes(`${sep}_npx${sep}`)) { console.error("skills: --link needs a lasting copy of the package (a git clone or a global npm install), not npx; drop --link to copy"); return 1; }
+  // links must outlive the package: npx and pnpm caches, npm ci and upgrades delete installed copies
+  if (v.link && !existsSync(join(ROOT, ".git"))) { console.error("skills: --link needs a git clone of the package; drop --link to copy"); return 1; }
   const home = env.HOME || homedir();
   const dirs = { claude: env.CLAUDE_DIR || join(home, ".claude", "skills"), pi: env.PI_DIR || join(home, ".pi", "agent", "skills") };
   const binDir = env.BIN_DIR || join(home, ".local", "bin");
