@@ -566,8 +566,9 @@ A commented copy is in `shared/pr-review/config.example.json`.
   the thinking per stage on a seat. A lens may set `round1` only (vote and
   merge children do not belong to one lens). The engine takes the seat's
   value, then the lens's, then the default. The lens value applies only when
-  a round 1 child runs that one lens: the lens has its own `seats`, or the
-  effort is `high` or `max` (round 1 per lens). By default a `cubbit/*` seat (harness `auto` or `pi`) thinks at its
+  a round 1 child runs that one lens: the run covers only that lens
+  (`--lens`), the lens is the only one without its own `seats`, the lens has
+  its own `seats`, or the effort is `high` or `max` (round 1 per lens). By default a `cubbit/*` seat (harness `auto` or `pi`) thinks at its
   `thinking` in round 1 and at `off` in vote and merge: in a blind judge of
   13 runs, Mimir at `medium` found about 3 times the real defects of `off` in
   round 1, while thinking in vote and merge only cost time. Claude seats keep

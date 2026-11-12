@@ -177,6 +177,9 @@ test("thinking_by_stage: seat, then lens, then the default (cubbit seats think o
   assert.equal(withLimits(u, u.seats[2], "security", "round1").thinking, "max", "seat beats lens, uncapped");
   assert.equal(withLimits(u, u.seats[1], "security", "round1").thinking, "xhigh", "lens beats the default, uncapped");
   assert.equal(t(pro, "vote", "security"), "off", "a lens sets round 1 only");
+  // validate() rejects a lens vote value, so only a hand-built config can hold one: withLimits must still ignore it
+  const raw = { ...c, lenses: { ...c.lenses, security: { ...c.lenses.security, thinking_by_stage: { round1: "xhigh", vote: "minimal" } } } };
+  assert.equal(withLimits(raw, pro, "security", "vote").thinking, "off", "a lens vote value is ignored");
   assert.equal(withLimits(c, pro).thinking, "medium", "no stage: the seat's thinking");
   for (const [text, re] of [
     ['{"seats":[{"harness":"claude","model":"opus","thinking":"high","thinking_by_stage":{"vote":"off"}}]}', /seats\[0\].thinking_by_stage.vote \(claude seat\) must be one of low/],
