@@ -210,7 +210,9 @@ test("shellOk: a trusted author and every text author the viewer or trusted", as
 });
 
 test("issues named in the body or branch are read as wrapped PR data and their authors gate the shell", async () => {
-  assert.deepEqual(linkedIssues({ body: "x", headRef: "issue-12", closingIssues: [] }, 5), [12]);
+  const br = (headRef) => linkedIssues({ body: "", headRef, closingIssues: [] }, 5);
+  for (const b of ["fix/12-foo", "issue-12", "fix/issue-12", "gh-12_x", "feature/12-foo"]) assert.deepEqual(br(b), [12], b);
+  for (const b of ["release/2024-01-15", "feat/node-18", "chore/node-20", "deps/python-3", "deps/python-3-12", "deps-2-update", "release-2026", "2026-release"]) assert.deepEqual(br(b), [], b);
   assert.deepEqual(linkedIssues({ body: "#1 #2 #3 #4 #5 #6 #7 #8", headRef: "main", closingIssues: [7] }, 5), [1, 2, 3, 4, 6], "self and closing skipped, capped at 5");
   const fx = fixture();
   const view = "pr view 5 -R o/r --json id,headRefOid,baseRefName,author,isDraft,body,title,closingIssuesReferences,headRefName";
@@ -226,6 +228,7 @@ test("issues named in the body or branch are read as wrapped PR data and their a
   const p = JSON.parse(ctx(f, "pr.json"));
   assert.deepEqual(p.linkedIssues.map((i) => [i.number, i.title]), [[8, W(f, "Eight")], [9, W(f, "Nine")]], "unreadable #12 dropped, other repo and self skipped");
   assert.deepEqual(p.closingIssues.map((i) => i.number), [7]);
+  assert.equal(p.headRef, W(f, "fix/12-foo"), "the branch name is PR data too");
   assert.equal(f.shellOk, true);
   stub(fx.head, { association: "OWNER", textAssoc: "MEMBER", over: routes("NONE") });
   assert.equal((await run(fx)).shellOk, false, "an untrusted author of a body-named issue");

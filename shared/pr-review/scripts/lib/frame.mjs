@@ -144,8 +144,10 @@ function issue(repo, number, wrap) {
 }
 
 // Same-repo issues the body (#12, fixes #12) or branch (fix/12-x, issue-12) names, beyond the closing ones; capped.
+// Branch: an issue word then the number, or a bare number opening a later segment and followed by a word; dates and versions (release/2024-01-15, node-18) are no match.
 export function linkedIssues(p, n) {
-  const nums = [...String(p.body ?? "").matchAll(/(?<![\w/.-])#(\d+)\b/g), ...String(p.headRef ?? "").matchAll(/(?:^|\/)(?:[a-z]+[-_])?(\d+)(?=[-_/]|$)/gi)];
+  const branch = /(?:^|\/)(?:(?:fix|issue|bug|hotfix|gh|closes|fixes|resolves)[-_/]|(?<=\/))(\d+)(?=[-_][a-z]|\/|$)/gi;
+  const nums = [...String(p.body ?? "").matchAll(/(?<![\w/.-])#(\d+)\b/g), ...String(p.headRef ?? "").matchAll(branch)];
   return [...new Set(nums.map((m) => Number(m[1])))].filter((i) => i !== n && !p.closingIssues.includes(i)).slice(0, 5);
 }
 
@@ -220,7 +222,7 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
     .map((l) => ({ sha: l.slice(0, l.indexOf(" ")), subject: wrap(l.slice(l.indexOf(" ") + 1)) }));
   const issues = p.closingIssues.map((i) => issue(repo, i, wrap));
   const linked = linkedIssues(p, n).map((i) => issue(repo, i, wrap)).filter((i) => "title" in i); // unreadable: nothing reaches ctx
-  json(ctxDir, "pr.json", { number: n, ...p, title: wrap(p.title), body: wrap(p.body), commits, closingIssues: issues, linkedIssues: linked });
+  json(ctxDir, "pr.json", { number: n, ...p, headRef: wrap(p.headRef), title: wrap(p.title), body: wrap(p.body), commits, closingIssues: issues, linkedIssues: linked });
   // Text authors in ctx: [login, association]. A seat with a shell reads all of it, so each one must be trusted.
   const authors = [...issues, ...linked].map((i) => [i.author, i.association]);
 
