@@ -92,36 +92,6 @@ export async function pendingReview(repo, n) {
   return node ? { id: node.id } : null;
 }
 
-const MARKER_COMMENTS = `query MarkerComments($owner: String!, $name: String!, $n: Int!, $cc: String) {
-  viewer { login }
-  repository(owner: $owner, name: $name) { pullRequest(number: $n) {
-    comments(last: 100, before: $cc) { pageInfo { hasPreviousPage startCursor } nodes { body author { login } } }
-  } } }`;
-const MARKER_REVIEWS = `query MarkerReviews($owner: String!, $name: String!, $n: Int!, $rc: String) {
-  viewer { login }
-  repository(owner: $owner, name: $name) { pullRequest(number: $n) {
-    reviews(last: 50, before: $rc) { pageInfo { hasPreviousPage startCursor }
-      nodes { body author { login } comments(first: 100) { nodes { body author { login } } } } }
-  } } }`;
-
-// Walks the viewer's history back until the marker is found or it ends: a missed marker means a duplicate post.
-export async function findMarker(repo, n, key) {
-  const [owner, name] = split(repo);
-  const has = (me, xs) => xs.some((c) => c.author?.login === me && String(c.body ?? "").includes(key));
-  for (const [q, v, field] of [[MARKER_COMMENTS, "cc", "comments"], [MARKER_REVIEWS, "rc", "reviews"]]) {
-    let cursor = null;
-    for (;;) {
-      const d = await gql(q, { owner, name, n, [v]: cursor });
-      const me = d.viewer.login, conn = d.repository.pullRequest[field];
-      const bodies = field === "reviews" ? [...conn.nodes, ...conn.nodes.flatMap((r) => r.comments.nodes)] : conn.nodes;
-      if (has(me, bodies)) return true;
-      if (!conn.pageInfo.hasPreviousPage) break;
-      cursor = conn.pageInfo.startCursor;
-    }
-  }
-  return false;
-}
-
 // Every marker key in the viewer's reviews, review comments and PR comments, fully paged (REST --paginate),
 // so one post phase checks all its keys in memory and no window of "last 100" can miss one.
 export async function markerKeys(repo, n) {
@@ -134,6 +104,9 @@ export async function markerKeys(repo, n) {
   }
   return keys;
 }
+
+// Same full paging as markerKeys: a GraphQL walk caps comments per review at 100, and a missed marker means a duplicate post.
+export const findMarker = async (repo, n, key) => (await markerKeys(repo, n)).has(key.replace(/^key=/, ""));
 
 const POST = `mutation PostReview($input: AddPullRequestReviewInput!) {
   addPullRequestReview(input: $input) { pullRequestReview { url } } }`;

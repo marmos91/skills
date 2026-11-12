@@ -59,22 +59,27 @@ test("pendingReview", async () => {
   assert.equal(await gh.pendingReview("o/r", 5), null);
 });
 
-test("findMarker: viewer's comments and review comments only", async () => {
-  stubDir();
-  assert.equal(await gh.findMarker("o/r", 5, "key=k1"), true);
-  assert.equal(await gh.findMarker("o/r", 5, "key=k2"), true);
-  assert.equal(await gh.findMarker("o/r", 5, "key=other"), false);
-  assert.equal(await gh.findMarker("o/r", 5, "key=zzz"), false);
+const K = (c) => c.repeat(40); // a sha1-shaped key
+const mk = (key, login = "marmos91") => ({ user: { login }, body: `x\n<!-- pr-review run=r1 sha=abc123 key=${key} -->` });
+const lists = (o = {}) => Object.fromEntries(["pulls/5/reviews", "pulls/5/comments", "issues/5/comments"].map((p) => [`api --paginate --slurp repos/o/r/${p}`, { stdout: o[p] ?? [[]] }]));
+
+test("findMarker: the viewer's reviews, review comments and PR comments only", async () => {
+  stubDir(lists({ "pulls/5/reviews": [[mk(K("a"))]], "issues/5/comments": [[mk(K("b")), mk(K("c"), "mallory")]] }));
+  assert.equal(await gh.findMarker("o/r", 5, `key=${K("a")}`), true);
+  assert.equal(await gh.findMarker("o/r", 5, `key=${K("b")}`), true);
+  assert.equal(await gh.findMarker("o/r", 5, `key=${K("c")}`), false, "someone else's marker");
+  assert.equal(await gh.findMarker("o/r", 5, `key=${K("d")}`), false);
 });
 
-const mc = (body, prev) => ({ stdout: { data: { viewer: { login: "marmos91" }, repository: { pullRequest: { comments: { pageInfo: { hasPreviousPage: !!prev, startCursor: prev }, nodes: body ? [{ body, author: { login: "marmos91" } }] : [] } } } } } });
-
-test("findMarker pages back through comments", async () => {
-  const d = stubDir({ "graphql MarkerComments": mc("old", "cc1"), "graphql MarkerComments cc=cc1": mc("key=deep -->", null) });
-  assert.equal(await gh.findMarker("o/r", 5, "key=deep"), true);
-  assert.deepEqual(calls(d).filter((c) => c.key === "graphql MarkerComments").map((c) => c.variables.cc), [null, "cc1"]);
-  stubDir({ "graphql MarkerComments": mc("old", "cc1"), "graphql MarkerComments cc=cc1": mc("older", null) });
-  assert.equal(await gh.findMarker("o/r", 5, "key=deep"), false);
+test("a review with more than 100 comments: a marker on the second page is found", async () => {
+  // One review's 150 inline comments come back as two REST pages; GraphQL's comments(first: 100) never saw the last 50.
+  const comments = Array.from({ length: 150 }, (_, i) => mk(i.toString(16).padStart(40, "0")));
+  const d = stubDir(lists({ "pulls/5/comments": [comments.slice(0, 100), comments.slice(100)] }));
+  const last = (149).toString(16).padStart(40, "0");
+  assert.equal(await gh.findMarker("o/r", 5, `key=${last}`), true);
+  const keys = await gh.markerKeys("o/r", 5);
+  assert.equal(keys.size, 150);
+  assert.ok(calls(d).some((c) => c.key === "api --paginate --slurp repos/o/r/pulls/5/comments"), "fully paged REST");
 });
 
 test("postReview needs commitOID and passes multi-line fields", async () => {
