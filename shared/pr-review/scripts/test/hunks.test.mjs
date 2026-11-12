@@ -66,6 +66,11 @@ test("binary file has no lines; no-newline markers ignored", () => {
   assert.deepEqual([...h.get("f.txt").left], [2]);
 });
 
+test("binary file whose path holds \" b/\" keeps its full path", () => {
+  const h = parseHunks("diff --git a/x b/y.png b/x b/y.png\nindex 111..222 100644\nBinary files a/x b/y.png and b/x b/y.png differ\n");
+  assert.deepEqual([...h.keys()], ["x b/y.png"]);
+});
+
 test("finding without line goes to body without #L", () => {
   const r = place([{ file: "src/a.ts", line: null, body: "general" }], fx("diff-basic.patch"), base);
   assert.equal(r.body[0], `\`src/a.ts\` — general (${base}/src/a.ts)`);
