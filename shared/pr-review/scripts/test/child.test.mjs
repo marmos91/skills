@@ -109,11 +109,12 @@ test("tools=read gives no shell; tools=shell adds Bash/bash", async () => {
   assert.match(argv(), /--restricted --strict-mcp-config/);
   await runChild(base(claudeSeat, { tools: "shell" }));
   assert.match(argv(), /--tools Read,Grep,Glob,Bash/);
+  assert.match(argv(), /--settings \{"sandbox":\{"enabled":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false\}\}/, "a shell seat runs sandboxed");
   await runChild(base(piSeat, { tools: "read", routerUp: false }));
   assert.match(argv(), /--tools read,grep,find,ls\b(?!,)/);
   assert.match(argv(), /--provider cubbit --model mimir --thinking high/);
   await runChild(base(piSeat, { tools: "shell", routerUp: false }));
-  assert.match(argv(), /--tools read,grep,find,ls,bash/);
+  assert.match(argv(), /--tools read,grep,find,ls\b(?!,)/, "pi bash has no sandbox: a pi seat stays read-only");
 });
 
 test("auto resolves via routerUp", async () => {

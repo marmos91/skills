@@ -360,6 +360,10 @@ PR head.
    environment allowlist keeps tokens out of its environment, but not files
    on disk. That is why the shell runs only when all of that text comes
    from trusted authors. The loop APPROVE follows the same rule.
+   Writes are sandboxed: a claude shell seat runs Bash inside Claude Code's
+   sandbox (`sandbox.enabled`, no unsandboxed fallback), so a command can
+   write only in its working folder and the temp folders, never in `$HOME`.
+   A pi seat never gets a shell, because pi's bash has no sandbox.
 4. **Config and guidance come from the base branch.** A PR that changes
    `.pr-review.json` or `CLAUDE.md` changes only its own diff, not the review.
 5. **PR text is data.** Prompts wrap the PR text in a delimited block with a

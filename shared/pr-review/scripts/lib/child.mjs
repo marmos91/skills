@@ -135,6 +135,8 @@ export async function runChild({ seat, tools = "read", promptFile, outFile, work
   }
   const cwd = dirname(outFile); // neutral run folder: the PR checkout must not supply CLAUDE.md or .claude/
   let model = seat.model;
+  // pi's bash has no sandbox (writes anywhere the user can): a pi seat never gets a shell
+  if (harness === "pi") tools = "read";
   if (harness === "pi") {
     const [prov, ...rest] = model.split("/");
     env.SEAT_PROVIDER = seat.provider ?? (rest.length ? prov : "");
