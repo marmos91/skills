@@ -7,7 +7,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as gh from "../lib/github.mjs";
 import { loadConfig } from "../lib/config.mjs";
-import { frame, DiffTooLarge, HeadMoved, cleanupWorktree, PR_DATA_NOTE } from "../lib/frame.mjs";
+import { frame, planChunks, DiffTooLarge, HeadMoved, cleanupWorktree, PR_DATA_NOTE } from "../lib/frame.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const wrapper = join(mkdtempSync(join(tmpdir(), "ghbin-")), "gh");
@@ -253,4 +253,32 @@ test("head moved between pr() and fetch -> HeadMoved; bad PR number -> error", a
   stub("1".repeat(40));
   await assert.rejects(run(fx), HeadMoved);
   for (const n of [0, -1, 1.5, "5"]) await assert.rejects(run(fx, { n }), /positive integer/);
+});
+
+test("planChunks keeps a folder whole when it fits, packs folders in path order, splits a folder that does not fit", () => {
+  const parts = planChunks([["b/x.go", 300], ["a/y.go", 100], ["a/y_test.go", 100], ["c/big.go", 400], ["c/big2.go", 400], ["main.go", 10]], 500);
+  assert.deepEqual(parts, [
+    { files: ["main.go", "a/y.go", "a/y_test.go"], lines: 210 },
+    { files: ["b/x.go"], lines: 300 },
+    { files: ["c/big.go"], lines: 400 },
+    { files: ["c/big2.go"], lines: 400 },
+  ]);
+  assert.deepEqual(planChunks([["huge.go", 900]], 500), [{ files: ["huge.go"], lines: 900 }]);
+});
+
+test("frame writes one patch per part: one part below chunk_lines, one per file above it", async () => {
+  const fx = fixture();
+  stub(fx.head);
+  const small = await run(fx);
+  assert.equal(small.chunks.length, 1);
+  assert.equal(small.chunks[0].files, null);
+  assert.match(readFileSync(small.chunks[0].patch, "utf8"), /^diff --git a\/\.pr-review\.json/m);
+  const config = loadConfig({});
+  config.review.chunk_lines = 1;
+  const big = await run(fx, { config });
+  assert.deepEqual(big.chunks.map((c) => c.files), [[".pr-review.json"], ["CLAUDE.md"], ["a.js"]]);
+  const a = readFileSync(big.chunks[2].patch, "utf8");
+  assert.match(a, /^\+const b = 3;$/m);
+  assert.doesNotMatch(a, /CLAUDE\.md/);
+  assert.ok(existsSync(big.chunks[0].earlier), "each part gets its own earlier findings file");
 });

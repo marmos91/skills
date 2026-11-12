@@ -20,7 +20,7 @@ test("defaults match spec §5", () => {
   ]);
   assert.equal(c.round1, "per-seat");
   assert.equal(c.loop.max_review_rounds, 3);
-  assert.deepEqual([c.review.ci, c.review.max_diff_lines], ["use", 3000]);
+  assert.deepEqual([c.review.ci, c.review.max_diff_lines, c.review.chunk_lines, c.review.max_children, c.review.max_parallel], ["use", 6000, 500, 60, 9]);
   assert.equal(c.loop.max_replies_per_thread, 2);
   assert.equal(c.loop.ci_wait_minutes, 30);
   assert.equal(c.loop.max_prs_per_run, 10);

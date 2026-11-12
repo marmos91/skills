@@ -39,7 +39,9 @@ export const DEFAULTS = {
   decider: { kind: "auto", confidence: 0 },
   loop: { authors_ignore: [], max_prs_per_run: 10, max_review_rounds: 3, max_replies_per_thread: 2, effort: "auto", ci_wait_minutes: 30 },
   // max_turns and timeout_minutes: defaults for every child; a seat or a lens may set its own.
-  review: { guidance: [], ci: "use", max_diff_lines: 3000, max_turns: 40, timeout_minutes: 10 },
+  // A diff above chunk_lines splits into parts that round 1 reviews one by one; max_children caps the cost of a PR,
+  // and max_parallel the round-1 children that run at once.
+  review: { guidance: [], ci: "use", max_diff_lines: 6000, chunk_lines: 500, max_children: 60, max_parallel: 9, max_turns: 40, timeout_minutes: 10 },
   hygiene: { enabled: true },
 };
 
@@ -156,7 +158,7 @@ function validate(c) {
   need(isObj(c.review) && strList(c.review.guidance), "review.guidance", "an array of strings");
   need(["use", "ignore"].includes(c.review.ci), "review.ci", "use or ignore");
   need(isObj(c.hygiene) && typeof c.hygiene.enabled === "boolean", "hygiene.enabled", "a boolean");
-  for (const k of ["max_diff_lines", "max_turns", "timeout_minutes"]) need(posInt(c.review[k]), `review.${k}`, "a positive integer");
+  for (const k of ["max_diff_lines", "chunk_lines", "max_children", "max_parallel", "max_turns", "timeout_minutes"]) need(posInt(c.review[k]), `review.${k}`, "a positive integer");
 }
 
 export function loadConfig({ userPath, repoText, cliPath } = {}) {
@@ -262,9 +264,9 @@ export function lowerEffort(effort) {
   return EFFORTS[Math.max(0, EFFORTS.indexOf(effort) - 1)];
 }
 
-// Children for one PR: round 1 + one vote per distinct seat + 2 judge calls.
+// Children for one PR: round 1 (one set per diff part) + one vote per distinct seat + 2 judge calls.
 // A lens with its own seats runs in its own children in per-seat mode.
-export function plannedChildren(config, lenses) {
+export function plannedChildren(config, lenses, parts = 1) {
   const all = new Set();
   let round1 = 0;
   const shared = new Set();
@@ -275,7 +277,7 @@ export function plannedChildren(config, lenses) {
     else if (config.lenses[l]?.seats) round1 += seats.length;
     else seats.forEach((s) => shared.add(seatId(s)));
   }
-  return round1 + shared.size + all.size + 2;
+  return (round1 + shared.size) * parts + all.size + 2;
 }
 
 // Whole-path glob: `**` spans directories (or none), `*` and `?` stay in one segment.

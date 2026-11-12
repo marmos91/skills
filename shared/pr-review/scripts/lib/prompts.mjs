@@ -55,7 +55,29 @@ function context(frame, extra = "", from) {
 
 const finding = (sev) => `{"lens": "<lens>", "severity": "${sev}", "file": "path/from/repo/root", "line": 42, "symbol": "functionName (optional)", "title": "short title", "case": "input or situation -> wrong result", "evidence": "trace through the code, or a command and its output", "fix": "smallest fix, with a snippet"}`;
 
-export function round1Prompt(frame, lenses, maxTurns) {
+// The patch of a part goes into the prompt up to this many lines; above it the seat reads the file.
+const INLINE_LINES = 2500;
+
+// part: one entry of frame.chunks ({ patch, files, earlier }); a frame without chunks is one part.
+function partSection(frame, part) {
+  if (!part) return [];
+  const many = frame.chunks.length > 1;
+  let text = "";
+  try { text = readFileSync(part.patch, "utf8"); } catch {}
+  const inline = text && text.split("\n").length <= INLINE_LINES;
+  const data = [...(many ? ["Files of your part:", ...part.files, ""] : []), ...(inline ? [text] : [])].join("\n").trimEnd();
+  return [
+    "## Your part",
+    ...(many ? [`The PR is large, so the council splits it into ${frame.chunks.length} parts, and other children review the other parts. Report findings only in the files of your part. Read other files of the worktree to judge them.`] : []),
+    inline
+      ? `The diff${many ? " of your part" : ""} is below, with the whole function around each change. Do not read it again from a file.`
+      : `The diff${many ? " of your part" : ""}, with the whole function around each change, is in ${part.patch}.`,
+    "",
+    ...(data ? [prData(data), ""] : []),
+  ];
+}
+
+export function round1Prompt(frame, lenses, maxTurns, part) {
   const ctx = context(frame);
   const n = frame.reviewNumber ?? 1;
   if (!Number.isInteger(n) || n < 1) throw new Error(`frame.reviewNumber must be an integer >= 1, got ${frame.reviewNumber}`);
@@ -63,12 +85,13 @@ export function round1Prompt(frame, lenses, maxTurns) {
   const sev = [...allowedSeverities(n)];
   const tracking = lenses.includes("correctness");
   const { base, isAncestor } = frame.delta ?? {};
-  const earlier = join(frame.ctxDir, "earlier.json");
+  const earlier = part?.earlier ?? join(frame.ctxDir, "earlier.json");
   return [
     "You are one seat of a review council. Review this pull request alone. Other seats review it too, and you do not see their work.",
     "",
     ctx,
     "",
+    ...partSection(frame, part),
     "## Rules",
     `- Allowed severities: ${sev.join(", ")}. Do not report a finding at another severity.`,
     "- must: a bug, a security hole, data loss, or a break at the expected load. should: risky code with no test, real slowness, code that should not exist. nit: a small, clear gain.",

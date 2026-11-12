@@ -151,3 +151,7 @@ test("repo level can append high_paths but not low_paths or effort", () => {
 test("effort_auto arrays are validated", () => {
   assert.throws(() => loadConfigWith({ effort_auto: { low_paths: [1] } }), /low_paths/);
 });
+
+test("plannedChildren: each diff part repeats round 1, not the votes or the judge", () => {
+  assert.equal(plannedChildren(applyEffort(loadConfig({}), "medium"), LENSES, 3), 3 * 3 + 3 + 2);
+});

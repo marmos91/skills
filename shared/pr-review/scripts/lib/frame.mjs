@@ -8,7 +8,11 @@ import { stripComments } from "./config.mjs";
 import { done, markDone } from "./state.mjs";
 
 export class DiffTooLarge extends Error {
-  constructor(lines, cap) { super(`diff has ${lines} lines, above review.max_diff_lines (${cap}); there is no diff splitter in v1`); this.name = "DiffTooLarge"; }
+  constructor(lines, cap, msg, hint = "Review it anyway with --max-diff-lines N, or raise review.max_diff_lines in the config.") {
+    super(msg ?? `diff has ${lines} lines, above review.max_diff_lines (${cap})`);
+    this.name = "DiffTooLarge";
+    this.hint = hint;
+  }
 }
 
 export class HeadMoved extends Error {
@@ -30,6 +34,47 @@ export const gitOk = (cwd, args) => { try { git(cwd, args); return true; } catch
 export function readTree(dir) {
   try { return readdirSync(dir, { recursive: true }).map((p) => join(dir, p)).filter((p) => statSync(p).isFile()).map((p) => readFileSync(p, "utf8")).join("\n\n"); } catch { return ""; }
 }
+// Round 1 parts: a folder (a Go package, its tests with it) stays whole when it fits in max lines; folders are
+// packed in path order. sizes: [[path, lines]]. One part per file of a folder that does not fit.
+export function planChunks(sizes, max) {
+  const byDir = new Map();
+  for (const [p, n] of sizes) {
+    const d = p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
+    if (!byDir.has(d)) byDir.set(d, []);
+    byDir.get(d).push([p, n]);
+  }
+  const out = [];
+  let cur = null;
+  const add = (files, n) => {
+    if (!cur || cur.lines + n > max) out.push((cur = { files: [], lines: 0 }));
+    cur.files.push(...files);
+    cur.lines += n;
+  };
+  for (const d of [...byDir.keys()].sort()) {
+    const fs = byDir.get(d), n = fs.reduce((a, [, x]) => a + x, 0);
+    if (n <= max) add(fs.map(([p]) => p), n);
+    else for (const [p, x] of fs) add([p], x);
+  }
+  return out;
+}
+
+// One patch per part, with the whole function around each change (-W), so a seat needs fewer reads.
+function writeChunks(repoDir, range, lines, max, ctxDir) {
+  let parts = [{ files: null, lines }];
+  if (lines > max) {
+    const stat = git(repoDir, ["-c", "core.quotePath=false", "diff", "--numstat", "-z", "--no-renames", range]).split("\0").filter(Boolean);
+    const sizes = stat.map((r) => /^(\d+|-)\t(\d+|-)\t([\s\S]*)$/.exec(r)).filter(Boolean).map((m) => [m[3], (+m[1] || 0) + (+m[2] || 0) + 5]);
+    parts = planChunks(sizes, max);
+  }
+  mkdirSync(join(ctxDir, "chunks"));
+  return parts.map((c, i) => {
+    const patch = join(ctxDir, "chunks", `${i}.patch`);
+    const paths = c.files ? ["--no-renames", "--", ...c.files] : [];
+    writeFileSync(patch, git(repoDir, ["--literal-pathspecs", "-c", "core.quotePath=false", "diff", "--no-color", "-W", range, ...paths]));
+    return { patch, files: c.files, lines: c.lines };
+  });
+}
+
 const show = (cwd, ref, path) => { try { return git(cwd, ["show", `${ref}:${path}`]); } catch { return null; } };
 const json = (dir, name, v) => writeFileSync(join(dir, name), JSON.stringify(v, null, 2) + "\n");
 
@@ -108,6 +153,7 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
   rmSync(ctxDir, { recursive: true, force: true }); // a resumed frame rewrites ctx from scratch
   mkdirSync(join(ctxDir, "guidance"), { recursive: true });
   writeFileSync(join(ctxDir, "diff.patch"), diff);
+  const chunks = writeChunks(repoDir, range, lines, config.review.chunk_lines, ctxDir);
   if (delta.base) writeFileSync(join(ctxDir, "delta.patch"), git(repoDir, ["-c", "core.quotePath=false", "diff", "--no-color", `${delta.base}..${head}`]));
 
   const commits = git(repoDir, ["log", "--format=%H %s", `${base}..${head}`]).split("\n").filter(Boolean)
@@ -141,6 +187,15 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
     severity: SEVERITY.exec(t.comments[0].body ?? "")?.[1] ?? null, body: t.comments[0].body,
   })));
 
+  // Each part checks the open earlier findings in its files; the findings in no part go to part 0.
+  if (chunks.length > 1) {
+    const earlier = JSON.parse(readFileSync(join(ctxDir, "earlier.json"), "utf8"));
+    chunks.forEach((c, i) => {
+      c.earlier = join(ctxDir, "chunks", `${i}-earlier.json`);
+      json(join(ctxDir, "chunks"), `${i}-earlier.json`, earlier.filter((t) => c.files.includes(t.path) || (i === 0 && !chunks.some((x) => x.files.includes(t.path)))));
+    });
+  }
+
   let ci = "none";
   if (config.review.ci !== "ignore") {
     const c = await gh.checks(repo, n, head);
@@ -165,7 +220,7 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
   const f = {
     headSha: head, baseRef: p.baseRef, trusted, ownPr: p.author === viewer,
     shellOk: trusted && authors.every(([login, a]) => (login && login === viewer) || TRUSTED.has(a)),
-    reviewNumber: (prState.reviews ?? 0) + 1, delta, ctxDir, worktree, changedPaths, ci, repoConfigText, nonce,
+    reviewNumber: (prState.reviews ?? 0) + 1, delta, ctxDir, worktree, changedPaths, chunks, ci, repoConfigText, nonce,
   };
   json(runDir, "frame.json", f);
   markDone(runDir, "frame");

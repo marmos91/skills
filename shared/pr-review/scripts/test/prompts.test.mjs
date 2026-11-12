@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { round1Prompt, votePrompt, mergePrompt, composePrompt, replyPrompt } from "../lib/prompts.mjs";
@@ -147,4 +148,25 @@ test("round 1 asks a seat that cannot read its inputs to say so in `error`", asy
   const { round1Prompt } = await import("../lib/prompts.mjs");
   const p = round1Prompt({ headSha: "a".repeat(40), baseRef: "main", ctxDir: "/ctx", worktree: "/wt", trusted: false, reviewNumber: 1, delta: {} }, ["correctness"]);
   assert.match(p, /cannot read .*set `error`/);
+});
+
+test("round1 part: the diff goes into the prompt; a split PR names the part's files; a long patch stays a file", () => {
+  const d = mkdtempSync(join(tmpdir(), "part-"));
+  const p0 = join(d, "0.patch"), p1 = join(d, "1.patch"), long = join(d, "long.patch");
+  writeFileSync(p0, "diff --git a/x/a.go b/x/a.go\n+func A() {}\n");
+  writeFileSync(p1, "diff --git a/y/b.go b/y/b.go\n+func B() {}\n");
+  writeFileSync(long, "+x\n".repeat(3000));
+  const one = round1Prompt(frame({ chunks: [{ patch: p0, files: null }] }), ["correctness"], 40, { patch: p0, files: null });
+  assert.match(one, /\+func A\(\) \{\}/);
+  assert.doesNotMatch(one, /splits it/);
+  const parts = [{ patch: p0, files: ["x/a.go"], earlier: "/run/ctx/chunks/0-earlier.json" }, { patch: p1, files: ["y/b.go"], earlier: "/run/ctx/chunks/1-earlier.json" }];
+  const second = round1Prompt(frame({ chunks: parts, reviewNumber: 2 }), ["correctness"], 40, parts[1]);
+  assert.match(second, /splits it into 2 parts/);
+  assert.match(second, /Files of your part:\ny\/b\.go/);
+  assert.match(second, /\+func B/);
+  assert.doesNotMatch(second, /func A|x\/a\.go/);
+  assert.match(second, /1-earlier\.json/);
+  const big = round1Prompt(frame({ chunks: [{ patch: long, files: null }] }), ["correctness"], 40, { patch: long, files: null });
+  assert.ok(big.includes(`is in ${long}`));
+  assert.ok(big.length < 10000, "a long patch is not inlined");
 });
