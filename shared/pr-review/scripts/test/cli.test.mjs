@@ -248,3 +248,23 @@ test("bin/pr-review runs the engine through a symlink, as install.sh links it", 
   assert.equal(r.status, 0, r.stderr);
   assert.equal(JSON.parse(r.stdout).repo, "o/r");
 });
+
+test("status: lastRunTokens follows the newest run, also a finished dry run, and counts reply children", async () => {
+  const fx = fixture();
+  process.env.XDG_STATE_HOME = fx.env.XDG_STATE_HOME;
+  const runs = join(fx.state, "pr", "9", "runs"), u = (input) => JSON.stringify({ input, output: 1, cache_read: null, cache_creation: null });
+  const old = join(runs, "aaa-100"), dry = join(runs, "bbb-200");
+  for (const d of [old, dry]) { mkdirSync(join(d, "round1"), { recursive: true }); writeFileSync(join(d, "post.done"), ""); }
+  writeFileSync(join(old, "round1", "all~0.usage.json"), u(1));
+  writeFileSync(join(dry, "round1", "all~0.usage.json"), u(10));
+  mkdirSync(join(dry, "reply", "T1", "11"), { recursive: true });
+  writeFileSync(join(dry, "reply", "T1", "11", "draft.usage.json"), u(5));
+  writeFileSync(join(fx.state, "pr", "9", "state.json"), JSON.stringify({ reviews: 1, lastRunId: "aaa-100" }));
+  const r = cli(fx, "status", "--repo", "o/r");
+  assert.equal(r.status, 0, r.stderr);
+  const pr = JSON.parse(r.stdout).prs.find((p) => p.pr === 9);
+  assert.deepEqual(pr.runs, [], "both runs are finished");
+  assert.equal(pr.lastRunTokens.round1.input, 10);
+  assert.equal(pr.lastRunTokens.reply.input, 5);
+  assert.equal(pr.lastRunTokens.total.input, 15);
+});

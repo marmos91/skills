@@ -196,7 +196,8 @@ export function usageByStage(dir) {
   try { ls = readdirSync(dir, { withFileTypes: true }); } catch { return out; }
   for (const e of ls) {
     if (e.isFile() && e.name.endsWith(".usage.json")) add(e.name.slice(0, -".usage.json".length), join(dir, e.name));
-    else if (e.isDirectory() && e.name !== "wt" && e.name !== "ctx") try { for (const f of readdirSync(join(dir, e.name)).filter((x) => x.endsWith(".usage.json"))) add(e.name, join(dir, e.name, f)); } catch {}
+    // recursive: reply children write reply/<thread>/<comment>/<role>.usage.json
+    else if (e.isDirectory() && e.name !== "wt" && e.name !== "ctx") try { for (const f of readdirSync(join(dir, e.name), { recursive: true }).filter((x) => x.endsWith(".usage.json"))) add(e.name, join(dir, e.name, f)); } catch {}
   }
   if (Object.keys(out).length) out.total = Object.values(out).reduce((a, b) => addUsage(a, b));
   return out;

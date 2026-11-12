@@ -278,8 +278,10 @@ Each child writes `<key>.usage.json` next to its output in the run folder:
 `input`, `output`, `cache_read` and `cache_creation` tokens, summed over its
 attempts. `claude -p --output-format json` and `pi --mode json` report these
 counts. A count that the harness does not report is `null`. A missing count
-never fails a run. `pr-review status` shows the totals per stage of each
-unfinished run, and of the last run of each PR (`lastRunTokens`).
+never fails a run. Reply children count under the `reply` stage.
+`pr-review status` shows the totals per stage of each unfinished run, and of
+the newest run of each PR (`lastRunTokens`), also a dry run or a run with
+`--until`.
 
 The prompts help the prompt cache. Each prompt starts with the parts that all
 children of a run share: the context, the small context files (`pr.json`,

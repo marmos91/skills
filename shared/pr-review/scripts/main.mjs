@@ -94,13 +94,15 @@ function status(repo) {
     let st;
     try { st = prState(rs, n); } catch (e) { return { pr: n, error: `state.json unreadable: ${e.message}` }; }
     const runsDir = join(rs, "pr", String(n), "runs");
+    // newest run by its <sha>-<ms> name, posted or not (dry run, --until): lastRunId tracks only posted reviews
+    const latestRun = ls(runsDir).sort((a, b) => Number(a.slice(a.lastIndexOf("-") + 1)) - Number(b.slice(b.lastIndexOf("-") + 1))).at(-1);
     const runs = ls(runsDir).filter((d) => !done(join(runsDir, d), FINAL_STAGE)).map((d) => {
       const dir = join(runsDir, d), run = readJson(join(dir, "run.json"));
       const childDone = ls(dir).reduce((k, s) => k + ls(join(dir, s)).filter((f) => f.endsWith(".done")).length, 0);
       return { sha: d.slice(0, d.lastIndexOf("-")), stage: STAGES.find((s) => !done(dir, s)), children: { done: childDone, total: run?.planned ?? null }, tokens: usageByStage(dir) };
     });
     const replies = Object.values(st.replies ?? {}).reduce((a, b) => a + (Number(b) || 0), 0);
-    return { pr: n, lock: lockOf(join(rs, "pr", String(n))), reviews: st.reviews, replies, lastReviewedSha: st.lastReviewedSha, lastRunTokens: st.lastRunId ? usageByStage(join(runsDir, st.lastRunId)) : {}, questions: questions.filter((q) => q.pr === n).length, runs };
+    return { pr: n, lock: lockOf(join(rs, "pr", String(n))), reviews: st.reviews, replies, lastReviewedSha: st.lastReviewedSha, lastRunTokens: latestRun ? usageByStage(join(runsDir, latestRun)) : {}, questions: questions.filter((q) => q.pr === n).length, runs };
   });
   return {
     repo, paused: existsSync(join(rs, "paused")), lock, questions, warnings: questionWarnings(rs),
