@@ -7,7 +7,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as gh from "../lib/github.mjs";
 import { loadConfig } from "../lib/config.mjs";
-import { frame, planChunks, DiffTooLarge, HeadMoved, cleanupWorktree, PR_DATA_NOTE } from "../lib/frame.mjs";
+import { frame, planChunks, linkedIssues, DiffTooLarge, HeadMoved, cleanupWorktree, PR_DATA_NOTE } from "../lib/frame.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const wrapper = join(mkdtempSync(join(tmpdir(), "ghbin-")), "gh");
@@ -58,7 +58,7 @@ function stub(head, { association = "CONTRIBUTOR", checks = [], logs = {}, body 
   const d = mkdtempSync(join(tmpdir(), "ghstub-"));
   const routes = {
     "api user": { stdout: { login: "marmos91" } },
-    "pr view 5 -R o/r --json id,headRefOid,baseRefName,author,isDraft,body,title,closingIssuesReferences": {
+    "pr view 5 -R o/r --json id,headRefOid,baseRefName,author,isDraft,body,title,closingIssuesReferences,headRefName": {
       stdout: { id: "PR_1", headRefOid: head, baseRefName: "main", author: { login: "alice" }, isDraft: false, body, title: "Change a", closingIssuesReferences: [{ number: 7 }] },
     },
     "api repos/o/r/pulls/5": { stdout: { author_association: association } },
@@ -207,6 +207,28 @@ test("shellOk: a trusted author and every text author the viewer or trusted", as
   assert.equal((await run(fx)).shellOk, false, "a linked issue with no association");
   stub(fx.head, { association: "OWNER", textAssoc: "MEMBER", over: { "api repos/o/r/issues/7": { stderr: "boom", exit: 1 } } });
   assert.equal((await run(fx)).shellOk, false, "a linked issue that cannot be read");
+});
+
+test("issues named in the body or branch are read as wrapped PR data and their authors gate the shell", async () => {
+  assert.deepEqual(linkedIssues({ body: "x", headRef: "issue-12", closingIssues: [] }, 5), [12]);
+  assert.deepEqual(linkedIssues({ body: "#1 #2 #3 #4 #5 #6 #7 #8", headRef: "main", closingIssues: [7] }, 5), [1, 2, 3, 4, 6], "self and closing skipped, capped at 5");
+  const fx = fixture();
+  const view = "pr view 5 -R o/r --json id,headRefOid,baseRefName,author,isDraft,body,title,closingIssuesReferences,headRefName";
+  const issue = (title, assoc, login = "carol") => ({ stdout: { title, body: "details", user: { login }, author_association: assoc } });
+  const body = "fixes #8, see #9 and other/r#10; this is #5; closes #7";
+  const routes = (assoc8) => ({
+    [view]: { stdout: { id: "PR_1", headRefOid: fx.head, baseRefName: "main", author: { login: "alice" }, isDraft: false, body, title: "Change a", closingIssuesReferences: [{ number: 7 }], headRefName: "fix/12-foo" } },
+    "api repos/o/r/issues/8": issue("Eight", assoc8, "mallory"), "api repos/o/r/issues/9": issue("Nine", "MEMBER"),
+    "api repos/o/r/issues/12": { stderr: "not found", exit: 1 },
+  });
+  stub(fx.head, { association: "OWNER", textAssoc: "MEMBER", over: routes("MEMBER") });
+  let f = await run(fx);
+  const p = JSON.parse(ctx(f, "pr.json"));
+  assert.deepEqual(p.linkedIssues.map((i) => [i.number, i.title]), [[8, W(f, "Eight")], [9, W(f, "Nine")]], "unreadable #12 dropped, other repo and self skipped");
+  assert.deepEqual(p.closingIssues.map((i) => i.number), [7]);
+  assert.equal(f.shellOk, true);
+  stub(fx.head, { association: "OWNER", textAssoc: "MEMBER", over: routes("NONE") });
+  assert.equal((await run(fx)).shellOk, false, "an untrusted author of a body-named issue");
 });
 
 test("red CI writes ci-failed.log with secrets redacted", async () => {

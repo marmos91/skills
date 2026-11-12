@@ -60,7 +60,7 @@ const threadsRoute = (nodes = []) => ({ stdout: { data: { repository: { pullRequ
 function routes(fx, { head = fx.head, body = "Changes a.", threads = [], pending = null, postExit = 0, reviews = [], reviewComments = [] } = {}) {
   const r = {
     "api user": { stdout: { login: ME } },
-    "pr view 5 -R o/r --json id,headRefOid,baseRefName,author,isDraft,body,title,closingIssuesReferences": {
+    "pr view 5 -R o/r --json id,headRefOid,baseRefName,author,isDraft,body,title,closingIssuesReferences,headRefName": {
       stdout: { id: "PR_1", headRefOid: head, baseRefName: "main", author: { login: "alice" }, isDraft: false, body, title: "feat: change a", closingIssuesReferences: [] },
     },
     "api repos/o/r/pulls/5": { stdout: { author_association: "CONTRIBUTOR" } },

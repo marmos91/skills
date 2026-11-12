@@ -49,12 +49,12 @@ export async function viewer() {
 }
 
 export async function pr(repo, n) {
-  const v = await json(["pr", "view", String(n), "-R", repo, "--json", "id,headRefOid,baseRefName,author,isDraft,body,title,closingIssuesReferences"]);
+  const v = await json(["pr", "view", String(n), "-R", repo, "--json", "id,headRefOid,baseRefName,author,isDraft,body,title,closingIssuesReferences,headRefName"]);
   const rest = await json(["api", `repos/${repo}/pulls/${n}`]);
   return {
     id: v.id, headSha: v.headRefOid, baseRef: v.baseRefName, author: v.author?.login,
     authorAssociation: rest.author_association, isDraft: v.isDraft, body: v.body, title: v.title,
-    closingIssues: (v.closingIssuesReferences ?? []).map((i) => i.number),
+    closingIssues: (v.closingIssuesReferences ?? []).map((i) => i.number), headRef: v.headRefName,
   };
 }
 

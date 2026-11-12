@@ -4,7 +4,7 @@
    "login": "marmos91"
   }
  },
- "pr view 5 -R o/r --json id,headRefOid,baseRefName,author,isDraft,body,title,closingIssuesReferences": {
+ "pr view 5 -R o/r --json id,headRefOid,baseRefName,author,isDraft,body,title,closingIssuesReferences,headRefName": {
   "stdout": {
    "id": "PR_node1",
    "headRefOid": "abc123",
@@ -19,7 +19,8 @@
     {
      "number": 7
     }
-   ]
+   ],
+   "headRefName": "feat/thing"
   }
  },
  "api repos/o/r/pulls/5": {
