@@ -120,6 +120,12 @@ test("globMatch: ** spans directories, * and ? do not cross /", () => {
   assert.ok(!globMatch("a.b", "axb"));
 });
 
+test("globMatch ignores case", () => {
+  assert.ok(globMatch("**/Dockerfile", "svc/dockerfile"));
+  assert.ok(globMatch("**/*.png", "a/B.PNG"));
+  assert.ok(globMatch(".github/workflows/**", ".GitHub/Workflows/ci.yml"));
+});
+
 test("auto: a change under .github/workflows -> high", () => {
   assert.equal(pickEffort(["README.md", ".github/workflows/ci.yml"], loadConfig({})), "high");
 });

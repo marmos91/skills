@@ -286,6 +286,9 @@ council size and depth. It never removes a lens or the vote.
    lockfiles, images): `low`.
 3. Otherwise: `medium`.
 
+Patterns match the whole path and ignore case (`Dockerfile*` matches
+`dockerfile`, `*.png` matches `.PNG`).
+
 `loop.effort` defaults to `auto`. The loop runs a delta review one level
 below that, never below `low`. A repo can add patterns to `high_paths` only,
 so a PR cannot lower its own review.
@@ -560,7 +563,8 @@ A commented copy is in `shared/pr-review/config.example.json`.
   a session that routes `cubbit/*` through the router runs every seat as
   `claude -p`. pi cannot run Opus or Fable, so those seats always use claude.
 - `thinking_by_stage` (`{ "round1": ..., "vote": ..., "merge": ... }`) sets
-  the thinking per stage on a seat or a lens. The engine takes the seat's
+  the thinking per stage on a seat. A lens may set `round1` only (vote and
+  merge children do not belong to one lens). The engine takes the seat's
   value, then the lens's (for the round 1 children of that lens), then the
   default. By default a `cubbit/*` seat (harness `auto` or `pi`) thinks at its
   `thinking` in round 1 and at `off` in vote and merge: in a blind judge of
