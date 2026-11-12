@@ -367,6 +367,11 @@ test("prMap: a path with a space keeps its functions; a header-like line inside 
   assert.equal(prMap(evil, [{ files: ["x/a.go"] }]), "Part 0:\n  x/a.go: func A() error {; func B() {");
 });
 
+test("authorQuestions: a heading about answers to questions is not a questions heading", () => {
+  const body = "## Answers to your earlier questions\n- The TTL stays at 5 min.\n\n## Open questions\n- Keep the cache per node";
+  assert.deepEqual(authorQuestions(body), ["Keep the cache per node"]);
+});
+
 test("authorQuestions: lines that end with ? and lines under a questions heading; code fences skipped", () => {
   const body = [
     "Adds a cache.", "", "Is the TTL right?", "```", "x = a ? b : c?", "```",

@@ -39,7 +39,8 @@ export function authorQuestions(body) {
     const m = line.match(/^(`{3,}|~{3,})/);
     if (m) { if (!fence) fence = m[1]; else if (m[1][0] === fence[0] && m[1].length >= fence.length) fence = null; continue; }
     if (fence || !line) continue;
-    if (/^#{1,6}\s/.test(line)) { under = /question/i.test(line); continue; }
+    // a heading about answers or replies to questions holds answers, not questions
+    if (/^#{1,6}\s/.test(line)) { under = /question/i.test(line) && !/answer|repl/i.test(line); continue; }
     const text = line.replace(/^(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/, "");
     if (text && (under || text.endsWith("?"))) out.push(text.slice(0, 300));
   }
