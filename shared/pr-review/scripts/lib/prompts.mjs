@@ -206,6 +206,10 @@ export function composePrompt(frame, agreed, guidance) {
     "- A finding with `ask_author: true` is a question to the author. State each other finding directly.",
     "- Findings with lens `hygiene` get no inline comment. Put them in the summary as one short list.",
     "- Write the summary body with the summary layout of the writing rules.",
+    ...((frame.reviewNumber ?? 1) > 1
+      ? [`- This is review ${frame.reviewNumber} of this PR. An earlier review already said what the PR does: do not say it again. The summary lists only the new \`must\` items and the other items that cannot go inline. Only when the finding list below is empty, the body is "No new findings."`]
+      : []),
+    "- A finding with `outside: true` is not on a diff line. The engine lists it under \"Outside the diff\" from your comment: do not list it in the summary.",
     "- Keep each claim, severity and fix of the findings. Add no findings.",
     "- Add no signature and no marker. The engine adds the marker.",
     "",

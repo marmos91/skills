@@ -10,7 +10,7 @@ import { frame as realFrame, git, readTree, cleanupWorktree, HeadMoved, DiffTooL
 import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.mjs";
 import { tally } from "./tally.mjs";
 import { filterNew, fingerprint } from "./convergence.mjs";
-import { parseHunks, place } from "./hunks.mjs";
+import { diffLine, parseHunks, place } from "./hunks.mjs";
 import { verdict } from "./verdict.mjs";
 import { redact, scanOutbound } from "./secrets.mjs";
 import { hygiene as realHygiene } from "./hygiene.mjs";
@@ -423,9 +423,12 @@ async function once(o, restart) {
     return { exit: 4, runDir, planned, summary: `the review summary was blocked by the secret scan twice at ${f.headSha}; see the question, or use --restart` };
   }
   // The held line is engine text, written at post time, so it also counts comments that the secret scan holds back.
+  // A finding off the diff lines goes under "Outside the diff" (engine text), so the judge must not list it too.
+  const hunks = parseHunks(readFileSync(join(f.ctxDir, "diff.patch"), "utf8"));
+  const offDiff = (c) => !diffLine(hunks, c.file, c.line);
   const composed = await child(ctx, "compose", "compose", {
     seat: config.judge, schema: "compose",
-    prompt: () => composePrompt(f, [...posted, ...hygItems].map(view), readTree(join(f.ctxDir, "guidance"))),
+    prompt: () => composePrompt(f, [...posted.map((c) => ({ ...view(c), ...(offDiff(c) && { outside: true }) })), ...hygItems.map(view)], readTree(join(f.ctxDir, "guidance"))),
   });
   markDone(runDir, "compose");
   if (o.until === "compose") return finish("compose");
@@ -458,8 +461,10 @@ async function once(o, restart) {
     agreed: [...agreed, ...hygItems], earlierMustOpen: earlierAll.filter((e) => e.severity === "must" && !fixed.includes(e)).length,
     openQuestions: open.length, failedLenses: run.missing?.length ?? 0, droppedSeats: run.dropped.length + missedNow.length, ci: ci.state, mode, trustedAuthor: f.shellOk, unanimousZero, ownPr: f.ownPr,
   });
+  // "No new findings." over a posted finding contradicts itself: drop it whatever compose wrote
+  const said = composed.body.trim(), anyFinding = posted.length + hygItems.length > 0;
   const bodyOf = (outside, key) => [
-    composed.body.trim(),
+    anyFinding && /^No new findings\.?$/i.test(said) ? "" : said,
     noTracking ? "No tracking issue or plan." : "",
     outside.length ? `Outside the diff:\n${outside.map((l) => `- ${l}`).join("\n")}` : "",
     open.length ? `${open.length} ${open.length === 1 ? "point is" : "points are"} still open with the reviewer.` : "",
@@ -472,7 +477,6 @@ async function once(o, restart) {
     }),
     ci.line ?? "", marker(runId, f.headSha, key),
   ].filter(Boolean).join("\n\n");
-  const hunks = parseHunks(readFileSync(join(f.ctxDir, "diff.patch"), "utf8"));
   const permalink = `https://github.com/${repo}/blob/${f.headSha}`;
 
   const warnings = (hyg.warnings ?? []).map((w) => `warning: ${w}`);

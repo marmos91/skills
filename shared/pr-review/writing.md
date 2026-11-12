@@ -46,8 +46,9 @@ end." State each other agreed finding directly.
 
 ## Summary body
 
-1. What the PR does, in 2 sentences.
+1. What the PR does, in 2 sentences. Only in the first review of a PR.
 2. The `must` items, one line each, with its `file:line`. Do not add links.
+   Skip a finding with `outside: true`: the engine lists it.
 3. Other items only when they cannot go inline.
 Do not write lines about open points, dropped seats, lenses not run or
 findings left out. The engine adds them from the real state.

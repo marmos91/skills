@@ -345,6 +345,13 @@ test("a fixed thread longer than one page gets a reply: its newest comment is un
   assert.ok(m.some((x) => x.key.includes("comments/11/replies")));
 });
 
+test("\"No new findings.\" is dropped when a finding posts", async () => {
+  const fx = fixture(); routes(fx);
+  const { r } = await go(fx, happy({ compose: { body: "No new findings.", comments: [{ id: "c1", body: "**must:** off by one" }] } }));
+  assert.equal(r.exit, 0, r.summary);
+  assert.doesNotMatch(posts(fx)[0].body, /No new findings/);
+});
+
 test("an earlier must still open blocks approve", async () => {
   const fx = fixture();
   routes(fx, { threads: [{ id: "T1", isResolved: false, isOutdated: false, viewerCanResolve: true, path: "a.js", line: 1, originalLine: 1,
@@ -1344,4 +1351,13 @@ test("a held host answered post goes out with its own text only, not the folded 
   assert.equal(t.length, 1);
   assert.match(t[0].body, /^\*\*must:\*\* Off by one/);
   assert.doesNotMatch(t[0].body, /Leak/, "the folded finding is not posted twice");
+});
+
+test("compose gets outside: true on a finding off the diff lines, and only there", async () => {
+  const fx = fixture(); routes(fx);
+  const { run } = await go(fx, happy({ merge: [C("c1"), C("c2", { file: "b.js", line: 3, lens: "security", title: "Elsewhere" })], "v~2": [keep("c1"), keep("c2")],
+    compose: { body: "Changes a.", comments: [{ id: "c1", body: "**must:** one" }, { id: "c2", body: "**must:** two" }] } }));
+  const p = run.calls.find((c) => c.k === "compose").prompt;
+  const data = JSON.parse(p.slice(p.indexOf("[", p.indexOf("## Agreed findings")), p.indexOf("\n]", p.indexOf("## Agreed findings")) + 2));
+  assert.deepEqual(data.map((x) => [x.id, x.outside ?? false]), [["c1", false], ["c2", true]]);
 });
