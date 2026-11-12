@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // skills install|uninstall|list [--claude] [--pi] [--link] [skill...]
 // Copies (or links, with --link) each skill into the agent's skills folder and links its CLIs into BIN_DIR.
-// Idempotent. A local copy that this package did not write is moved aside once to <name>.pre-skills-repo.
+// Idempotent. A local copy that this package did not write is moved aside once to <name>.pre-skills-repo;
+// a link that it did not make is replaced with a WARNING (a rebuild replaces the links of ./install.sh).
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
@@ -48,7 +49,9 @@ function writable(p) {
 function place(src, dest, link, log) {
   const name = dest.split(sep).pop();
   if (isLink(dest)) {
-    if (link && resolve(dirname(dest), readlinkSync(dest)) === src) return log(`  ${name}: already linked`);
+    const to = resolve(dirname(dest), readlinkSync(dest));
+    if (link && to === src) return log(`  ${name}: already linked`);
+    if (!inside(to, ROOT)) log(`  ${name}: WARNING replaced the link to ${to}`);
     rmSync(dest);
   } else if (existsSync(dest)) {
     if (existsSync(join(dest, MARKER))) rmSync(dest, { recursive: true, force: true });
@@ -123,16 +126,25 @@ export function run(argv, { env = process.env, log = console.log } = {}) {
     }
   }
 
+  if (cmd === "install" && !placed.size) { console.error(`skills: no selected skill runs on ${agents.join(" or ")}`); return 1; }
   log(`CLIs: ${binDir}`);
   for (const [bin, skill, rel] of bins([...placed.keys()])) {
     const dest = join(binDir, bin);
+    const to = isLink(dest) ? resolve(binDir, readlinkSync(dest)) : null;
     if (cmd === "uninstall") {
-      if (isLink(dest) && agents.some((a) => inside(resolve(binDir, readlinkSync(dest)), dirs[a]) || inside(resolve(binDir, readlinkSync(dest)), ROOT))) { rmSync(dest); log(`  ${bin}: removed`); }
+      if (!to || !agents.some((a) => inside(to, dirs[a])) && !inside(to, ROOT)) continue;
+      rmSync(dest);
+      // the other agent's copy stays: its CLIs run from there now
+      const rest = Object.values(dirs).map((d) => join(d, skill)).find((d) => exists(d) && ours(d));
+      if (rest) { symlinkSync(join(rest, rel), dest); log(`  ${bin} -> ${join(rest, rel)}`); } else log(`  ${bin}: removed`);
       continue;
     }
-    if (exists(dest) && !isLink(dest)) { log(`  ${bin}: WARNING ${dest} is not a link; left as it is`); continue; }
+    if (exists(dest) && !to) { log(`  ${bin}: WARNING ${dest} is not a link; left as it is`); continue; }
+    if (to && !inside(to, ROOT) && !Object.values(dirs).some((d) => inside(to, d))) log(`  ${bin}: WARNING replaced the link to ${to}`);
     const target = join(placed.get(skill), rel);
-    chmodSync(target, statSync(target).mode | 0o111);
+    // only when needed: under --link the target is the package itself, read-only in the Nix store or a root-owned prefix
+    const mode = statSync(target).mode;
+    if ((mode & 0o111) !== 0o111) chmodSync(target, mode | 0o111);
     mkdirSync(binDir, { recursive: true });
     rmSync(dest, { force: true });
     symlinkSync(target, dest);

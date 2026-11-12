@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -94,4 +94,47 @@ test("uninstall removes only what the package installed", (t) => {
   assert.deepEqual(readdirSync(env.CLAUDE_DIR), ["other"]);
   assert.deepEqual(readdirSync(env.PI_DIR), []);
   assert.deepEqual(readdirSync(env.BIN_DIR), []);
+});
+
+test("--link from a read-only package links the skills and the CLIs", (t) => {
+  const { root, env, run } = setup(t);
+  const pkg = storeCopy(root);
+  // a chmod needs ownership: the Nix store is root's, so the package file must not be touched at all
+  const target = join(pkg, "shared", "jev", "jev.py"), before = statSync(target).ctimeMs;
+  const r = run(pkg, "install", "--claude", "--link", "jev");
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(readlinkSync(join(env.BIN_DIR, "jev")), join(env.CLAUDE_DIR, "jev", "jev.py"));
+  assert.equal(statSync(target).ctimeMs, before, "no chmod on the package");
+});
+
+test("uninstall from one agent moves the CLIs to the copy that stays", (t) => {
+  const { env, run } = setup(t);
+  assert.equal(run(REPO, "install").status, 0);
+  assert.equal(run(REPO, "uninstall", "--claude").status, 0);
+  assert.equal(readlinkSync(join(env.BIN_DIR, "pr-review")), join(env.PI_DIR, "pr-review", "scripts", "pr-review"));
+  const r = spawnSync(join(env.BIN_DIR, "pr-review"), ["--help"], { env, encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(run(REPO, "uninstall", "--pi").status, 0);
+  assert.deepEqual(readdirSync(env.BIN_DIR), []);
+});
+
+test("install fails when no selected skill runs on the selected agent", (t) => {
+  const { run } = setup(t);
+  const r = run(REPO, "install", "--claude", "refute-root-cause");
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /no selected skill runs on claude/);
+});
+
+test("a link that the package did not make is replaced with a warning", (t) => {
+  const { root, env, run } = setup(t);
+  mkdirSync(join(root, "mine", "jev"), { recursive: true });
+  mkdirSync(env.CLAUDE_DIR, { recursive: true });
+  mkdirSync(env.BIN_DIR, { recursive: true });
+  symlinkSync(join(root, "mine", "jev"), join(env.CLAUDE_DIR, "jev"));
+  symlinkSync(join(root, "mine", "jev"), join(env.BIN_DIR, "jev"));
+  const r = run(REPO, "install", "--claude", "jev");
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, new RegExp(`jev: WARNING replaced the link to ${join(root, "mine", "jev")}`));
+  assert.equal((r.stdout.match(/WARNING replaced the link/g) ?? []).length, 2, "skill folder and CLI");
+  assert.ok(existsSync(join(env.CLAUDE_DIR, "jev", ".skills-package")));
 });

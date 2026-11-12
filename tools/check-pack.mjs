@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Fails when the npm tarball would ship tests, benchmarks, local state or a secret.
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { scanOutbound } from "../shared/pr-review/scripts/lib/secrets.mjs";
 
 const FORBIDDEN = /(^|\/)(test|tests|fixtures|bench|__pycache__|\.claude|\.pi|\.headroom|\.github)\/|(^|\/)test_[^/]*\.py$|\.test\.[a-z]+$|^docs\/superpowers\//;
@@ -15,6 +15,15 @@ for (const f of files) {
   if (!ok) bad.push(`${f}: ${hits.join(", ")}`);
 }
 for (const bin of Object.values(JSON.parse(readFileSync("package.json", "utf8")).bin)) if (!files.includes(bin)) bad.push(`${bin}: bin entry missing from the tarball`);
+
+// release-please bumps metadata.version only in the files it lists: every SKILL.md must be there
+const listed = JSON.parse(readFileSync("release-please-config.json", "utf8")).packages["."]["extra-files"];
+const skills = ["shared", "pi", "claude"].flatMap((g) => existsSync(g) ? readdirSync(g).map((s) => `${g}/${s}/SKILL.md`).filter(existsSync) : []);
+for (const f of skills) {
+  if (!listed.includes(f)) bad.push(`${f}: missing from extra-files in release-please-config.json`);
+  if (!/^\s+version:.*x-release-please-version/m.test(readFileSync(f, "utf8"))) bad.push(`${f}: no metadata.version line for release-please`);
+}
+for (const f of listed) if (!skills.includes(f)) bad.push(`${f}: in extra-files but not a skill`);
 
 console.log(`${pack.name}@${pack.version}: ${files.length} files, ${pack.size} bytes`);
 if (bad.length) { console.error(bad.join("\n")); process.exit(1); }
