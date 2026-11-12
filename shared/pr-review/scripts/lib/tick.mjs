@@ -136,7 +136,11 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
       const force = forced.has(r.number);
       const fresh = r.updatedAt > baseline || r.reasons.includes("review-requested") || force;
       // shortcut: updatedAt stands in for head SHA + newest comment; our own posts bump it, so a PR gets one cheap extra pass.
-      const changed = force || prState(rs, r.number).cache.updatedAt !== r.updatedAt;
+      const c = prState(rs, r.number).cache;
+      // a PR that could not be reviewed (exit 1) comes back when the user raises the cap, or after a day
+      // (covers a cap raised in the repo's .pr-review.json, which this check does not load)
+      const blockedStale = c.blocked && (c.blocked.cap !== config.review.max_diff_lines || now() - c.blocked.at > 24 * 3600e3);
+      const changed = force || c.updatedAt !== r.updatedAt || blockedStale;
       if (fresh && changed) rows.push(r); else out.skipped++;
     }
     rows.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
@@ -151,7 +155,7 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
         writeAtomic(jf, JSON.stringify({ ...j, current: r.number }, null, 2) + "\n");
         let res;
         try { res = await handle(r, forced.get(r.number)); } catch (e) { log(`#${r.number}: ${e.message}`); res = { acted: false, cache: false }; }
-        if (res.cache) update(r.number, (s) => { s.cache = { updatedAt: r.updatedAt }; });
+        if (res.cache) update(r.number, (s) => { s.cache = { updatedAt: r.updatedAt, ...(res.blocked && { blocked: res.blocked }) }; });
         res.acted ? out.processed++ : out.skipped++;
         j.done.push(r.number);
         writeAtomic(jf, JSON.stringify({ ...j, current: null }, null, 2) + "\n");
@@ -235,8 +239,8 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
         // Exit 1 (diff too large, ...) repeats on every tick until the PR changes: close its answers and cache it.
         if (res?.exit === 1) {
           for (const id of force || []) { appliedAnswer(rs, id); log(`#${n}: answer ${id} closed; the review cannot run`); }
-          log(`#${n}: ${res.summary}; skipped until the PR changes`);
-          return { acted: false, cache: true };
+          log(`#${n}: ${res.summary}; skipped until the PR or review.max_diff_lines changes (retried after a day)`);
+          return { acted: false, cache: true, blocked: { cap: config.review.max_diff_lines, at: now() } };
         }
         if (res?.exit) throw new Error(`review exit ${res.exit}: ${res.summary}; retried next tick`);
         // A skipped review leaves the answers to review(): a pending-review skip keeps them pending (forced again

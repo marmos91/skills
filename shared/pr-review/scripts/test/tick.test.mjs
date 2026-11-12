@@ -473,12 +473,22 @@ test("a review that can never run (exit 1) closes its answers and skips the PR u
   const f = fakes({ reviewResult: { exit: 1, summary: "diff too large" } });
   const { out } = await go({ gh: fakeGh({ rows: [row(1, ["review-requested"])] }), f, log: (m) => lines.push(m) });
   assert.deepEqual(pendingAnswers(rs), []);
-  assert.ok(lines.includes("#1: diff too large; skipped until the PR changes"), lines.join("\n"));
-  assert.deepEqual(prState(rs, 1).cache, { updatedAt: AFTER });
+  assert.ok(lines.some((l) => l.startsWith("#1: diff too large; skipped until the PR or review.max_diff_lines changes")), lines.join("\n"));
+  assert.equal(prState(rs, 1).cache.updatedAt, AFTER);
   assert.equal(out.processed, 0);
   assert.equal(out.skipped, 1);
   await go({ gh: fakeGh({ rows: [row(1, ["review-requested"])] }), f });
   assert.equal(f.reviews.length, 1, "not framed again while unchanged");
+  // the user raises the cap, as the log says: the PR comes back without a push
+  const raised = () => { const c = loadConfig(); c.review.max_diff_lines = 5000; return c; };
+  await go({ gh: fakeGh({ rows: [row(1, ["review-requested"])] }), f, loadCfg: raised });
+  assert.equal(f.reviews.length, 2, "a raised cap retries the PR");
+  // or a day later (a cap raised in the repo's .pr-review.json is not seen by this check)
+  const f2 = fakes({ reviewResult: { exit: 1, summary: "diff too large" } });
+  const rs2 = fresh(); withBaseline(rs2);
+  await go({ gh: fakeGh({ rows: [row(1, ["review-requested"])] }), f: f2 });
+  await go({ gh: fakeGh({ rows: [row(1, ["review-requested"])] }), f: f2, now: () => NOW + 25 * 3600e3 });
+  assert.equal(f2.reviews.length, 2, "retried after a day");
 });
 
 test("a reply-only tick leaves no unfinished run folder", async () => {
