@@ -105,12 +105,12 @@ function need(ok, path, what) {
   if (!ok) throw new Error(`${path} must be ${what}`);
 }
 
-const THINKING_STAGES = ["round1", "vote", "merge"];
-function checkStages(t, where, ok, label = "") {
+function checkStages(t, where, ok, label = "", stages = ["round1", "vote", "merge"]) {
+  const list = stages.length > 1 ? `${stages.slice(0, -1).join(", ")} or ${stages.at(-1)}` : stages[0];
   if (t === undefined) return;
   need(isObj(t), `${where}.thinking_by_stage`, "an object");
   for (const [k, v] of Object.entries(t)) {
-    need(THINKING_STAGES.includes(k), `${where}.thinking_by_stage.${k}`, "a stage: round1, vote or merge");
+    need(stages.includes(k), `${where}.thinking_by_stage.${k}`, `a stage: ${list}`);
     need(ok.includes(v), `${where}.thinking_by_stage.${k}${label}`, `one of ${ok.join("|")}`);
   }
 }
@@ -138,7 +138,8 @@ function validate(c) {
     need(isObj(l), `lenses.${name}`, "an object");
     need(typeof l.enabled === "boolean", `lenses.${name}.enabled`, "a boolean");
     need(l.max_turns === undefined || posInt(l.max_turns), `lenses.${name}.max_turns`, "a positive integer");
-    checkStages(l.thinking_by_stage, `lenses.${name}`, PI_THINKING); // claude children map off and minimal to low
+    // Only round-1 children belong to one lens; claude children map off and minimal to low.
+    checkStages(l.thinking_by_stage, `lenses.${name}`, PI_THINKING, "", ["round1"]);
     if (l.seats === undefined) continue;
     if (!Array.isArray(l.seats) || l.seats.length < 2) throw new Error(`lens ${name} needs 2 or more seats`);
     l.seats.forEach((s, i) => checkSeat(s, `lenses.${name}.seats[${i}]`));
@@ -203,13 +204,13 @@ const STAGE_KEY = { round1: "round1", round2: "vote", vote: "vote", merge: "merg
 
 /**
  * The seat for one child. Limits: the seat's own, then the lens's max_turns, then review.max_turns / review.timeout_minutes.
- * thinking for round1, vote (round2) and merge: seat thinking_by_stage, then lens thinking_by_stage, then the default:
+ * thinking for round1, vote (round2) and merge: seat thinking_by_stage, then lens thinking_by_stage (round1 only), then the default:
  * a cubbit seat (Mimir) thinks only in round 1, where it pays off; every other seat keeps its one level.
  */
 export const withLimits = (config, s, lens, stage) => ({
   ...s,
   thinking: STAGE_KEY[stage]
-    ? s.thinking_by_stage?.[STAGE_KEY[stage]] ?? config.lenses[lens]?.thinking_by_stage?.[STAGE_KEY[stage]]
+    ? s.thinking_by_stage?.[STAGE_KEY[stage]] ?? (stage === "round1" ? config.lenses[lens]?.thinking_by_stage?.round1 : undefined)
       ?? (s.harness !== "claude" && s.model.startsWith("cubbit/") && STAGE_KEY[stage] !== "round1" ? "off" : s.thinking)
     : s.thinking,
   max_turns: s.max_turns ?? config.lenses[lens]?.max_turns ?? config.review.max_turns,
@@ -278,7 +279,7 @@ export function plannedChildren(config, lenses) {
   return round1 + shared.size + all.size + 2;
 }
 
-// Whole-path glob: `**` spans directories (or none), `*` and `?` stay in one segment.
+// Whole-path glob: `**` spans directories (or none), `*` and `?` stay in one segment. Case-insensitive (Dockerfile, .PNG).
 export function globMatch(glob, path) {
   let re = "";
   for (let i = 0; i < glob.length; i++) {
@@ -291,7 +292,7 @@ export function globMatch(glob, path) {
     else if (ch === "?") re += "[^/]";
     else re += ch.replace(/[.+^${}()|[\]\\]/g, "\\$&");
   }
-  return new RegExp(`^${re}$`).test(path);
+  return new RegExp(`^${re}$`, "i").test(path);
 }
 
 export function pickEffort(changedPaths, config) {

@@ -26,7 +26,7 @@
     "max_review_rounds": 3,
     "max_replies_per_thread": 2
   },
-  // Per-stage thinking on a seat or a lens: "thinking_by_stage": { "round1": "medium", "vote": "off", "merge": "off" }.
+  // Per-stage thinking on a seat: "thinking_by_stage": { "round1": "medium", "vote": "off", "merge": "off" }. A lens may set "round1" only; it applies when a round-1 child runs that one lens (--lens with that lens only, the lens has its own "seats", or effort high/max).
   // That is the default for cubbit/ seats; claude seats keep one level. The effort cap applies on top.
   // Limits per child: a seat may set its own "max_turns" and "timeout_minutes", a lens its own "max_turns".
   // max_turns reaches claude seats only (--max-turns); pi has no such flag, so the timeout bounds it.
