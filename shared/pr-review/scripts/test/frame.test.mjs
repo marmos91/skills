@@ -282,3 +282,21 @@ test("frame writes one patch per part: one part below chunk_lines, one per file 
   assert.doesNotMatch(a, /CLAUDE\.md/);
   assert.ok(existsSync(big.chunks[0].earlier), "each part gets its own earlier findings file");
 });
+
+test("a part whose function context passes 2500 lines keeps the plain patch", async () => {
+  const fx = fixture();
+  const body = Array.from({ length: 3000 }, (_, i) => `  x${i}();`).join("\n");
+  put(fx.repoDir, { "big.js": `function f() {\n${body}\n}\n` });
+  git(fx.repoDir, "add", "-A"); git(fx.repoDir, "commit", "-qm", "base big");
+  const base = git(fx.repoDir, "rev-parse", "HEAD");
+  put(fx.repoDir, { "big.js": `function f() {\n${body.replace("x1500();", "y1500();")}\n}\n` });
+  git(fx.repoDir, "add", "-A"); git(fx.repoDir, "commit", "-qm", "head big");
+  const head = git(fx.repoDir, "rev-parse", "HEAD");
+  git(fx.repoDir, "push", "-q", "origin", `${base}:refs/heads/main`, "-f");
+  git(fx.repoDir, "push", "-q", "origin", `${head}:refs/pull/5/head`, "-f");
+  stub(head);
+  const f = await frame({ repo: "o/r", n: 5, repoDir: fx.repoDir, runDir: freshRun({ ...fx, head }), config: loadConfig({}), gh });
+  const p = readFileSync(f.chunks[0].patch, "utf8");
+  assert.match(p, /^\+  y1500\(\);$/m);
+  assert.ok(p.split("\n").length < 20, `plain patch expected, got ${p.split("\n").length} lines`);
+});

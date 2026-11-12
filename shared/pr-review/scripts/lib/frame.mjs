@@ -59,6 +59,8 @@ export function planChunks(sizes, max) {
 }
 
 // One patch per part, with the whole function around each change (-W), so a seat needs fewer reads.
+// Above this many lines (the prompt's limit) big functions crowd out the diff: the part keeps the plain patch.
+const FUNCTION_CONTEXT_MAX = 2500;
 function writeChunks(repoDir, range, lines, max, ctxDir) {
   let parts = [{ files: null, lines }];
   if (lines > max) {
@@ -70,7 +72,9 @@ function writeChunks(repoDir, range, lines, max, ctxDir) {
   return parts.map((c, i) => {
     const patch = join(ctxDir, "chunks", `${i}.patch`);
     const paths = c.files ? ["--no-renames", "--", ...c.files] : [];
-    writeFileSync(patch, git(repoDir, ["--literal-pathspecs", "-c", "core.quotePath=false", "diff", "--no-color", "-W", range, ...paths]));
+    const diff = (w) => git(repoDir, ["--literal-pathspecs", "-c", "core.quotePath=false", "diff", "--no-color", ...w, range, ...paths]);
+    const wide = diff(["-W"]);
+    writeFileSync(patch, wide.split("\n").length > FUNCTION_CONTEXT_MAX ? diff([]) : wide);
     return { patch, files: c.files, lines: c.lines };
   });
 }
