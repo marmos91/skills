@@ -236,7 +236,8 @@ text (`scripts/lib/verdict.mjs`). The first row that matches wins.
 7. Post with 1 `addPullRequestReview` mutation (`commitOID`, threads, event),
    so nothing stays pending.
 8. For each earlier finding that the new head fixes: reply "Fixed in
-   `<sha>`." and resolve the thread.
+   <commit link>." and resolve the thread. When the newest comment of the
+   thread is already yours, add the link to that comment instead of a reply.
 
 Each posted body ends with a hidden marker:
 `<!-- pr-review run=<id> sha=<sha> key=<hash> -->`.
@@ -255,8 +256,9 @@ When you already reviewed the PR:
   settled: the engine diffs the new head against the reviewed commit, so only
   lines that really changed can bring one back. If GitHub no longer serves
   that commit, every line of the diff counts as changed.
-- Each earlier finding that the new head fixes gets "Fixed in `<sha>`." and
-  its thread is resolved.
+- Each earlier finding that the new head fixes gets "Fixed in <commit
+  link>." and its thread is resolved. When the newest comment is already
+  yours, the link goes into that comment, not a new reply.
 
 ## Convergence
 

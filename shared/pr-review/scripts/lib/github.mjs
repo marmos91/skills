@@ -63,7 +63,7 @@ const THREADS = `query Threads($owner: String!, $name: String!, $n: Int!, $curso
     reviewThreads(first: 100, after: $cursor) {
       pageInfo { hasNextPage endCursor }
       nodes { id isResolved isOutdated viewerCanResolve path line originalLine
-        comments(first: 100) { nodes { databaseId author { login __typename } authorAssociation body createdAt } } }
+        comments(first: 100) { totalCount nodes { databaseId author { login __typename } authorAssociation body createdAt } } }
     } } } }`;
 
 export async function threads(repo, n) {
@@ -73,7 +73,7 @@ export async function threads(repo, n) {
     const rt = (await gql(THREADS, { owner, name, n, cursor })).repository.pullRequest.reviewThreads;
     for (const t of rt.nodes) {
       out.push({
-        id: t.id, isResolved: t.isResolved, isOutdated: t.isOutdated, viewerCanResolve: t.viewerCanResolve, path: t.path, line: t.line, originalLine: t.originalLine,
+        id: t.id, isResolved: t.isResolved, isOutdated: t.isOutdated, viewerCanResolve: t.viewerCanResolve, path: t.path, line: t.line, originalLine: t.originalLine, commentCount: t.comments.totalCount ?? t.comments.nodes.length,
         comments: t.comments.nodes.map((c) => ({ id: c.databaseId, author: c.author?.login ?? null, authorType: c.author?.__typename ?? null, authorAssociation: c.authorAssociation ?? null, body: c.body, createdAt: c.createdAt })),
       });
     }
@@ -127,6 +127,11 @@ export async function postReview(repo, n, { commitOID, event, body, threads: ths
 // GitHub has no replies to replies: pass the id of the thread's first comment.
 export async function reply(repo, n, commentId, body) {
   return json(["api", "-X", "POST", `repos/${repo}/pulls/${n}/comments/${commentId}/replies`, "--input", "-"], { input: JSON.stringify({ body }) });
+}
+
+/** Replaces the body of a review comment. */
+export async function editComment(repo, commentId, body) {
+  return json(["api", "-X", "PATCH", `repos/${repo}/pulls/comments/${commentId}`, "--input", "-"], { input: JSON.stringify({ body }) });
 }
 
 const RESOLVE = `mutation ResolveThread($id: ID!) { resolveReviewThread(input: { threadId: $id }) { thread { id isResolved } } }`;

@@ -541,15 +541,25 @@ async function once(o, restart) {
     savePrState(repoState, n, st);
   }
 
-  // Spec 6.9: reply "Fixed in <sha>." and resolve. prState.resolved is the list reply.mjs reads too.
+  // Spec 6.9: reply "Fixed in <commit link>." and resolve. prState.resolved is the list reply.mjs reads too.
+  // When the newest comment of the thread is already ours (a reply that said what changed), amend it with the
+  // link instead of a second reply. The threads are read again here: the frame-time copy misses a reply posted
+  // since (the loop replies between frame and post).
+  const liveThreads = fixed.length ? await gh.threads(repo, n) : [];
   for (const e of fixed) {
     st = prState(repoState, n);
     if ((st.resolved ?? []).includes(e.threadId)) continue;
+    const t = liveThreads.find((x) => x.id === e.threadId);
     const k = sha1(`fixed\0${e.threadId}`);
-    const msg = `Fixed in \`${f.headSha}\`.\n\n${marker(runId, f.headSha, k)}`;
+    const link = `Fixed in [\`${f.headSha.slice(0, 7)}\`](https://github.com/${repo}/commit/${f.headSha}).`;
+    const msg = `${link}\n\n${marker(runId, f.headSha, k)}`;
     if (!scanOutbound(msg).ok) continue;
-    if (!seen.has(k)) await gh.reply(repo, n, e.commentId, msg);
-    if (threads.find((t) => t.id === e.threadId)?.viewerCanResolve) await gh.resolve(e.threadId);
+    // a thread longer than the fetched page: its newest comment is unknown, so reply
+    const whole = t && t.comments.length === (t.commentCount ?? t.comments.length);
+    const last = whole && t.comments.length > 1 && t.comments.at(-1).author === me ? t.comments.at(-1) : null;
+    if (last) { if (!String(last.body).includes(`/commit/${f.headSha}`)) await gh.editComment(repo, last.id, `${last.body.trimEnd()}\n\n${link}`); }
+    else if (!seen.has(k)) await gh.reply(repo, n, e.commentId, msg);
+    if (t?.viewerCanResolve) await gh.resolve(e.threadId);
     st.resolved = [...(st.resolved ?? []), e.threadId];
     savePrState(repoState, n, st);
   }

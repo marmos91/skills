@@ -74,6 +74,8 @@ function routes(fx, { head = fx.head, body = "Changes a.", threads = [], pending
     "graphql PendingReview": { stdout: { data: { repository: { pullRequest: { reviews: { nodes: pending ? [pending] : [] } } } } } },
     "graphql PostReview": postExit ? { stderr: "boom", exit: postExit } : { stdout: { data: { addPullRequestReview: { pullRequestReview: { url: "https://github.com/o/r/pull/5#pullrequestreview-1" } } } } },
     "api -X POST repos/o/r/pulls/5/comments/11/replies --input -": { stdout: {} },
+    "api -X PATCH repos/o/r/pulls/comments/12 --input -": { stdout: {} },
+    "api -X PATCH repos/o/r/pulls/comments/13 --input -": { stdout: {} },
     "graphql ResolveThread": { stdout: { data: { resolveReviewThread: { thread: { id: "T1", isResolved: true } } } } },
   };
   writeFileSync(join(fx.stubDir, "routes.json"), JSON.stringify(r));
@@ -282,9 +284,65 @@ test("earlier threads fixed -> 'Fixed in <sha>.' reply + resolve", async () => {
   assert.equal(posts(fx)[0].event, "APPROVE");
   const m = mutations(fx);
   const rep = m.find((x) => x.key.includes("comments/11/replies"));
-  assert.match(rep.input.body, new RegExp(`^Fixed in \`${fx.head}\`\\.\\n\\n<!-- pr-review `));
+  assert.match(rep.input.body, new RegExp(`^Fixed in \\[\`${fx.head.slice(0, 7)}\`\\]\\(https://github\\.com/o/r/commit/${fx.head}\\)\\.\\n\\n<!-- pr-review `));
   assert.ok(m.some((x) => x.key === "graphql ResolveThread"));
   assert.deepEqual(prState(fx.state, N).resolved, ["T1"]);
+});
+
+test("a fixed thread whose newest comment is ours: that comment gets the link, no second reply", async () => {
+  const fx = fixture();
+  routes(fx, { threads: [{ id: "T1", isResolved: false, isOutdated: false, viewerCanResolve: true, path: "a.js", line: 1, originalLine: 1,
+    comments: { nodes: [
+      { databaseId: 11, author: { login: ME, __typename: "User" }, body: "**must:** a is wrong", createdAt: "x" },
+      { databaseId: 12, author: { login: ME, __typename: "User" }, body: "Fixed: a is 2 now.", createdAt: "y" },
+    ] } }] });
+  savePrState(fx.state, N, { ...prState(fx.state, N), reviews: 1, lastReviewedSha: fx.base });
+  const { r } = await go(fx, { all: { findings: [], earlier: [{ thread_id: "T1", status: "fixed", evidence: "a.js:1" }] }, compose: { body: "Looks good.", comments: [] } });
+  assert.equal(r.exit, 0, r.summary);
+  const m = mutations(fx);
+  assert.ok(!m.some((x) => x.key.includes("/replies")), "no second reply");
+  const ed = m.find((x) => x.key.startsWith("api -X PATCH repos/o/r/pulls/comments/12"));
+  assert.equal(ed.input.body, `Fixed: a is 2 now.\n\nFixed in [\`${fx.head.slice(0, 7)}\`](https://github.com/o/r/commit/${fx.head}).`);
+  assert.ok(m.some((x) => x.key === "graphql ResolveThread"));
+  assert.deepEqual(prState(fx.state, N).resolved, ["T1"]);
+});
+
+test("a fixed thread reads the live thread: our reply posted after the frame is amended, not doubled", async () => {
+  const fx = fixture();
+  const th = (extra) => [{ id: "T1", isResolved: false, isOutdated: false, viewerCanResolve: true, path: "a.js", line: 1, originalLine: 1,
+    comments: { nodes: [
+      { databaseId: 11, author: { login: ME, __typename: "User" }, body: "**must:** a is wrong", createdAt: "x" },
+      { databaseId: 12, author: { login: "bob", __typename: "User" }, body: "fixed", createdAt: "y" },
+      ...extra,
+    ] } }];
+  routes(fx, { threads: th([]) });
+  savePrState(fx.state, N, { ...prState(fx.state, N), reviews: 1, lastReviewedSha: fx.base });
+  const res = { all: { findings: [], earlier: [{ thread_id: "T1", status: "fixed", evidence: "a.js:1" }] }, compose: { body: "Looks good.", comments: [] } };
+  const { r: r0 } = await go(fx, res, { until: "frame" });
+  rmSync(join(r0.runDir, "post.done")); // the same run goes on, with its frame-time threads.json
+  // the loop answers bob between frame and post
+  routes(fx, { threads: th([{ databaseId: 13, author: { login: ME, __typename: "User" }, body: "Thanks, checked.", createdAt: "z" }]) });
+  const { r } = await go(fx, res);
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(r.runDir, r0.runDir);
+  const m = mutations(fx);
+  assert.ok(!m.some((x) => x.key.includes("/replies")), "no second reply");
+  assert.ok(m.some((x) => x.key.startsWith("api -X PATCH repos/o/r/pulls/comments/13")));
+});
+
+test("a fixed thread longer than one page gets a reply: its newest comment is unknown", async () => {
+  const fx = fixture();
+  routes(fx, { threads: [{ id: "T1", isResolved: false, isOutdated: false, viewerCanResolve: true, path: "a.js", line: 1, originalLine: 1,
+    comments: { totalCount: 150, nodes: [
+      { databaseId: 11, author: { login: ME, __typename: "User" }, body: "**must:** a is wrong", createdAt: "x" },
+      { databaseId: 12, author: { login: ME, __typename: "User" }, body: "Fixed: a is 2 now.", createdAt: "y" },
+    ] } }] });
+  savePrState(fx.state, N, { ...prState(fx.state, N), reviews: 1, lastReviewedSha: fx.base });
+  const { r } = await go(fx, { all: { findings: [], earlier: [{ thread_id: "T1", status: "fixed", evidence: "a.js:1" }] }, compose: { body: "Looks good.", comments: [] } });
+  assert.equal(r.exit, 0, r.summary);
+  const m = mutations(fx);
+  assert.ok(!m.some((x) => x.key.includes("PATCH")), "no edit of a comment in the middle");
+  assert.ok(m.some((x) => x.key.includes("comments/11/replies")));
 });
 
 test("an earlier must still open blocks approve", async () => {
