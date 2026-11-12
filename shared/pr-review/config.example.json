@@ -23,6 +23,8 @@
   "loop": {
     "authors_ignore": ["dependabot[bot]", "renovate[bot]"],
     "max_prs_per_run": 10,
+    // PRs that one tick reviews at the same time.
+    "max_parallel_prs": 3,
     "max_review_rounds": 3,
     "max_replies_per_thread": 2
   },

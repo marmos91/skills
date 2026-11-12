@@ -14,6 +14,7 @@ import { parseHunks, place } from "./hunks.mjs";
 import { verdict } from "./verdict.mjs";
 import { redact, scanOutbound } from "./secrets.mjs";
 import { hygiene as realHygiene } from "./hygiene.mjs";
+import { limiter } from "./limit.mjs";
 import { decide as realDecide } from "./decider.mjs";
 import { appliedAnswer, pendingAnswers, queueQuestion } from "./questions.mjs";
 import { FINAL_STAGE, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, writeAtomic } from "./state.mjs";
@@ -102,19 +103,6 @@ async function child(ctx, stage, key, { seat, prompt, schema, tools = "read", le
   save(outFile, v);
   markDone(ctx.runDir, stage, key);
   return v;
-}
-
-// At most n tasks at once: a big PR has many round-1 children.
-function limiter(n) {
-  let active = 0;
-  const queue = [];
-  const next = () => {
-    if (active >= n || !queue.length) return;
-    active++;
-    const [fn, ok, bad] = queue.shift();
-    fn().then(ok, bad).finally(() => { active--; next(); });
-  };
-  return (fn) => new Promise((ok, bad) => { queue.push([fn, ok, bad]); next(); });
 }
 
 // Waits for every child, so finished ones keep their markers when another fails.
