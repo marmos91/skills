@@ -309,3 +309,35 @@ test("prMap lists each part's files with the functions their hunks change", asyn
   const diff = ["diff --git a/x/a.go b/x/a.go", "--- a/x/a.go", "+++ b/x/a.go", "@@ -3 +3 @@ func A(n int) error {", "-a", "+b", "@@ -9 +9 @@ func A(n int) error {", "@@ -20 +20 @@", "diff --git a/y/old.go b/y/old.go", "--- a/y/old.go", "+++ /dev/null", "@@ -1,2 +0,0 @@ type Old struct{}"].join("\n");
   assert.equal(prMap(diff, [{ files: ["x/a.go"] }, { files: ["y/old.go", "z.go"] }]), "Part 0:\n  x/a.go: func A(n int) error {\nPart 1:\n  y/old.go: type Old struct{}\n  z.go");
 });
+
+test("split parts: from a subfolder of the clone the patches are not empty; a moved file stays a rename", async () => {
+  const fx = fixture();
+  const body = Array.from({ length: 40 }, (_, i) => `line ${i}`).join("\n");
+  put(fx.repoDir, { "sub/keep.txt": "k\n", "old/moved.js": body + "\n" });
+  git(fx.repoDir, "add", "-A"); git(fx.repoDir, "commit", "-qm", "base");
+  const base = git(fx.repoDir, "rev-parse", "HEAD");
+  git(fx.repoDir, "mv", "old/moved.js", "new/moved.js".replace("new/", "sub/"));
+  put(fx.repoDir, { "sub/moved.js": body.replace("line 20", "line twenty") + "\n", "z/other.js": "x\n" });
+  git(fx.repoDir, "add", "-A"); git(fx.repoDir, "commit", "-qm", "head");
+  const head = git(fx.repoDir, "rev-parse", "HEAD");
+  git(fx.repoDir, "push", "-q", "-f", "origin", `${base}:refs/heads/main`, `${head}:refs/pull/5/head`);
+  stub(head);
+  const config = loadConfig({});
+  config.review.chunk_lines = 8;
+  const f = await frame({ repo: "o/r", n: 5, repoDir: join(fx.repoDir, "sub"), runDir: freshRun({ ...fx, head }), config, gh });
+  assert.ok(f.chunks.length > 1);
+  const all = f.chunks.map((c) => readFileSync(c.patch, "utf8"));
+  for (const [i, t] of all.entries()) assert.ok(t.length > 0, `part ${i} is empty`);
+  const moved = all.find((t) => t.includes("sub/moved.js"));
+  assert.match(moved, /^rename from old\/moved\.js$/m);
+  assert.match(moved, /^\+line twenty$/m);
+  assert.ok(moved.split("\n").filter((l) => l.startsWith("+")).length < 10, "a move is not 40 added lines");
+});
+
+test("prMap: a path with a space keeps its functions; a header-like line inside a hunk is content", async () => {
+  const { prMap } = await import("../lib/frame.mjs");
+  const spaced = ["--- a/my dir/a b.go\t", "+++ b/my dir/a b.go\t", "@@ -1 +1 @@ func A() {", "-x", "+y"].join("\n");
+  assert.equal(prMap(spaced, [{ files: ["my dir/a b.go"] }]), "Part 0:\n  my dir/a b.go: func A() {");
+  const evil = ["--- a/x/a.go", "+++ b/x/a.go", "@@ -0,0 +1 @@ func A() error {", "+++ b/y/evil.go", "@@ -20 +21 @@ func B() {", "-a", "+b"].join("\n");
+  assert.equal(prMap(evil, [{ files: ["x/a.go"] }]), "Part 0:\n  x/a.go: func A() error {; func B() {");
+});

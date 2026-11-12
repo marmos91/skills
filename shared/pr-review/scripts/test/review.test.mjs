@@ -1103,6 +1103,13 @@ test("too many children for the parts: a config effort steps down; an explicit -
   const { r: r2 } = await go(fx2, happy(), { effort: "medium" });
   assert.equal(r2.exit, 1);
   assert.match(r2.summary, /needs 17 children.*max_children \(13\)\. Use a lower --effort/);
+  // auto and the loop's effort are not pinned: they step down too
+  for (const over of [{ effort: "auto" }, { mode: "loop", effort: "medium", effortFromConfig: true }]) {
+    const fx3 = splitFixture({ max_children: 13 });
+    const { r: r3 } = await go(fx3, happy(), { until: "frame", ...over });
+    assert.equal(r3.exit, 0, `${JSON.stringify(over)}: ${r3.summary}`);
+    assert.equal(r3.planned, 12);
+  }
 });
 
 test("split PR: a seat that misses one part keeps its other parts and its vote; the summary says so; no APPROVE", async () => {

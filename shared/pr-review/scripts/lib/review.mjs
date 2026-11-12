@@ -205,10 +205,12 @@ async function once(o, restart) {
     if (effort === "auto") effort = pickEffort(f.changedPaths, config);
     const lenses = LENSES.filter((l) => config.lenses[l].enabled && (!o.lenses || o.lenses.includes(l)));
     if (!lenses.length) throw new SetupError("no lens runs: the requested lens is disabled in the config, or every lens is disabled");
-    // Each diff part multiplies round 1: an effort the config chose steps down until the PR fits max_children.
+    // Each diff part multiplies round 1: an effort the user did not pin (config, auto, the loop) steps down
+    // until the PR fits max_children.
     const parts = f.chunks?.length ?? 1, cap = config.review.max_children;
     const count = (e) => plannedChildren(applyEffort(config, e), lenses, parts);
-    while (!o.effort && count(effort) > cap && effort !== "low") {
+    const pinned = o.effort && o.effort !== "auto" && !o.effortFromConfig;
+    while (!pinned && count(effort) > cap && effort !== "low") {
       const lower = lowerEffort(effort);
       log(`effort ${effort} needs ${count(effort)} children for ${parts} diff parts, above review.max_children (${cap}); using ${lower}`);
       effort = lower;

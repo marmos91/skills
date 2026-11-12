@@ -72,12 +72,20 @@ export function planChunks(sizes, max) {
 // so a seat sees what the other parts change and reads it when its own code uses it.
 export function prMap(diff, parts) {
   const syms = new Map();
-  let file = null;
+  let file = null, old = 0, add = 0;
   for (const l of diff.split("\n")) {
-    if (l.startsWith("--- a/")) file = l.slice(6);
-    else if (l.startsWith("+++ b/")) file = l.slice(6);
+    // Inside a hunk a line that looks like a header is content: count the hunk's lines, as parseHunks does.
+    if (old > 0 || add > 0) {
+      if (l[0] === "-") old--; else if (l[0] === "+") add--; else if (l[0] !== "\\") { old--; add--; }
+      continue;
+    }
+    if (l.startsWith("--- a/") || l.startsWith("+++ b/")) file = l.slice(6).replace(/\t$/, ""); // git adds a tab after a path with a space
     else if (l.startsWith("@@") && file) {
-      const h = /^@@ [^@]+ @@ ?(.*)$/.exec(l)?.[1]?.trim().slice(0, 80);
+      const m = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@ ?(.*)$/.exec(l);
+      if (!m) continue;
+      old = m[1] === undefined ? 1 : +m[1];
+      add = m[2] === undefined ? 1 : +m[2];
+      const h = m[3].trim().slice(0, 80);
       if (!syms.has(file)) syms.set(file, new Set());
       if (h) syms.get(file).add(h);
     }
@@ -92,17 +100,28 @@ export function prMap(diff, parts) {
 // Above this many lines (the prompt's limit) big functions crowd out the diff: the part keeps the plain patch.
 const FUNCTION_CONTEXT_MAX = 2500;
 function writeChunks(repoDir, range, lines, max, ctxDir) {
+  // numstat paths are from the repo root, and git reads a pathspec from the cwd: run at the top level.
+  repoDir = git(repoDir, ["rev-parse", "--show-toplevel"]).trim();
   let parts = [{ files: null, lines }];
+  const renamedFrom = new Map();
   if (lines > max) {
-    const stat = git(repoDir, ["-c", "core.quotePath=false", "diff", "--numstat", "-z", "--no-renames", range]).split("\0").filter(Boolean);
-    const sizes = stat.map((r) => /^(\d+|-)\t(\d+|-)\t([\s\S]*)$/.exec(r)).filter(Boolean).map((m) => [m[3], (+m[1] || 0) + (+m[2] || 0) + 5]);
+    // -z numstat: "a\td\tpath\0", or for a rename "a\td\t\0old\0new\0". A rename stays one file, under its new path.
+    const t = git(repoDir, ["-c", "core.quotePath=false", "diff", "--numstat", "-z", range]).split("\0"), sizes = [];
+    for (let i = 0; i < t.length; i++) {
+      const m = /^(\d+|-)\t(\d+|-)\t([\s\S]*)$/.exec(t[i]);
+      if (!m) continue;
+      let p = m[3];
+      if (p === "") { renamedFrom.set(t[i + 2], t[i + 1]); p = t[i + 2]; i += 2; }
+      sizes.push([p, (+m[1] || 0) + (+m[2] || 0) + 5]);
+    }
     parts = planChunks(sizes, max);
   }
   mkdirSync(join(ctxDir, "chunks"));
-  if (parts.length > 1) writeFileSync(join(ctxDir, "chunks", "map.txt"), prMap(git(repoDir, ["-c", "core.quotePath=false", "diff", "--no-color", "--no-renames", "-U0", range]), parts));
+  if (parts.length > 1) writeFileSync(join(ctxDir, "chunks", "map.txt"), prMap(git(repoDir, ["-c", "core.quotePath=false", "diff", "--no-color", "-U0", range]), parts));
   return parts.map((c, i) => {
     const patch = join(ctxDir, "chunks", `${i}.patch`);
-    const paths = c.files ? ["--no-renames", "--", ...c.files] : [];
+    // the old path of a rename too, so git pairs it and shows the move, not a new file
+    const paths = c.files ? ["--", ...c.files.flatMap((p) => (renamedFrom.has(p) ? [p, renamedFrom.get(p)] : [p]))] : [];
     const diff = (w) => git(repoDir, ["--literal-pathspecs", "-c", "core.quotePath=false", "diff", "--no-color", ...w, range, ...paths]);
     const wide = diff(["-W"]), functions = wide.split("\n").length <= FUNCTION_CONTEXT_MAX;
     writeFileSync(patch, functions ? wide : diff([]));
