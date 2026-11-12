@@ -1307,3 +1307,22 @@ test("a host held by the secret scan does not swallow its folded findings: they 
   assert.equal(openQuestions(fx.state).length, 1, "the host is a question");
   assert.ok(prState(fx.state, N).settled.includes(fingerprint(F(sec))));
 });
+
+test("a folded finding held on its own: answer post sends it with the secret redacted", async () => {
+  const fx = fixture(); routes(fx);
+  const token = "ghp_" + "B".repeat(36);
+  const sec = { lens: "security", title: "Leak", case: `the token ${token} is logged` };
+  const answers = happy({
+    merge: [C("c1"), C("c2", sec)], "v~2": [keep("c1"), keep("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c1", also: ["c2"], body: `**must:** token ${token} leaks` }] },
+  });
+  await go(fx, answers, { mode: "loop" });
+  const q = openQuestions(fx.state).find((x) => x.fingerprint === fingerprint(F(sec)));
+  assert.ok(q, "the folded finding has its own question");
+  answer(fx.state, q.id, "post");
+  const again = await go(fx, answers, { mode: "loop" });
+  assert.equal(again.r.exit, 0, again.r.summary);
+  const all = JSON.stringify(posts(fx).slice(1));
+  assert.match(all, /\[REDACTED:github-token\] is logged/);
+  assert.ok(!JSON.stringify(mutations(fx)).includes(token));
+});
