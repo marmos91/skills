@@ -112,6 +112,10 @@ test("tools=read gives no shell; tools=shell adds Bash/bash", async () => {
   const settings = JSON.parse(argv().match(/--settings (\{.*\}) --model/)[1]);
   assert.deepEqual({ ...settings.sandbox, filesystem: undefined }, { enabled: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false, filesystem: undefined }, "a shell seat runs sandboxed");
   assert.ok(settings.sandbox.filesystem.denyWrite.length >= 1, "the shared stage folder is not writable");
+  const wt = join(dir, "wt-deny"), ctx = join(dir, "ctx-deny");
+  await runChild(base(claudeSeat, { tools: "shell", worktree: wt, ctxDir: ctx }));
+  const deny = JSON.parse(argv().match(/--settings (\{.*\}) --model/)[1]).sandbox.filesystem.denyWrite;
+  for (const p of [wt, ctx]) assert.ok(deny.includes(p), `${p} is not writable`);
   await runChild(base(piSeat, { tools: "read", routerUp: false }));
   assert.match(argv(), /--tools read,grep,find,ls\b(?!,)/);
   assert.match(argv(), /--provider cubbit --model mimir --thinking high/);
