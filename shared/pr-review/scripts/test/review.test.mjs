@@ -1361,3 +1361,43 @@ test("compose gets outside: true on a finding off the diff lines, and only there
   const data = JSON.parse(p.slice(p.indexOf("[", p.indexOf("## Agreed findings")), p.indexOf("\n]", p.indexOf("## Agreed findings")) + 2));
   assert.deepEqual(data.map((x) => [x.id, x.outside ?? false]), [["c1", false], ["c2", true]]);
 });
+
+test("the body index lists only threads that went inline, at their real line, Critical first", async () => {
+  const fx = fixture(); routes(fx);
+  const c2 = C("c2", { line: 99, severity: "should", title: "Off diff" }), c3 = C("c3", { line: 3, severity: "should", title: "Name" });
+  const compose = {
+    verdict: "The off by one blocks.", body: "", praise: "The test covers the edge.",
+    index: [{ theme: "Totals", items: [{ id: "c3", text: "Rename c." }, { id: "c1", text: "Fix the total." }, { id: "c2", text: "Off-diff item." }, { id: "c9", text: "Made up." }] }],
+    comments: [{ id: "c1", body: "**must:** off by one" }, { id: "c2", body: "**should:** off diff" }, { id: "c3", body: "**should:** name" }],
+  };
+  const { r } = await go(fx, { all: { findings: [F()] }, merge: [C("c1"), c2, c3], "v~2": [keep("c1"), keep("c2"), keep("c3")], compose });
+  assert.equal(r.exit, 0, r.summary);
+  const b = posts(fx)[0].body;
+  assert.match(b, /^The off by one blocks\.\n\nCritical:\n- Fix the total\. \(thread on `a\.js` L2\)\n\nTotals:\n- Rename c\. \(thread on `a\.js` L3\)\n\nThe test covers the edge\./);
+  assert.doesNotMatch(b, /Off-diff item|Made up/);
+  assert.match(b, /Outside the diff:/);
+});
+
+test("the author's questions in the PR body reach compose, and the answers come after the verdict", async () => {
+  const fx = fixture(); routes(fx, { body: "Changes a.\n\nIs 2 the right value?" });
+  const { r, run } = await go(fx, happy({ compose: { verdict: "Nothing blocks.", answers: ["Yes, 2 matches the spec.", "extra"], body: "", comments: [{ id: "c1", body: "**must:** off by one" }] } }));
+  assert.equal(r.exit, 0, r.summary);
+  assert.match(run.calls.find((c) => c.k === "compose").prompt, /## The author's questions[\s\S]*1\. Is 2 the right value\?/);
+  assert.match(posts(fx)[0].body, /^Nothing blocks\.\n\nYour questions:\n1\. Yes, 2 matches the spec\.\n\n<!-- pr-review/);
+});
+
+test("pass 2: an earlier finding the seats judge wrong is retracted first, and no longer blocks", async () => {
+  const fx = fixture();
+  routes(fx, { threads: [{ id: "T1", isResolved: false, isOutdated: false, viewerCanResolve: true, path: "a.js", line: 1, originalLine: 1,
+    comments: { nodes: [{ databaseId: 11, author: { login: ME, __typename: "User" }, body: "**must:** a is wrong", createdAt: "x" }] } }] });
+  savePrState(fx.state, N, { ...prState(fx.state, N), reviews: 1, lastReviewedSha: fx.base });
+  const earlier = [{ thread_id: "T1", status: "wrong", evidence: "a.js:1 is the documented default" }];
+  const compose = { verdict: "Nothing blocks.", body: "No new findings.", corrections: [{ thread_id: "T1", text: "Our finding on a was wrong: 2 is the documented default." }], comments: [] };
+  const { r, run } = await go(fx, { all: { findings: [], earlier }, compose });
+  assert.equal(r.exit, 0, r.summary);
+  assert.match(run.calls.find((c) => c.k === "compose").prompt, /a\.js:1 is the documented default/);
+  const p = posts(fx)[0];
+  assert.match(p.body, new RegExp(`^Second pass, on \`${fx.head.slice(0, 7)}\`\\.\n\nCorrection: Our finding on a was wrong: 2 is the documented default\\. \\(thread on \`a\\.js\` L1\\)\n\nNothing blocks\\.`));
+  assert.notEqual(p.event, "REQUEST_CHANGES");
+  assert.ok(!mutations(fx).some((x) => x.key.includes("replies")), "a retracted thread gets no 'Fixed in' reply");
+});

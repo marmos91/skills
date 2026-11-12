@@ -7,7 +7,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as gh from "../lib/github.mjs";
 import { loadConfig } from "../lib/config.mjs";
-import { frame, planChunks, linkedIssues, DiffTooLarge, HeadMoved, cleanupWorktree, PR_DATA_NOTE } from "../lib/frame.mjs";
+import { frame, authorQuestions, planChunks, linkedIssues, DiffTooLarge, HeadMoved, cleanupWorktree, PR_DATA_NOTE } from "../lib/frame.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const wrapper = join(mkdtempSync(join(tmpdir(), "ghbin-")), "gh");
@@ -365,4 +365,14 @@ test("prMap: a path with a space keeps its functions; a header-like line inside 
   assert.equal(prMap(spaced, [{ files: ["my dir/a b.go"] }]), "Part 0:\n  my dir/a b.go: func A() {");
   const evil = ["--- a/x/a.go", "+++ b/x/a.go", "@@ -0,0 +1 @@ func A() error {", "+++ b/y/evil.go", "@@ -20 +21 @@ func B() {", "-a", "+b"].join("\n");
   assert.equal(prMap(evil, [{ files: ["x/a.go"] }]), "Part 0:\n  x/a.go: func A() error {; func B() {");
+});
+
+test("authorQuestions: lines that end with ? and lines under a questions heading; code fences skipped", () => {
+  const body = [
+    "Adds a cache.", "", "Is the TTL right?", "```", "x = a ? b : c?", "```",
+    "## Questions for the reviewer", "- [ ] Should this live in E4", "1. Drop the old call", "## Testing", "Ran the suite.",
+  ].join("\n");
+  assert.deepEqual(authorQuestions(body), ["Is the TTL right?", "Should this live in E4", "Drop the old call"]);
+  assert.deepEqual(authorQuestions(null), []);
+  assert.equal(authorQuestions(Array(20).fill("Why?").join("\n")).length, 10);
 });
