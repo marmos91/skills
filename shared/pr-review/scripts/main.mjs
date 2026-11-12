@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { installSignalHandlers, runChild as realRunChild } from "./lib/child.mjs";
-import { DEFAULTS, EFFORTS, LENSES, applyEffort, loadConfig, plannedChildren, seatId, userConfigPath } from "./lib/config.mjs";
+import { DEFAULTS, EFFORTS, LENSES, applyEffort, lensFileProblem, loadUserConfig, plannedChildren, seatId, userLensDir } from "./lib/config.mjs";
 import { redact } from "./lib/secrets.mjs";
 import { askJev as realAskJev, findJev as realFindJev } from "./lib/decider.mjs";
 import { review, SetupError, STAGES } from "./lib/review.mjs";
@@ -126,7 +126,7 @@ async function doctor(v, { runChild = realRunChild, askJev = realAskJev, findJev
   let repoText;
   try { repoText = execFileSync("git", ["show", "origin/HEAD:.pr-review.json"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }); } catch {}
   let config;
-  try { config = loadConfig({ userPath: userConfigPath(), cliPath: v.config, repoText }); } catch (e) { throw new Usage(e.message); }
+  try { config = loadUserConfig({ cliPath: v.config, repoText }); } catch (e) { throw new Usage(e.message); }
   // only known keys: unknown keys in a user file may hold secrets
   console.log(JSON.stringify(Object.fromEntries(Object.keys(DEFAULTS).map((k) => [k, config[k]])), null, 2));
   let fail = false;
@@ -157,7 +157,12 @@ async function doctor(v, { runChild = realRunChild, askJev = realAskJev, findJev
   }
   line(...gitleaksProbe(gitleaks));
   console.log(`claude mode: --restricted (${process.env.CLAUDE_CODE_OAUTH_TOKEN ? "CLAUDE_CODE_OAUTH_TOKEN" : "login"})`);
-  const lenses = LENSES.filter((l) => config.lenses[l].enabled);
+  const lenses = Object.keys(config.lenses).filter((l) => config.lenses[l].enabled);
+  for (const l of Object.keys(config.lenses).filter((x) => !LENSES.includes(x) && !config.lenses[x].enabled)) {
+    const p = lensFileProblem(userLensDir(), l);
+    if (p) line("WARN", `${p} (the lens is off)`);
+  }
+  console.log(`lenses: ${Object.keys(config.lenses).map((l) => `${l}${LENSES.includes(l) ? "" : " (user)"}${config.lenses[l].enabled ? "" : " (off)"}`).join(", ")}`);
   for (const e of EFFORTS) console.log(`effort ${e}: ${plannedChildren(applyEffort(config, e), lenses)} children per PR (a diff above review.chunk_lines adds round 1 for each part)`);
   return fail ? 1 : 0;
 }
@@ -209,8 +214,6 @@ export async function main(argv, deps = {}) {
   if (maxDiffLines !== undefined && !(/^\d+$/.test(v["max-diff-lines"]) && maxDiffLines > 0)) throw new Usage("--max-diff-lines must be a positive integer");
   const lenses = v.lens?.split(",").map((s) => s.trim()).filter(Boolean);
   if (lenses && !lenses.length) throw new Usage("--lens needs at least one lens name");
-  const bad = lenses?.filter((l) => !LENSES.includes(l));
-  if (bad?.length) throw new Usage(`unknown lens ${bad.join(", ")}; lenses: ${LENSES.join(", ")}`);
   const r = await review({
     ...target(rest[0], v.repo), mode: v.loop ? "loop" : "interactive", effort: v.effort, dryRun: v["dry-run"], until: v.until,
     restart: v.restart, lenses, maxDiffLines, configPath: v.config, log: (l) => console.error(l),

@@ -21,7 +21,7 @@ attribution.
 | `pr-review answer` | Print the open questions as JSON |
 | `pr-review answer <id> <post\|drop\|ask-author>` | Record your answer to one question |
 | `pr-review status [owner/repo]` | Questions, to-do items, review and reply counts per PR, lock holder, unfinished runs, tokens per stage, paused flag |
-| `pr-review doctor` | Merged config, a 1-token probe per seat, `gh auth status`, jev, gitleaks, claude login mode, planned child count per effort level |
+| `pr-review doctor` | Merged config, the loaded lenses, a 1-token probe per seat, `gh auth status`, jev, gitleaks, claude login mode, planned child count per effort level |
 | `pr-review tick [owner/repo]` | One loop run (a tick); `pr-review-loop` calls it |
 | `pr-review-loop [owner/repo]` | One loop run (a tick) |
 | `pr-review-loop pause` / `resume [owner/repo]` | Stop or restart every tick for the repo |
@@ -126,6 +126,27 @@ own children.
 | simplification | Dead code, a helper that already exists, a stdlib feature, an abstraction with one use, near-copies |
 | architecture | Module boundaries, coupling, data flow, fit with existing patterns, API and UX shape |
 | security | Validation at trust boundaries, authn and authz, secrets, injection, data exposure, unsafe defaults |
+
+### Your own lenses
+
+Put a lens file in `~/.config/pr-review/lenses/<name>.md` (or under
+`$XDG_CONFIG_HOME`). The name is the file stem. It uses only `a-z`, `0-9` and
+`-`. It cannot be a built-in lens name or a reserved name (`hygiene`, `all`,
+`v`, `merge`, `compose`, `constructor`, `prototype`). The loader skips dot files
+and files that are not `.md`. The file has the same shape as a
+built-in lens and the same limit: 40 lines and 4000 characters. A user lens is
+on by default. Set `lenses.<name>` like a built-in lens (`enabled`, `seats`,
+`max_turns`, `thinking_by_stage`), and select it with `--lens <name>`. A bad
+file of a lens that is on stops the run before any child starts, and the error
+names the file. The run does not read a lens that is off, so its file does not
+stop the run. `pr-review doctor` lists the loaded lenses and warns about a bad
+file of a lens that is off.
+
+Only your config folder can add a lens. A repo config cannot, because a lens is
+prompt text. A repo can only turn a lens off with `lenses.<name>.enabled: false`.
+The loader ignores `enabled: true` from a repo, so a lens that you turned off
+stays off. When the repo names a lens that you do not have, that entry does
+nothing.
 
 The lens prompts are in `shared/pr-review/lenses/`. Every finding needs a
 concrete case: an input or situation and the wrong result. No case, no
@@ -594,7 +615,7 @@ The engine merges 3 levels; a later level wins:
 
 The file is JSON with `//` comments allowed. Objects merge deep; arrays
 (`seats`, `lenses.*.seats`) replace. The repo level may set only
-`lenses.*.enabled`, `loop.authors_ignore`, `loop.max_prs_per_run`,
+`lenses.*.enabled` (only `false` has an effect), `loop.authors_ignore`, `loop.max_prs_per_run`,
 `review.guidance`, `hygiene.enabled`, and additions to
 `effort_auto.high_paths`. The loader rejects any other repo key. Seats, judge,
 decider and `round1` belong to you.

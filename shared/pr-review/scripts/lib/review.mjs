@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync,
 import { basename, join, resolve, sep } from "node:path";
 import * as github from "./github.mjs";
 import { runChild as realRunChild, ChildFailed, SeatDropped, stopping, harnessFor } from "./child.mjs";
-import { LENSES, WHOLE_PR_LENSES, applyEffort, loadConfig, lowerEffort, pickEffort, plannedChildren, seatId, seatsForLens, userConfigPath, withLimits } from "./config.mjs";
+import { WHOLE_PR_LENSES, applyEffort, loadUserConfig, lowerEffort, pickEffort, plannedChildren, seatId, seatsForLens, withLimits } from "./config.mjs";
 import { frame as realFrame, git, readTree, cleanupWorktree, HeadMoved, DiffTooLarge } from "./frame.mjs";
 import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.mjs";
 import { tally } from "./tally.mjs";
@@ -38,7 +38,7 @@ export class SetupError extends Error { constructor(m) { super(m); this.name = "
 // maxDiffLines (--max-diff-lines) wins over review.max_diff_lines at every level.
 const config0 = (o, maxDiffLines) => {
   let c;
-  try { c = loadConfig(o); } catch (e) { throw new SetupError(e.message); }
+  try { c = loadUserConfig(o); } catch (e) { throw new SetupError(e.message); }
   if (maxDiffLines) c.review.max_diff_lines = maxDiffLines;
   return c;
 };
@@ -200,9 +200,11 @@ function ciState(c) {
 
 async function once(o, restart) {
   const { repo, n, mode, gh, log, repoState } = o;
-  const userPath = userConfigPath();
-  const userConfig = config0({ userPath, cliPath: o.configPath }, o.maxDiffLines);
+  const userConfig = config0({ cliPath: o.configPath }, o.maxDiffLines);
   let config = userConfig;
+  // User lenses load with the config, so --lens is checked here; a repo config cannot add a lens.
+  const bad = o.lenses?.filter((l) => !Object.hasOwn(userConfig.lenses, l));
+  if (bad?.length) throw new SetupError(`unknown lens ${bad.join(", ")}; lenses: ${Object.keys(userConfig.lenses).join(", ")}`);
   const head = (await gh.pr(repo, n)).headSha;
   const runDir = pickRunDir(repoState, n, head, { restart });
   const runId = basename(runDir);
@@ -217,14 +219,14 @@ async function once(o, restart) {
     return { exit: 0, runDir, skipped: true, summary: `already reviewed ${head}; use --restart to review it again` };
   }
   const f = await o.frame({ repo, n, repoDir: o.repoDir ?? process.cwd(), runDir, config, gh, prState: prState(repoState, n) });
-  config = config0({ userPath, cliPath: o.configPath, repoText: f.repoConfigText ?? undefined }, o.maxDiffLines);
+  config = config0({ cliPath: o.configPath, repoText: f.repoConfigText ?? undefined }, o.maxDiffLines);
 
   // A resumed run keeps its effort and lenses: its finished children depend on them.
   const runFile = join(runDir, "run.json");
   if (!existsSync(runFile)) {
     let effort = o.effort ?? (mode === "loop" ? config.loop.effort : config.effort);
     if (effort === "auto") effort = pickEffort(f.changedPaths, config);
-    const lenses = LENSES.filter((l) => config.lenses[l].enabled && (!o.lenses || o.lenses.includes(l)));
+    const lenses = Object.keys(config.lenses).filter((l) => config.lenses[l].enabled && (!o.lenses || o.lenses.includes(l)));
     if (!lenses.length) throw new SetupError("no lens runs: the requested lens is disabled in the config, or every lens is disabled");
     // Each diff part multiplies round 1: an effort the user did not pin (config, auto, the loop) steps down
     // until the PR fits max_children.
@@ -242,9 +244,11 @@ async function once(o, restart) {
     }
     // A lens the user runs but this run skips (--lens, or off in the repo config) counts as failed: no APPROVE.
     // planned: the count for this run's merged config, which status shows.
-    save(runFile, { effort, lenses, missing: LENSES.filter((l) => userConfig.lenses[l].enabled && !lenses.includes(l)), planned: count(effort) });
+    save(runFile, { effort, lenses, missing: Object.keys(userConfig.lenses).filter((l) => userConfig.lenses[l].enabled && !lenses.includes(l)), planned: count(effort) });
   }
   const run = readJson(runFile);
+  const gone = run.lenses.filter((l) => !Object.hasOwn(config.lenses, l));
+  if (gone.length) throw new SetupError(`lens ${gone.join(", ")} of this run is gone (its file was removed); restore it or use --restart`);
   config = applyEffort(config, run.effort);
   const planned = run.planned ?? plannedChildren(config, run.lenses, f.chunks?.length ?? 1);
   log(`effort ${run.effort}: ${planned} children planned; seats ${config.seats.map(seatId).join(", ")}; judge ${seatId(config.judge)}`);

@@ -1529,3 +1529,54 @@ test("compose guidance: REVIEW.md stays whole; only the review.guidance files ar
   assert.ok(g.startsWith("R".repeat(9000) + "\n\n"), "REVIEW.md first and whole");
   assert.ok(g.endsWith("S".repeat(8000) + "\n[cut]") && !g.includes("C"));
 });
+
+test("a user lens file runs in round 1 with its text; off in the config it is skipped; --lens picks it", async () => {
+  const dir = () => join(process.env.XDG_CONFIG_HOME, "pr-review");
+  const setup = (cfg) => {
+    const fx = fixture(); routes(fx);
+    mkdirSync(join(dir(), "lenses"), { recursive: true });
+    writeFileSync(join(dir(), "lenses", "perf.md"), "Look for slow loops. PERF-LENS-TEXT\n");
+    if (cfg) writeFileSync(join(dir(), "config.json"), JSON.stringify(cfg));
+    return fx;
+  };
+  const r1 = (run) => run.calls.filter((c) => c.k.startsWith("all~"));
+  let fx = setup();
+  let { r, run } = await go(fx, happy());
+  assert.equal(r.exit, 0, r.summary);
+  assert.ok(r1(run).length > 0 && r1(run).every((c) => /## Lens: perf\n\nLook for slow loops\. PERF-LENS-TEXT/.test(c.prompt)));
+  assert.match(r1(run)[0].prompt, /Use only these lens names: adversarial, correctness, simplification, architecture, security, perf\./);
+
+  fx = setup({ lenses: { perf: { enabled: false } } });
+  ({ r, run } = await go(fx, happy()));
+  assert.equal(r.exit, 0, r.summary);
+  assert.ok(r1(run).every((c) => !c.prompt.includes("PERF-LENS-TEXT")));
+
+  fx = setup();
+  ({ r, run } = await go(fx, { all: { findings: [] }, compose: { body: "Fine.", comments: [] } }, { lenses: ["perf"] }));
+  assert.equal(r.exit, 0, r.summary);
+  assert.ok(r1(run).every((c) => c.prompt.includes("PERF-LENS-TEXT") && !c.prompt.includes("## Lens: security")));
+  assert.match(posts(fx)[0].body, /Lenses not run: adversarial, correctness, simplification, architecture, security\./);
+});
+
+test("--lens with an unknown name, or a bad user lens file, is a setup error before any child", async () => {
+  const fx = fixture(); routes(fx);
+  await assert.rejects(go(fx, happy(), { lenses: ["nope"] }), (e) => e.name === "SetupError" && /unknown lens nope; lenses: adversarial/.test(e.message));
+  const lenses = join(process.env.XDG_CONFIG_HOME, "pr-review", "lenses");
+  mkdirSync(lenses, { recursive: true });
+  writeFileSync(join(lenses, "big.md"), "x\n".repeat(41));
+  const run = fakeRun(happy());
+  await assert.rejects(review({ repo: REPO, n: N, repoDir: fx.repoDir, runChild: run, routerUp: true }), (e) => e.name === "SetupError" && e.message.includes(join(lenses, "big.md")));
+  assert.equal(run.calls.length, 0);
+  assert.equal(posts(fx).length, 0);
+});
+
+test("a resumed run whose user lens file was removed is a setup error, not a crash in round 1", async () => {
+  const fx = fixture(); routes(fx);
+  const lenses = join(process.env.XDG_CONFIG_HOME, "pr-review", "lenses");
+  mkdirSync(lenses, { recursive: true });
+  writeFileSync(join(lenses, "perf.md"), "Look for slow loops.\n");
+  // a round-1 child crashes: run.json stays and the next run resumes it
+  await assert.rejects(go(fx, { ...happy(), all: new Error("boom") }), /boom/);
+  rmSync(join(lenses, "perf.md"));
+  await assert.rejects(go(fx, happy()), (e) => e.name === "SetupError" && /lens perf of this run is gone/.test(e.message));
+});
