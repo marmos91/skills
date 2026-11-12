@@ -25,7 +25,7 @@ const USAGE = `usage: pr-review review [<n|url>] [--repo owner/repo] [--dry-run]
        pr-review doctor [--config <file>]
        pr-review tick [owner/repo]
        pr-review pause|resume [owner/repo]
-       pr-review respond findings|decide <thread>|decline <thread> <reason>|fixed <thread> <sha>|summary <points.json> [--pr <n|url>]`;
+       pr-review respond findings|decide <thread>|approve <thread>|decline <thread> <reason>|fixed <thread> <sha>|summary <points.json> [--pr <n|url>]`;
 
 const SKILL_DIR = realpathSync(join(dirname(fileURLToPath(import.meta.url)), ".."));
 
@@ -156,7 +156,7 @@ async function doctor(v, { runChild = realRunChild, askJev = realAskJev, findJev
   return fail ? 1 : 0;
 }
 
-const RESPOND_ARGS = { findings: 0, decide: 1, decline: 2, fixed: 2, summary: 1 };
+const RESPOND_ARGS = { findings: 0, decide: 1, approve: 1, decline: 2, fixed: 2, summary: 1 };
 
 // pr-respond: JSON on stdout; exit 5 when the round cap stops the loop. deps.gh and deps.askJev for tests.
 async function respondCmd([action, ...args], v, deps) {
@@ -168,25 +168,17 @@ async function respondCmd([action, ...args], v, deps) {
   const gh = deps.gh ?? (await import("./lib/github.mjs"));
   const ask = deps.askJev ?? realAskJev;
   const jev = async (q, text) => (await ask(q, text, config)).answer;
-  // git at the repo root, whatever subfolder the agent runs in; the PR head must be fetched
-  const git = (...g) => spawnSync("git", g, { encoding: "utf8", maxBuffer: 64 << 20 });
-  const top = git("rev-parse", "--show-toplevel");
+  // git at the repo root, whatever subfolder the agent runs in
+  const top = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" });
   if (top.status !== 0) throw new Usage("run pr-respond in a clone of the repo");
-  const inRepo = (...g) => git("-C", top.stdout.trim(), ...g);
-  const show = (sha, path) => {
-    if (inRepo("cat-file", "-e", `${sha}^{commit}`).status !== 0) throw new Usage(`the PR head ${sha.slice(0, 7)} is not fetched; run git fetch`);
-    const o = inRepo("show", `${sha}:${path}`);
-    return o.status === 0 ? o.stdout : null;
-  };
-  const diff = (sha) => inRepo("show", "--format=%H %s", sha).stdout.slice(0, 40000);
-  // the PR diff of one file, from the merge base with the fetched base branch
-  const fileDiff = (base, head, path) => inRepo("diff", `origin/${base}...${head}`, "--", path).stdout;
-  const onHead = (sha, head) => inRepo("merge-base", "--is-ancestor", sha, head).status === 0;
+  const inRepo = (...g) => spawnSync("git", ["-C", top.stdout.trim(), ...g], { encoding: "utf8", maxBuffer: 64 << 20 });
+  const { show, diff, fileDiff, onHead } = r.gitReaders(inRepo);
   const [a, b] = args;
   let out;
   try {
     if (action === "findings") out = await r.findings({ repo, n, gh, config });
     else if (action === "decide") out = await r.decide({ repo, n, threadId: a, gh, jev, show, fileDiff });
+    else if (action === "approve") out = await r.approve({ repo, n, threadId: a, gh });
     else if (action === "decline") out = await r.decline({ repo, n, threadId: a, reason: b, gh });
     else if (action === "fixed") {
       const full = inRepo("rev-parse", "--verify", "--quiet", `${b}^{commit}`);
@@ -200,7 +192,7 @@ async function respondCmd([action, ...args], v, deps) {
     }
   } catch (e) {
     if (e instanceof r.RoundCap) { console.error(`pr-respond: ${e.message}`); return 5; }
-    if (e instanceof r.NotOnHead) throw new Usage(e.message);
+    if (e instanceof r.NotOnHead || e instanceof r.GitError) throw new Usage(e.message);
     throw e;
   }
   console.log(JSON.stringify(out, null, 2));

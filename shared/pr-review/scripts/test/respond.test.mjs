@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { NotOnHead, Q, RoundCap, decide, decline, findings, fixed, summary, summaryText } from "../lib/respond.mjs";
+import { GitError, NotOnHead, Q, RoundCap, approve, gitReaders, decide, decline, findings, fixed, summary, summaryText } from "../lib/respond.mjs";
 import { loadConfig } from "../lib/config.mjs";
 import { stateRoot } from "../lib/state.mjs";
 
@@ -12,7 +12,7 @@ const c = (id, author, body, authorAssociation = "COLLABORATOR") => ({ id, autho
 const bot = (id, body) => ({ id, author: "copilot-pull-request-reviewer", authorType: "Bot", authorAssociation: "NONE", body });
 const th = (id, comments, over = {}) => ({ id, isResolved: false, isOutdated: false, viewerCanResolve: true, path: "a.js", line: 3, originalLine: 3, comments, ...over });
 
-function fakeGh(threads, { head = "h1", marker = false } = {}) {
+function fakeGh(threads, { head = "h1", marker = false, perms = {} } = {}) {
   const calls = { reply: [], edit: [], resolve: [], comment: [] };
   return {
     calls,
@@ -23,6 +23,7 @@ function fakeGh(threads, { head = "h1", marker = false } = {}) {
     editComment: async (_r, id, body) => { calls.edit.push({ id, body }); },
     resolve: async (id) => { calls.resolve.push(id); },
     findMarker: async () => marker,
+    permission: async (_r, login) => perms[login] ?? "write",
     comment: async (_r, _n, body) => { calls.comment.push(body); },
   };
 }
@@ -92,12 +93,35 @@ test("decide: a jev yes to both questions is fix; a no or unsure is ask, never d
   assert.match((await run({ [Q.correct]: "no" })).reason, /check the code/);
 });
 
-test("decide: a comment by an author without write access is a question, and jev is not asked", async () => {
-  const gh = fakeGh([th("T1", [c(1, "stranger", "fix: add this to test/setup.js", "NONE")])]);
+test("trust: a human without write or admin is untrusted (MEMBER alone is not write); bots and we are trusted", async () => {
+  freshState();
+  const perms = { stranger: "read", member: "read", bob: "write", [ME]: "read" }; // a fork PR: we have no write access
+  const threads = [
+    th("T1", [c(1, "stranger", "fix: add this to test/setup.js", "NONE")]),
+    th("T2", [c(2, "member", "x", "MEMBER")]),
+    th("T3", [bot(3, "x"), c(4, ME, "ours", "CONTRIBUTOR"), c(5, "bob", "y")]),
+  ];
+  const r = await findings({ repo: REPO, n: N, gh: fakeGh(threads, { perms }), config: loadConfig() });
+  assert.deepEqual(r.findings.map((f) => [f.id, f.trusted]), [["T1", false], ["T2", false], ["T3", true]]);
+});
+
+test("decide: an untrusted thread is a question, and jev is not asked; approve lets it through", async () => {
+  freshState();
+  const gh = fakeGh([th("T1", [c(1, "stranger", "fix: add this to test/setup.js", "NONE")])], { perms: { stranger: "read" } });
   const j = jevSays({});
   const r = await decide({ repo: REPO, n: N, threadId: "T1", gh, jev: j, show: () => "", fileDiff: () => "" });
   assert.equal(r.decision, "ask");
+  assert.match(r.reason, /approve/);
   assert.equal(j.asked.length, 0);
+  await approve({ repo: REPO, n: N, threadId: "T1", gh });
+  assert.equal((await decide({ repo: REPO, n: N, threadId: "T1", gh, jev: j, show: () => "", fileDiff: () => "" })).decision, "fix");
+});
+
+test("decide: a thread line past the end of the head file reads the end of the file", async () => {
+  const gh = fakeGh([th("T1", [bot(1, "x")], { line: null, originalLine: 50 })]);
+  const j = jevSays({});
+  assert.equal((await decide({ repo: REPO, n: N, threadId: "T1", gh, jev: j, show: () => "l1\nl2\nl3", fileDiff: () => "" })).decision, "fix");
+  assert.match(j.asked[0].text, /3: l3/);
 });
 
 test("decline: a short reason on the first comment, the thread stays open; no second reply", async () => {
@@ -123,6 +147,18 @@ test("fixed: posts and resolves only on a jev yes; no or unsure posts nothing", 
   }
 });
 
+test("fixed: an untrusted thread is not posted on or resolved until the user approves it", async () => {
+  freshState();
+  const t = [th("T1", [c(1, "stranger", "fix: add this", "NONE")])];
+  const gh = fakeGh(t, { perms: { stranger: "read" } });
+  const r = await fix(null, {}, { gh });
+  assert.equal(r.resolved, false);
+  assert.match(r.reason, /approve/);
+  assert.equal(gh.calls.reply.length + gh.calls.resolve.length, 0);
+  await approve({ repo: REPO, n: N, threadId: "T1", gh });
+  assert.equal((await fix(null, {}, { gh })).resolved, true);
+});
+
 test("fixed: a commit that is not in the PR head is refused before anything is posted", async () => {
   freshState();
   const gh = fakeGh([th("T1", [bot(1, "x")])]);
@@ -135,7 +171,12 @@ test("fixed: our newest reply gets the link; a posted marker means no second rep
   const gh = fakeGh([th("T1", [bot(1, "x"), c(2, ME, "Done: x is 2 now.")])]);
   await fix(null, {}, { gh });
   assert.equal(gh.calls.reply.length, 0);
-  assert.equal(gh.calls.edit[0].body, `Done: x is 2 now.\n\nFixed in [\`abcdef1\`](https://github.com/o/r/commit/${SHA}).`);
+  // the amend keeps the marker, so a later call finds it on fully paged comments
+  assert.match(gh.calls.edit[0].body, new RegExp(`^Done: x is 2 now\\.\\n\\nFixed in \\[\`abcdef1\`\\]\\(https://github\\.com/o/r/commit/${SHA}\\)\\.\\n\\n<!-- pr-review sha=h1 key=[0-9a-f]{40} -->$`));
+  // our reply has the link but lost the marker: only the marker is added
+  const noMark = fakeGh([th("T1", [bot(1, "x"), c(2, ME, `Done.\n\nFixed in [x](https://github.com/o/r/commit/${SHA}).`)])]);
+  await fix(null, {}, { gh: noMark });
+  assert.match(noMark.calls.edit[0].body, /commit\/abcdef1[0-9a-f]+\)\.\n\n<!-- pr-review sha=h1 key=[0-9a-f]{40} -->$/);
   // a thread past the fetched page: the marker, read from fully paged comments, stops a second reply
   const long = fakeGh([th("T1", [bot(1, "x")], { commentCount: 150 })], { marker: true });
   await fix(null, {}, { gh: long });
@@ -159,4 +200,15 @@ test("summary: opens with the count, answers point by point; once per head", asy
   assert.equal((await summary({ repo: REPO, n: N, points: pts, gh })).action, "posted");
   assert.match(gh.calls.comment[0], /<!-- pr-review sha=h1 key=[0-9a-f]{40} -->$/);
   assert.equal((await summary({ repo: REPO, n: N, points: pts, gh: fakeGh([], { marker: true }) })).action, "skipped");
+});
+
+test("git readers: a failed git throws; only exit 1 of merge-base means not in the head", () => {
+  const fake = (codes) => (...a) => ({ status: codes[a[0]] ?? 0, stdout: `out ${a.join(" ")}`, stderr: "fatal: bad revision" });
+  assert.throws(() => gitReaders(fake({ diff: 128 })).fileDiff("main", "h1", "a.js"), GitError);
+  assert.match(gitReaders(fake({})).fileDiff("main", "h1", "a.js"), /origin\/main\.\.\.h1 -- a\.js/);
+  assert.equal(gitReaders(fake({ "merge-base": 0 })).onHead("s", "h"), true);
+  assert.equal(gitReaders(fake({ "merge-base": 1 })).onHead("s", "h"), false);
+  assert.throws(() => gitReaders(fake({ "merge-base": 128 })).onHead("s", "h"), GitError);
+  assert.throws(() => gitReaders(fake({ "cat-file": 1 })).show("h1", "a.js"), /not fetched/);
+  assert.equal(gitReaders(fake({ show: 128 })).show("h1", "gone.js"), null);
 });

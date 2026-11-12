@@ -162,7 +162,12 @@ export async function linkFix(gh, repo, n, { t, commentId, sha, me, tail = "", p
   // a thread longer than the fetched page: its newest comment is unknown, so reply
   const whole = t && t.comments.length === (t.commentCount ?? t.comments.length);
   const last = whole && t.comments.length > 1 && t.comments.at(-1).author === me ? t.comments.at(-1) : null;
-  if (last) { if (!String(last.body).includes(`/commit/${sha}`)) await gh.editComment(repo, last.id, `${last.body.trimEnd()}\n\n${link}`); }
+  // the amend keeps the marker (tail), so a later call finds it even when the thread grows past one page
+  if (last) {
+    const body = String(last.body).trimEnd();
+    const add = [body.includes(`/commit/${sha}`) ? null : link, tail && !body.includes(tail) ? tail : null].filter(Boolean);
+    if (add.length) await gh.editComment(repo, last.id, [body, ...add].join("\n\n"));
+  }
   else if (!posted) await gh.reply(repo, n, commentId, msg);
   return true;
 }

@@ -302,7 +302,8 @@ test("a fixed thread whose newest comment is ours: that comment gets the link, n
   const m = mutations(fx);
   assert.ok(!m.some((x) => x.key.includes("/replies")), "no second reply");
   const ed = m.find((x) => x.key.startsWith("api -X PATCH repos/o/r/pulls/comments/12"));
-  assert.equal(ed.input.body, `Fixed: a is 2 now.\n\nFixed in [\`${fx.head.slice(0, 7)}\`](https://github.com/o/r/commit/${fx.head}).`);
+  // the amend keeps the marker, so a rerun finds it on fully paged comments
+  assert.match(ed.input.body, new RegExp(`^Fixed: a is 2 now\\.\\n\\nFixed in \\[\`${fx.head.slice(0, 7)}\`\\]\\(https://github\\.com/o/r/commit/${fx.head}\\)\\.\\n\\n<!-- pr-review run=\\S+ sha=${fx.head} key=[0-9a-f]{40} -->$`));
   assert.ok(m.some((x) => x.key === "graphql ResolveThread"));
   assert.deepEqual(prState(fx.state, N).resolved, ["T1"]);
 });

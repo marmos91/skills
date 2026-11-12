@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { scanOutbound } from "./secrets.mjs";
 import { prData } from "./prompts.mjs";
-import { linkFix } from "./reply.mjs";
+import { COLLABORATOR, linkFix } from "./reply.mjs";
 import { stateRoot, writeAtomic } from "./state.mjs";
 
 export const Q = {
@@ -15,13 +15,39 @@ export const Q = {
 };
 
 export class RoundCap extends Error {}
+export class GitError extends Error {}
+
+/**
+ * The git reads of pr-respond. git(...args) -> { status, stdout, stderr } (spawnSync). A failed git throws
+ * GitError: an empty diff would read as "the PR does not touch this file", a failed merge-base as "not pushed".
+ */
+export function gitReaders(git) {
+  const ok = (o, what) => { if (o.status !== 0) throw new GitError(`${what}: ${String(o.stderr).trim()}`); return o.stdout; };
+  const hasCommit = (sha) => git("cat-file", "-e", `${sha}^{commit}`).status === 0;
+  return {
+    show: (sha, path) => {
+      if (!hasCommit(sha)) throw new GitError(`the PR head ${sha.slice(0, 7)} is not fetched; run git fetch`);
+      const o = git("show", `${sha}:${path}`);
+      return o.status === 0 ? o.stdout : null; // the head has no such file
+    },
+    diff: (sha) => ok(git("show", "--format=%H %s", sha), `cannot show ${sha.slice(0, 7)}`).slice(0, 40000),
+    fileDiff: (base, head, path) => ok(git("diff", `origin/${base}...${head}`, "--", path), `cannot diff against origin/${base} (run git fetch origin ${base})`),
+    // merge-base exits 1 for "not an ancestor"; any other code is a git failure (an unfetched head), not an answer
+    onHead: (sha, head) => {
+      const o = git("merge-base", "--is-ancestor", sha, head);
+      if (o.status === 1) return false;
+      ok(o, `cannot check that ${sha.slice(0, 7)} is in the PR head (run git fetch)`);
+      return true;
+    },
+  };
+}
 
 const sha1 = (s) => createHash("sha1").update(s).digest("hex");
 const threadText = (t) => prData(JSON.stringify(t.comments.map((c) => ({ author: c.author, body: c.body })), null, 2), "the reviewers");
 
 // Own file, not state.json: the loop and pr-review rewrite state.json whole, under a lock pr-respond does not take.
 const file = (repo, n) => join(stateRoot(repo), "pr", String(n), "respond.json");
-const load = (repo, n) => { const f = file(repo, n); return { heads: [], handled: {}, ...(existsSync(f) ? JSON.parse(readFileSync(f, "utf8")) : {}) }; };
+const load = (repo, n) => { const f = file(repo, n); return { heads: [], handled: {}, approved: {}, ...(existsSync(f) ? JSON.parse(readFileSync(f, "utf8")) : {}) }; };
 const save = (repo, n, s) => writeAtomic(file(repo, n), JSON.stringify(s, null, 2) + "\n");
 
 // A page of 100 comments may miss the newest: such a thread is never "answered".
@@ -33,9 +59,26 @@ const handledNow = (t, me, handled) => whole(t) && t.id in handled && handled[t.
 const open = (t, me, handled) => !t.isResolved && !handledNow(t, me, handled);
 const markHandled = (repo, n, t, me) => { const s = load(repo, n); s.handled[t.id] = lastOther(t, me); save(repo, n, s); };
 
-const TRUSTED = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
-// The agent edits and runs code on what a thread says: only trusted authors and bots (Copilot) qualify.
-const trusted = (t) => t.comments.every((c) => c.authorType === "Bot" || TRUSTED.has(c.authorAssociation));
+// The agent edits and runs code on what a thread says: every author must be a bot (Copilot), us, or have
+// write access, by the same gh.permission rule as reply.mjs and tick.mjs (MEMBER alone is not write access).
+// A thread the user approved (`approve`) counts as trusted.
+async function trusted(gh, repo, n, t, me) {
+  if (load(repo, n).approved[t.id]) return true;
+  for (const a of new Set(t.comments.filter((c) => c.authorType !== "Bot" && c.author !== me).map((c) => c.author))) {
+    if (!COLLABORATOR.has(await gh.permission(repo, a))) return false;
+  }
+  return true;
+}
+const UNTRUSTED = "a comment in the thread is by an author without write access; ask the user, then run approve";
+
+/** The user said yes to work on a thread with an untrusted author. -> { approved: true } */
+export async function approve({ repo, n, threadId, gh }) {
+  await thread(gh, repo, n, threadId);
+  const s = load(repo, n);
+  s.approved[threadId] = true;
+  save(repo, n, s);
+  return { approved: true };
+}
 
 async function thread(gh, repo, n, id) {
   const t = (await gh.threads(repo, n)).find((x) => x.id === id);
@@ -50,10 +93,13 @@ async function thread(gh, repo, n, id) {
 export async function findings({ repo, n, gh, config }) {
   const [me, pr, all] = [await gh.viewer(), await gh.pr(repo, n), await gh.threads(repo, n)];
   const st = load(repo, n);
-  const list = all.filter((t) => open(t, me, st.handled)).map((t) => ({
-    id: t.id, path: t.path, line: t.line ?? t.originalLine, outdated: t.isOutdated, trusted: trusted(t),
-    comments: t.comments.map((c) => ({ id: c.id, author: c.author, body: c.body })),
-  }));
+  const list = [];
+  for (const t of all.filter((x) => open(x, me, st.handled))) {
+    list.push({
+      id: t.id, path: t.path, line: t.line ?? t.originalLine, outdated: t.isOutdated, trusted: await trusted(gh, repo, n, t, me),
+      comments: t.comments.map((c) => ({ id: c.id, author: c.author, body: c.body })),
+    });
+  }
   if (!st.heads.includes(pr.headSha)) {
     // a converged head is not a round: nothing is left to fix
     if (list.length && st.heads.length >= config.respond.max_rounds) throw new RoundCap(`round cap reached: ${st.heads.length} rounds on ${repo}#${n} and ${list.length} finding(s) still open`);
@@ -71,7 +117,8 @@ function code(show, path, line) {
   const text = path ? show(path) : null;
   if (text == null) return "(the file is not in the PR head)";
   const lines = text.split("\n").map((l, i) => `${i + 1}: ${l}`);
-  let lo = Math.max(0, (line ?? 1) - 1), hi = lo + 1, size = lines[lo]?.length ?? 0;
+  // an outdated thread can point past the end of the file at the head
+  let lo = Math.min(Math.max(0, (line ?? 1) - 1), lines.length - 1), hi = lo + 1, size = lines[lo].length;
   // grow the window both ways from the line until the cap
   while ((lo > 0 || hi < lines.length) && size < FILE_CAP) {
     if (lo > 0) size += lines[--lo].length + 1;
@@ -101,8 +148,8 @@ export function decideText(pr, t, { show, fileDiff }) {
  * An untrusted author is "ask" before jev reads anything. -> { decision: "fix"|"ask", reason }
  */
 export async function decide({ repo, n, threadId, gh, jev, show, fileDiff }) {
-  const [pr, t] = [await gh.pr(repo, n), await thread(gh, repo, n, threadId)];
-  if (!trusted(t)) return { decision: "ask", reason: "a comment in the thread is by an author without write access" };
+  const [me, pr, t] = [await gh.viewer(), await gh.pr(repo, n), await thread(gh, repo, n, threadId)];
+  if (!(await trusted(gh, repo, n, t, me))) return { decision: "ask", reason: UNTRUSTED };
   const text = decideText(pr, t, { show, fileDiff });
   const steps = [
     [Q.correct, "jev says the finding does not hold on the head"],
@@ -136,6 +183,8 @@ export class NotOnHead extends Error {}
 export async function fixed({ repo, n, threadId, sha, gh, jev, diff, onHead }) {
   const [me, pr, t] = [await gh.viewer(), await gh.pr(repo, n), await thread(gh, repo, n, threadId)];
   if (!onHead(sha, pr.headSha)) throw new NotOnHead(`commit ${sha.slice(0, 7)} is not in the PR head ${pr.headSha.slice(0, 7)}; push it first`);
+  // the gate in decide is advice to the agent; this one stops the post and the resolve
+  if (!(await trusted(gh, repo, n, t, me))) return { resolved: false, reason: UNTRUSTED };
   if (t.isResolved) return { resolved: true, reason: "already resolved" };
   const a = await jev(Q.fixes, `${threadText(t)}\n${prData(diff(sha), "the commit")}`);
   if (a !== "yes") return { resolved: false, reason: a === "no" ? `jev says commit ${sha.slice(0, 7)} does not fix the case` : "jev is not sure that the commit fixes the case" };
