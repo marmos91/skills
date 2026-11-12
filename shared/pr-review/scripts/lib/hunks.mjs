@@ -20,8 +20,9 @@ export function parseHunks(patch) {
     }
     if (line.startsWith("diff --git ")) {
       flush();
-      const m = line.match(/^diff --git (?:"a\/(.*?)"|a\/(.*?)) (?:"b\/(.*?)"|b\/(.*))$/);
-      cur = { path: m ? (m[3] ?? m[4]) : line, right: new Map(), left: new Set(), old: m?.[1] ?? m?.[2] };
+      // Unrenamed paths repeat, so "a/P b/P" splits right even when P holds " b/" (binaries have no +++ line to fix it).
+      const m = line.match(/^diff --git a\/(.*) b\/(\1)$/) ?? line.match(/^diff --git (?:"a\/(.*?)"|a\/(.*?)) (?:"b\/(.*?)"|b\/(.*))$/);
+      cur = { path: m ? (m[4] ?? m[3] ?? m[2]) : line, right: new Map(), left: new Set(), old: m?.[1] ?? m?.[2] };
     } else if (!cur) continue;
     else if (line.startsWith("rename to ")) cur.path = unquote(line.slice(10));
     else if (line.startsWith("--- ")) cur.old = stripPrefix(unquote(line.slice(4)));

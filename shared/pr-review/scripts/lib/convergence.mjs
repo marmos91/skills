@@ -1,8 +1,12 @@
 import { createHash } from "node:crypto";
 
 // No line number: a moved finding must keep its fingerprint. Only digits and punctuation leave the title.
+const norm = (s) => String(s ?? "").toLowerCase().replace(/[\d\p{P}]/gu, "").replace(/\s+/g, " ").trim();
+
 export function fingerprint(f) {
-  const title = f.title.toLowerCase().replace(/[\d\p{P}]/gu, "").replace(/\s+/g, " ").trim();
+  // A title of only digits and punctuation normalizes to "": the case, digits kept, keeps such findings apart.
+  const kase = String(f.case ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  const title = norm(f.title) || (kase ? `\u0001${kase}` : `\u0002${f.title}`);
   return createHash("sha1").update([f.lens, f.file, f.symbol ?? "", title].join("\u0000")).digest("hex");
 }
 
