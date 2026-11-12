@@ -299,7 +299,9 @@ No style taste, no "consider".
 
 Each lens is one prompt file in `shared/pr-review/lenses/`. Each file is a
 compact rewrite of the rules of its sources, not a copy of their prose. A
-user can add a lens in `~/.config/pr-review/lenses/<name>.md`.
+user can add a lens in `~/.config/pr-review/lenses/<name>.md` (name: `a-z`,
+`0-9`, `-`, not a built-in name; 40 lines and 4000 characters at most). Only the
+user folder adds lenses: a repo config cannot add prompt text.
 
 | Lens | What it looks for | Sources |
 |---|---|---|

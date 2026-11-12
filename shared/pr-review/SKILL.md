@@ -20,7 +20,8 @@ sh "$SKILL_DIR/scripts/pr-review" review <n> [--repo owner/repo] \
 - `<n>` is the PR number or URL. Without `--repo`, the engine uses the repo
   of the current directory.
 - `--effort auto` picks the level from the changed paths.
-- `--lens a,b` runs only these lenses. The review then never approves.
+- `--lens a,b` runs only these lenses. The review then never approves. Your
+  own lenses are files in `~/.config/pr-review/lenses/<name>.md`.
 - `--max-diff-lines N` reviews a diff above `review.max_diff_lines` (exit
   `1` says when a diff is too large). A diff above `review.chunk_lines`
   splits into parts by folder, and round 1 reviews each part.
