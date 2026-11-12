@@ -21,8 +21,10 @@ P="sh $SKILL_DIR/scripts/pr-open"
 ## Steps
 
 1. **Base.** The PR goes to the default branch. For a stack, the base is the
-   parent branch, and the parent must have an open PR. When the branch does
-   not start from the default branch and the user did not say, ask.
+   parent branch. A base with an open PR of its own is a stack; any other
+   base (for example `develop`) is a plain base. Open the parent's PR first.
+   When the branch does not start from the default branch and the user did
+   not say, ask.
 2. **Format and lint.** Run `$P detect`. It finds the commands in env
    (`PR_OPEN_FORMAT`, `PR_OPEN_LINT`, `PR_OPEN_TEST`), `.pr-open.json`,
    `package.json`, `Makefile`, `justfile`, `Cargo.toml` or `go.mod`. A `null`

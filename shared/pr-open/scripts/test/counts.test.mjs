@@ -36,6 +36,12 @@ test("go test -v counts the result lines", () => {
   assert.deepEqual(parseCounts(out), c(2, 1, 1));
 });
 
+test("several runs (a monorepo) are summed", () => {
+  assert.deepEqual(parseCounts("Tests:       1 passed, 1 total\nTests:       1 failed, 2 passed, 3 total\n"), c(3, 1, 0));
+  assert.deepEqual(parseCounts("ℹ pass 2\nℹ fail 0\nℹ skipped 1\nℹ pass 3\nℹ fail 1\n"), c(5, 1, 1));
+  assert.deepEqual(parseCounts("==== 2 passed in 0.1s ====\n==== 3 passed, 1 skipped in 0.2s ====\n"), c(5, 0, 1));
+});
+
 test("no summary: null", () => {
   assert.equal(parseCounts("no summary here\n"), null);
 });

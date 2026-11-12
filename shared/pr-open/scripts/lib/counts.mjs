@@ -10,18 +10,20 @@ export class Blocked extends Error {
 
 const n = (s, word) => Number(new RegExp(`(\\d+) ${word}`).exec(s)?.[1] ?? 0);
 const words = (s) => ({ passed: n(s, "passed"), failed: n(s, "failed") + n(s, "errors?"), skipped: n(s, "skipped") });
-const last = (re, s) => [...s.matchAll(re)].at(-1)?.[1];
+const all = (re, s) => [...s.matchAll(re)].map((m) => m[1]);
+const zero = { passed: 0, failed: 0, skipped: 0 };
+const add = (a, b) => ({ passed: a.passed + b.passed, failed: a.failed + b.failed, skipped: a.skipped + b.skipped });
+// A monorepo run prints one summary per package: sum them.
+const sum = (lines) => (lines.length ? lines.map(words).reduce(add, zero) : null);
+const sumOf = (re, s) => all(re, s).reduce((a, x) => a + Number(x), 0);
 
 /** { passed, failed, skipped } from a test run's output, or null when no known summary is in it. */
 export function parseCounts(out) {
-  const pass = last(/^[ℹ#] pass (\d+)$/gm, out);
-  if (pass !== undefined) return { passed: Number(pass), failed: Number(last(/^[ℹ#] fail (\d+)$/gm, out) ?? 0), skipped: Number(last(/^[ℹ#] skipped (\d+)$/gm, out) ?? 0) };
-  const jest = last(/^Tests:\s+(.*\d+ total)\s*$/gm, out);
-  if (jest) return words(jest);
-  const vitest = last(/^\s*Tests\s+(.*\d+ \w+.*)\(\d+\)\s*$/gm, out);
-  if (vitest) return words(vitest);
-  const pytest = last(/^=+ (.*\d+ (?:passed|failed|skipped|errors?).*) in [\d.]+s.*=+\s*$/gm, out);
-  if (pytest) return words(pytest);
+  if (/^[ℹ#] pass \d+$/m.test(out)) return { passed: sumOf(/^[ℹ#] pass (\d+)$/gm, out), failed: sumOf(/^[ℹ#] fail (\d+)$/gm, out), skipped: sumOf(/^[ℹ#] skipped (\d+)$/gm, out) };
+  const found = sum(all(/^Tests:\s+(.*\d+ total)\s*$/gm, out))
+    ?? sum(all(/^\s*Tests\s+(.*\d+ \w+.*)\(\d+\)\s*$/gm, out))
+    ?? sum(all(/^=+ (.*\d+ (?:passed|failed|skipped|errors?).*) in [\d.]+s.*=+\s*$/gm, out));
+  if (found) return found;
   const cargo = [...out.matchAll(/test result: \w+\. (\d+) passed; (\d+) failed; (\d+) ignored/g)];
   if (cargo.length) return cargo.reduce((a, m) => ({ passed: a.passed + +m[1], failed: a.failed + +m[2], skipped: a.skipped + +m[3] }), { passed: 0, failed: 0, skipped: 0 });
   const go = [...out.matchAll(/^\s*--- (PASS|FAIL|SKIP):/gm)].map((m) => m[1]);

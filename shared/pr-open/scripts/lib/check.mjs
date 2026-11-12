@@ -1,9 +1,10 @@
 // Checks before the push: every commit signed, no AI or tool mention in commits, title or body.
 import { execFileSync } from "node:child_process";
 
-const B = "(?<![A-Za-z0-9])", E = "(?![A-Za-z0-9])";
+// A word inside a path or an identifier (.claude/, claude_code, llm_client) is not a mention.
+const B = "(?<![A-Za-z0-9_./-])", E = "(?![A-Za-z0-9_]|[./-][A-Za-z0-9])";
 // The email comes first, so a trailer email is one hit, not "anthropic" as well.
-const AI = new RegExp(`noreply@anthropic\\.com|🤖|${B}(?:claude|anthropic|chatgpt|openai|gpt-\\d+(?:\\.\\d+)?o?|copilot|gemini|codex|cursor ai|llm|ai[- ]generated|generated (?:with|by) ai)${E}`, "gi");
+const AI = new RegExp(`noreply@anthropic\\.com|🤖|${B}(?:claude|anthropic|chatgpt|openai|gpt-?\\d+(?:\\.\\d+)?o?|(?:sonnet|opus|haiku) \\d+(?:\\.\\d+)?|copilot|gemini|codex|cursor ai|llms?|ai[- ]generated|generated (?:with|by) ai)${E}`, "gi");
 
 /** AI or tool words in text, lower case, each once. Words in `allow` are not hits. */
 export function aiMentions(text, allow = []) {

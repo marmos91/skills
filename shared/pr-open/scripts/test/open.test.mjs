@@ -74,12 +74,47 @@ test("base = default branch: no marker, parent null", async () => {
   assert.doesNotMatch(body, /Stacked on/);
 });
 
-test("parent without an open PR: Usage error, no push", async () => {
+test("a base with no open PR is a plain base: no marker, no stack line", async () => {
   const { dir, bodyFile } = await stack();
   const gh = ghStub(routes({ "pr list --head feat/a": { stdout: [] } }));
-  await assert.rejects(openPr(dir, { title: "feat: b", bodyFile, base: "feat/a" }), (e) => e instanceof Usage && /open a PR for feat\/a first/.test(e.message));
+  const r = await openPr(dir, { title: "feat: b", bodyFile, base: "feat/a" });
+  assert.equal(r.base, "feat/a"); assert.equal(r.parent, null);
+  const body = bodyOf(created(gh));
+  assert.equal(parentOf(body), null);
+  assert.doesNotMatch(body, /Stacked on/);
+});
+
+test("a secret added while resolving a merge: blocked", async () => {
+  const { dir, bodyFile } = await stack({ test: false });
+  git(dir, "checkout", "-q", "-b", "side");
+  commit(dir, "s.txt", "s", "feat: side");
+  git(dir, "checkout", "-q", "feat/b");
+  commit(dir, "t.txt", "t", "feat: t");
+  git(dir, "merge", "-q", "--no-ff", "--no-commit", "side");
+  writeFileSync(join(dir, "evil.txt"), `token=${"ghp_" + "A1b2C3d4".repeat(5)}\n`);
+  git(dir, "add", "evil.txt");
+  git(dir, "commit", "-q", "-S", "-m", "Merge side");
+  await runTests(dir, 'echo "ℹ pass 1"', { quiet: true });
+  const gh = ghStub(routes());
+  await assert.rejects(openPr(dir, { title: "feat: b", bodyFile, base: "feat/a" }), (e) => e instanceof Blocked && e.detail.hits.length > 0);
   assert.equal(created(gh), undefined);
-  assert.equal(remoteHas(dir, "feat/b"), false);
+});
+
+test("a collaborator pushed to the branch: the push fails, their commit stays", async () => {
+  const { dir, bodyFile } = await stack({ test: false });
+  git(dir, "push", "-q", "-u", "origin", "feat/b");
+  const other = join(dir, "..", `clone-${Date.now()}`);
+  git(dir, "clone", "-q", "-b", "feat/b", git(dir, "remote", "get-url", "origin"), other);
+  git(other, "config", "user.name", "C"); git(other, "config", "user.email", "c@example.com");
+  writeFileSync(join(other, "c.txt"), "c"); git(other, "add", "c.txt"); git(other, "commit", "-q", "--no-gpg-sign", "-m", "feat: c");
+  git(other, "push", "-q", "origin", "feat/b");
+  const theirs = git(other, "rev-parse", "HEAD");
+  git(dir, "fetch", "-q", "origin");
+  git(dir, "commit", "-q", "-S", "--amend", "-m", "feat: b, reworded");
+  await runTests(dir, 'echo "ℹ pass 1"', { quiet: true });
+  ghStub(routes());
+  await assert.rejects(openPr(dir, { title: "feat: b", bodyFile, base: "feat/a" }));
+  assert.equal(git(dir, "ls-remote", "origin", "feat/b").split("\t")[0], theirs);
 });
 
 test("no record for HEAD: blocked; a record for an older sha does not count", async () => {

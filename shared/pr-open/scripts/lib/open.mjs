@@ -51,9 +51,9 @@ export async function openPr(dir, { title, bodyFile, base, draft = false }) {
   const def = JSON.parse(gh(dir, ["repo", "view", "--json", "defaultBranchRef"])).defaultBranchRef.name;
   base ??= def;
   if (branch === "HEAD" || branch === base) throw new Usage(`check out the branch to open (now on ${branch})`);
-  const parent = base === def ? null : base;
-  const parentPr = parent ? openPrOf(dir, parent) : null;
-  if (parent && !parentPr) throw new Usage(`open a PR for ${parent} first`);
+  // A stack is a base with an open PR of its own; any other base (develop, release/x) is a plain base.
+  const parentPr = base === def ? null : openPrOf(dir, base);
+  const parent = parentPr ? base : null;
 
   const existing = openPrOf(dir, branch);
   if (existing) return { url: existing.url, number: existing.number, base, parent, warnings: ["a PR is already open"] };
@@ -70,7 +70,7 @@ export async function openPr(dir, { title, bodyFile, base, draft = false }) {
 
   // Every commit's patch and message is pushed, not only the net diff; the body is scanned as it will be posted.
   const final = buildBody({ body, record, parent, parentPr: parentPr?.number });
-  const hits = secretHits(`${git(dir, "log", "-p", "--format=%B", `origin/${base}..HEAD`)}\n${title}\n${final}`);
+  const hits = secretHits(`${git(dir, "log", "-p", "--cc", "--no-ext-diff", "--no-textconv", "--format=%B", `origin/${base}..HEAD`)}\n${title}\n${final}`);
   if (hits.length) throw new Blocked("the secret scan found a hit", { hits });
 
   if (!/#\d+/.test(body)) warnings.push("no linked issue");
@@ -79,7 +79,7 @@ export async function openPr(dir, { title, bodyFile, base, draft = false }) {
   writeFileSync(file, final);
 
   // No PR is open (checked above), so a rewrite before the first PR may replace the pushed branch.
-  git(dir, "push", "-q", "-u", "--force-with-lease", "origin", "HEAD");
+  git(dir, "push", "-q", "-u", "--force-with-lease", "--force-if-includes", "origin", "HEAD");
   const url = gh(dir, ["pr", "create", "--base", base, "--head", branch, "--title", title, "--body-file", file, ...(draft ? ["--draft"] : [])]).trim().split("\n").at(-1);
   const number = Number(/\/pull\/(\d+)/.exec(url)?.[1]);
   return { url, number, base, parent, warnings };

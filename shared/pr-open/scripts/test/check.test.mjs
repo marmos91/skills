@@ -20,6 +20,14 @@ test("the allow list lets a word through", () => {
   assert.deepEqual(aiMentions("feat: answer Copilot reviews"), ["copilot"]);
 });
 
+test("paths and identifiers are not hits", () => {
+  assert.deepEqual(aiMentions("edit .claude/settings.json, docs/claude.md and claude_code; llm_client"), []);
+});
+
+test("plural and model forms are hits", () => {
+  assert.deepEqual(aiMentions("LLMs, GPT4 and Sonnet 4.5 wrote this; Claude Code too"), ["llms", "gpt4", "sonnet 4.5", "claude"]);
+});
+
 test("plain words are not hits", () => {
   assert.deepEqual(aiMentions("fix: cursor position in the editor; recall the llama farm; email"), []);
 });
