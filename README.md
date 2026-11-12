@@ -71,3 +71,7 @@ conventional commit for a user to read, with the skill as the scope:
 `fix(pr-review): keep the lock when a pid is reused`. `feat` and `fix` show
 in the changelog; `chore`, `test`, `ci` and `refactor` do not. Mark a breaking
 change with `!` (`feat(jev)!: …`). All skills share one version.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

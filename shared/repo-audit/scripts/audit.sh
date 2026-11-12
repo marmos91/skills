@@ -568,12 +568,12 @@ write_resume_doc() {
         done
         if [ -s "$STATE/areas.json" ] && [ -d "$STATE/findings" ]; then
             _pairs=$(wc -l <"$STATE/pairs.txt" 2>/dev/null | tr -d ' ')
-            _done=$(ls "$STATE/findings" | grep -c json)
+            _done=$(nfiles "$STATE/findings" json)
             _pending=$((_pairs - _done))
             [ "$_pairs" -gt 0 ] && echo "| find | findings/ ($_done/$_pairs lens×area reports) | $_done done, $_pending pending (re-run: audit.sh find) |"
         fi
         if [ -d "$STATE/verified" ] && [ -s "$STATE/findings.fp" ]; then
-            echo "| verify | verified/ ($(ls "$STATE/verified" | grep -c json) verdicts) | fingerprint $(cat "$STATE/findings.fp") |"
+            echo "| verify | verified/ ($(nfiles "$STATE/verified" json) verdicts) | fingerprint $(cat "$STATE/findings.fp") |"
         fi
         for d in "$STATE"/epic-pass/*.json; do [ -e "$d" ] || continue; echo "| roadmap | epic-pass/$(basename "$d") | done |"; done
         echo ""
@@ -583,6 +583,9 @@ write_resume_doc() {
         echo ""
     } >"$STATE/RESUME.md" 2>/dev/null || true
 }
+
+# nfiles <dir> <text>: how many names in dir contain text (0 when dir is missing or empty)
+nfiles() { _nf=0; for _f in "$1"/*"$2"*; do [ -e "$_f" ] && _nf=$((_nf + 1)); done; echo "$_nf"; }
 
 step_status() {
     echo "== repo-audit state =="
@@ -595,9 +598,9 @@ step_status() {
     for f in areas.json findings.fp findings.json findings-refuted.json epics.json research.md report.md issues.tsv; do
         if [ -s "$STATE/$f" ]; then echo "have:   $f"; else echo "MISSING: $f"; fi
     done
-    d="$STATE/findings"; [ -d "$d" ] && echo "findings/: $(ls "$d" | grep -c json) files"
-    d="$STATE/verified"; [ -d "$d" ] && echo "verified/: $(ls "$d" | grep -c json) files"
-    d="$STATE/issues";  [ -d "$d" ] && echo "issues/:   $(ls "$d" 2>/dev/null | grep -c md) bodies"
+    d="$STATE/findings"; [ -d "$d" ] && echo "findings/: $(nfiles "$d" json) files"
+    d="$STATE/verified"; [ -d "$d" ] && echo "verified/: $(nfiles "$d" json) files"
+    d="$STATE/issues";  [ -d "$d" ] && echo "issues/:   $(nfiles "$d" md) bodies"
 }
 
 step_clean() {

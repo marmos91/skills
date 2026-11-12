@@ -9,8 +9,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
       - run: npm test
@@ -20,3 +20,16 @@ jobs:
           for f in shared/*/SKILL.md pi/*/SKILL.md; do
             grep -q 'x-release-please-version' "$f" || { echo "$f: no metadata.version"; exit 1; }
           done
+      # shellcheck is on the ubuntu runners; notes (style) do not fail the build
+      - run: git ls-files '*.sh' shared/pr-review/scripts/pr-review shared/pr-review-loop/scripts/pr-review-loop install.sh | xargs shellcheck -S warning
+      # install the real tarball on a clean HOME, then run the CLIs it links
+      - name: smoke test of the tarball
+        run: |
+          npm pack --ignore-scripts
+          export HOME="$RUNNER_TEMP/home" && mkdir -p "$HOME"
+          npx --yes "./$(ls marmos91-skills-*.tgz)" install --claude
+          "$HOME/.local/bin/pr-review" --help
+          "$HOME/.local/bin/pr-review-loop" --help
+          "$HOME/.local/bin/jev" --help
+          "$HOME/.local/bin/repo-audit" status
+          npx --yes "./$(ls marmos91-skills-*.tgz)" list
