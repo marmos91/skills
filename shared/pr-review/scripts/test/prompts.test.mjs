@@ -200,13 +200,11 @@ test("prompt cache: one nonce per frame; two round-1 prompts of a run share the 
   assert.ok(mergePrompt(f, {}).startsWith(composePrompt(f, [], "").slice(0, mergePrompt(f, {}).indexOf("## Task"))), "merge and compose share the context");
 });
 
-test("merge caps evidence but keeps fix whole; compose caps the guidance", () => {
+test("merge caps evidence but keeps fix whole", () => {
   const long = "x".repeat(5000);
   const p = mergePrompt(frame(), { s1: [{ lens: "correctness", title: "T", evidence: long, fix: long, case: long }] });
   assert.equal((p.match(/x{1500} \[cut\]/g) ?? []).length, 1, "only evidence is cut");
   assert.equal(p.split(long).length - 1, 2, "case and fix are kept whole: fix is posted");
-  const c = composePrompt(frame(), [], "g".repeat(9000));
-  assert.ok(c.includes("g".repeat(8000) + "\n[cut]") && !c.includes("g".repeat(8001)));
 });
 
 test("compose: the author's questions and retracted findings are data blocks; no block when there are none", () => {

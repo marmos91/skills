@@ -198,8 +198,8 @@ The judge writes the review from the agreed findings, with the rules in
 snippet or a GitHub `suggestion` block, no filler, praise only when earned
 and specific, no dashes).
 Compose gets only the repo's review guidance: `REVIEW.md` and the files in
-`review.guidance`, up to 8000 characters. The seats read the whole guidance
-folder.
+`review.guidance`. `REVIEW.md` is always whole. The other files are cut at
+8000 characters. The seats read the whole guidance folder.
 
 - Findings stay inline. One finding per inline comment: severity label and a
   title that states the conclusion with a verb, the case in one line with the

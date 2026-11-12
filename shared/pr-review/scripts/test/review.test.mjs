@@ -6,7 +6,7 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import { review } from "../lib/review.mjs";
+import { composeGuidance, review } from "../lib/review.mjs";
 import { ChildFailed } from "../lib/child.mjs";
 import { decide as realDecide } from "../lib/decider.mjs";
 import { answer, openQuestions } from "../lib/questions.mjs";
@@ -1517,4 +1517,15 @@ test("an empty answer keeps the next answers on their own question numbers", asy
   const fx = fixture(); routes(fx, { body: "Is 2 right?\nWhy not 3?" });
   await go(fx, happy({ compose: { verdict: "The off by one blocks.", answers: ["", "3 overflows the buffer."], body: "", comments: [{ id: "c1", body: "**must:** off by one" }] } }));
   assert.match(posts(fx)[0].body, /Your questions:\n2\. 3 overflows the buffer\.\n/);
+});
+
+test("compose guidance: REVIEW.md stays whole; only the review.guidance files are capped", () => {
+  const ctx = mkdtempSync(join(tmpdir(), "prr-guide-"));
+  mkdirSync(join(ctx, "guidance", "docs"), { recursive: true });
+  writeFileSync(join(ctx, "guidance", "REVIEW.md"), "R".repeat(9000));
+  writeFileSync(join(ctx, "guidance", "docs", "style.md"), "S".repeat(9000));
+  writeFileSync(join(ctx, "guidance", "CONTRIBUTING.md"), "C");
+  const g = composeGuidance(ctx, { review: { guidance: ["docs/style.md", "REVIEW.md"] } });
+  assert.ok(g.startsWith("R".repeat(9000) + "\n\n"), "REVIEW.md first and whole");
+  assert.ok(g.endsWith("S".repeat(8000) + "\n[cut]") && !g.includes("C"));
 });

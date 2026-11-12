@@ -202,9 +202,8 @@ export function mergePrompt(frame, findingsBySeat, earlierAgreed = [], maxTurns)
   ].join("\n");
 }
 
-// guidance: the repo's review guidance only (review.mjs); the seats read the whole guidance tree.
-const GUIDANCE_CHARS = 8000;
-const guide = (g) => { const t = g?.trim(); return !t ? "None." : t.length > GUIDANCE_CHARS ? `${t.slice(0, GUIDANCE_CHARS)}\n[cut]` : t; };
+// guidance: the repo's review guidance only, capped in review.mjs; the seats read the whole guidance tree.
+const guide = (g) => g?.trim() || "None.";
 
 // Open points, dropped seats, the tracking line, the pass line and the thread index layout are engine text
 // (review.mjs bodyOf), never the judge's. retracted: earlier threads of ours that the seats now judge wrong;

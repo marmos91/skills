@@ -153,6 +153,15 @@ function hunk(f, c) {
   try { return readFileSync(file, "utf8").split("\n").slice(Math.max(0, c.line - 6), c.line + 5).join("\n"); } catch { return ""; }
 }
 
+// Compose writes text: it gets the repo's review guidance, not the whole tree (CONTRIBUTING.md, CLAUDE.md, ...).
+// REVIEW.md stays whole; only the review.guidance files after it are capped.
+const GUIDANCE_CHARS = 8000;
+export function composeGuidance(ctxDir, config) {
+  const dir = join(ctxDir, "guidance");
+  const extra = readTree(dir, (p) => p !== "REVIEW.md" && config.review.guidance.includes(p)).trim();
+  return [readTree(dir, (p) => p === "REVIEW.md").trim(), extra.length > GUIDANCE_CHARS ? `${extra.slice(0, GUIDANCE_CHARS)}\n[cut]` : extra].filter(Boolean).join("\n\n");
+}
+
 // Spec 7.4: an answer given at an older sha holds only while the finding's line is the same code at the same place.
 // A failed diff (the old sha is gone) counts as changed.
 export function codeMoved(repoDir, q, head) {
@@ -437,8 +446,7 @@ async function once(o, restart) {
   const blocking = earlierAll.filter((e) => e.severity === "must" && !fixed.includes(e) && !retracted.includes(e));
   const composed = await child(ctx, "compose", "compose", {
     seat: config.judge, schema: "compose",
-    // Compose writes text: it gets the repo's review guidance, not the whole tree (CONTRIBUTING.md, CLAUDE.md, ...).
-    prompt: () => composePrompt(f, [...posted.map((c) => ({ ...view(c), ...(offDiff(c) && { outside: true }) })), ...hygItems.map(view)], readTree(join(f.ctxDir, "guidance"), (p) => p === "REVIEW.md" || config.review.guidance.includes(p)),
+    prompt: () => composePrompt(f, [...posted.map((c) => ({ ...view(c), ...(offDiff(c) && { outside: true }) })), ...hygItems.map(view)], composeGuidance(f.ctxDir, config),
       { retracted: retracted.map((e) => ({ thread_id: e.threadId, file: e.path, line: e.line ?? e.originalLine, finding: e.body, evidence: earlier.get(e.threadId).why })),
         blocking: blocking.map((e) => ({ thread_id: e.threadId, file: e.path, line: e.line ?? e.originalLine, finding: e.body })) }),
   });
