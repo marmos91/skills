@@ -52,8 +52,8 @@ test("pause and tick resolve the same repo in a fork clone (origin, not the gh d
 
 test("tick with a positional repo sees the pause of that repo", () => {
   const fx = forkClone();
-  assert.equal(loop(fx, "pause", "o/r").status, 0);
-  const t = loop(fx, "o/r");
+  assert.equal(loop(fx, "pause", "up/r").status, 0);
+  const t = loop(fx, "up/r");
   assert.equal(t.status, 0, t.stderr);
   assert.match(t.stderr, /paused/);
 });

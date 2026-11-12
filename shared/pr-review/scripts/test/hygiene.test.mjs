@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, renameSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -149,13 +149,10 @@ test("a failed child warns and keeps the code findings", async () => {
 });
 
 test("a setup error in the child block is a warning, not a throw", async () => {
-  const lens = new URL("../../lenses/hygiene.md", import.meta.url).pathname;
-  renameSync(lens, lens + ".bak");
-  try {
-    const r = await hygiene(frame, cfg, "medium");
-    assert.deepEqual(r.warnings, ["hygiene child failed"]);
-    assert.ok(r.findings.length > 0);
-  } finally { renameSync(lens + ".bak", lens); }
+  // A relative worktree makes the prompt builder throw before any child runs.
+  const r = await hygiene({ ...frame, worktree: "relative/wt" }, cfg, "medium");
+  assert.deepEqual(r.warnings, ["hygiene child failed"]);
+  assert.ok(r.findings.length > 0);
 });
 
 test("hygiene.enabled false -> no findings and no child", async () => {

@@ -70,7 +70,11 @@ export function salvageJson(text, ok) {
       else if (c === "{" || c === "[") depth++;
       else if (c === "}" || c === "]") {
         if (--depth === 0) {
-          try { found.push({ v: JSON.parse(s.slice(i, j + 1)), size: j + 1 - i }); i = j; } catch {}
+          const raw = s.slice(i, j + 1);
+          // Models write \` and the like; drop the backslash of an invalid escape, keep the valid ones.
+          for (const t of [raw, raw.replace(/\\(["\\/bfnrt]|u[0-9a-fA-F]{4})|\\/g, (m, k) => k ? m : "")]) {
+            try { found.push({ v: JSON.parse(t), size: j + 1 - i }); i = j; break; } catch {}
+          }
           break;
         }
       }

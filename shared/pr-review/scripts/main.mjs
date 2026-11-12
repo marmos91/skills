@@ -28,6 +28,9 @@ const USAGE = `usage: pr-review review [<n|url>] [--repo owner/repo] [--dry-run]
 
 const SKILL_DIR = realpathSync(join(dirname(fileURLToPath(import.meta.url)), ".."));
 
+// GitHub names fold case, like stateRoot does.
+const isClone = (repo) => remoteRepos().some((r) => r.toLowerCase() === repo.toLowerCase());
+
 // --repo or the positional, else the GitHub remote of this folder (origin first). pr-review-loop uses the same rule.
 function repoOf(flag) {
   const repo = flag ?? remoteRepos()[0];
@@ -54,7 +57,7 @@ function target(arg, repoFlag) {
   if (!repo) throw new Usage("cannot tell the repo: pass a PR URL or --repo owner/repo");
   if (!Number.isInteger(n) || n <= 0) throw new Usage(`not a PR number or URL: ${arg}`);
   // The worktree and the base-branch config come from this folder, so it must be a clone of the repo.
-  if (!remoteRepos().includes(repo)) throw new Usage(`this folder is not a clone of ${repo}; cd into one`);
+  if (!isClone(repo)) throw new Usage(`this folder is not a clone of ${repo}; cd into one`);
   return { repo, n };
 }
 
@@ -187,7 +190,9 @@ export async function main(argv, deps = {}) {
   if (cmd === "tick") {
     if (rest.length > 1) throw new Usage(USAGE);
     const { tick } = await import("./lib/tick.mjs");
-    const r = await tick({ repo: repoOf(rest[0] ?? v.repo) });
+    const repo = repoOf(rest[0] ?? v.repo);
+    if (!isClone(repo)) throw new Usage(`this folder is not a clone of ${repo}; cd into one: a tick fetches PR heads here`);
+    const r = await tick({ repo });
     return r?.exit ?? 0;
   }
   if (cmd !== "review" || rest.length > 1) throw new Usage(USAGE);

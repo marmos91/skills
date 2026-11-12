@@ -162,6 +162,13 @@ test("invalid output is retried, then ChildFailed", async () => {
   await assert.rejects(runChild(base(claudeSeat, { schema: "reply" })), /invalid reply/);
 });
 
+test("salvageJson repairs an invalid escape such as \\` (a seat output was thrown away for it)", () => {
+  assert.deepEqual(salvageJson('{"case": "run \\`git fetch\\` in a\\\\b, then \\"x\\"\\n"}'), { case: 'run `git fetch` in a\\b, then "x"\n' });
+  assert.deepEqual(salvageJson('{"findings": [{"t": "\\`x\\`"}]}', (v) => Array.isArray(v.findings)), { findings: [{ t: "`x`" }] });
+  // \u without 4 hex digits is invalid too (a Windows path); a real \u00e9 stays.
+  assert.deepEqual(salvageJson('{"case": "edit C:\\users\\Temp\\x.cfg, \\u00e9"}'), { case: "edit C:usersTempx.cfg, \u00e9" });
+});
+
 test("salvageJson skips fences and prose", () => {
   assert.deepEqual(salvageJson('Sure!\n```json\n{"a":[1,{"b":"}"}]}\n```\nthanks'), { a: [1, { b: "}" }] });
   assert.deepEqual(salvageJson("x [1,2] y"), [1, 2]);

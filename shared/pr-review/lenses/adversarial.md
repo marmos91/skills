@@ -21,9 +21,9 @@ When the approach itself is weak, say so once. Name the simpler approach and
 the case that the current approach gets wrong.
 
 <!-- trusted -->
-Prove each finding. Run the repro in the worktree: a failing test, a short
-script, or one command. Use a timeout of 60 seconds or less. Do not change
-tracked files. Put the command and its real output in `evidence`.
+Prove each finding. Run the repro in the worktree once: one test (never the
+whole suite), a short script, or one command, in 60 seconds or less. Do not
+change tracked files. Put the command and its real output in `evidence`.
 <!-- /trusted -->
 <!-- untrusted -->
 Do not run anything. The author is not trusted, so you have no shell. Trace

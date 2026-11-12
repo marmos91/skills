@@ -385,7 +385,11 @@ PR head.
 - Claude Code: `/loop 30m /pr-review-loop [owner/repo]`.
 - pi or a shell: `pr-review-loop [owner/repo]` is one tick. Repeat it with
   cron, launchd, or `while :; do pr-review-loop; sleep 1800; done`. The loop
-  has no scheduler of its own.
+  has no scheduler of its own. A tick must run in a clone of the repo, because
+  it fetches the PR heads there; outside one it stops with exit 1. cron and
+  launchd give a bare PATH and none of your exports: the job sets PATH (node
+  and `~/.local/bin`) and sources a mode-600 file with `GH_TOKEN` and
+  `CLAUDE_CODE_OAUTH_TOKEN`. The skill file has the line.
 
 ### One tick
 

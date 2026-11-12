@@ -21,5 +21,9 @@ if [ "$tools" = shell ]; then
   sandbox=$(node -e 'console.log(JSON.stringify({ sandbox: { enabled: true, autoAllowBashIfSandboxed: true, allowUnsandboxedCommands: false,
     filesystem: { denyWrite: process.argv.slice(1).filter(Boolean) } } }))' "${SEAT_WORKTREE:-}" "${SEAT_CTX:-}" "$PWD")
   set -- "$@" --allowedTools Bash --settings "$sandbox"
+  # The lens asks for 60 s; seats ignored it (a 420 s test run, twice). This is the hard cap.
+  export BASH_DEFAULT_TIMEOUT_MS=60000 BASH_MAX_TIMEOUT_MS=120000
 fi
+# A command that times out goes to the background, and claude -p waits for it before it exits (9.5 min seen).
+export CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1
 claude -p "$@" --model "$model" --effort "$thinking" --tools "$list" <"$prompt" >"$out"
