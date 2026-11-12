@@ -1,0 +1,124 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 830" width="820" height="830" role="img" aria-labelledby="t">
+  <title id="t">repo-audit-fix pipeline for one epic, with the jev coverage check and the revise loops</title>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#57606a"/>
+    </marker>
+    <marker id="arr-loop" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#bc4c00"/>
+    </marker>
+    <marker id="arr-jev" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8250df"/>
+    </marker>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 12px; fill: #1f2328; }
+      .h { font-size: 14px; font-weight: 600; }
+      .c { text-anchor: middle; }
+      .box { fill: #f6f8fa; stroke: #57606a; stroke-width: 1.5; }
+      .doc { fill: #ffffff; stroke: #57606a; stroke-width: 1.5; stroke-dasharray: 4 3; }
+      .jev { fill: #f3eefe; stroke: #8250df; stroke-width: 2; }
+      .loop { fill: #fff8f0; stroke: #bc4c00; stroke-width: 1.5; }
+      .park { fill: #fff5f5; stroke: #cf222e; stroke-width: 1.5; }
+      .edge { stroke: #57606a; stroke-width: 1.5; fill: none; }
+      .ledge { stroke: #bc4c00; stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+      .jedge { stroke: #8250df; stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+    </style>
+  </defs>
+  <rect width="820" height="830" rx="8" fill="#ffffff"/>
+
+  <!-- legend -->
+  <rect x="20" y="14" width="16" height="12" rx="2" class="box"/>
+  <text x="42" y="24">stage (headless pi -p child)</text>
+  <rect x="220" y="14" width="16" height="12" rx="2" class="jev"/>
+  <text x="242" y="24">jev step</text>
+  <line x1="310" y1="20" x2="348" y2="20" class="ledge"/>
+  <text x="354" y="24">revise loop</text>
+  <rect x="440" y="14" width="16" height="12" rx="2" class="doc"/>
+  <text x="462" y="24">input file</text>
+
+  <!-- input -->
+  <rect x="180" y="50" width="320" height="50" rx="6" class="doc"/>
+  <text x="340" y="71" class="h c">epics.json + findings.json</text>
+  <text x="340" y="89" class="c">from repo-audit; one pipeline per epic</text>
+  <text x="530" y="71">Epics run in waves (depends_on).</text>
+  <text x="530" y="87">CONCURRENCY lanes, one worktree each.</text>
+
+  <!-- research -->
+  <rect x="180" y="130" width="320" height="64" rx="6" class="box"/>
+  <text x="340" y="153" class="h c">1. Research (SLIM_MODEL, read-only)</text>
+  <text x="340" y="173" class="c">skipped when the epic has 3 findings or fewer</text>
+
+  <!-- plan -->
+  <rect x="180" y="224" width="320" height="64" rx="6" class="box"/>
+  <text x="340" y="247" class="h c">2. Plan (PLAN_MODEL, read-only)</text>
+  <text x="340" y="267" class="c">architect writes plan.md</text>
+
+  <!-- plan review -->
+  <rect x="180" y="318" width="320" height="80" rx="6" class="box"/>
+  <text x="340" y="341" class="h c">3. Plan review (REVIEW_MODEL)</text>
+  <text x="340" y="361" class="c">JSON verdict: approved | revise | revise_minor</text>
+  <text x="340" y="378" class="c">invalid JSON: one retry, then FATAL</text>
+
+  <!-- jev -->
+  <rect x="180" y="428" width="320" height="80" rx="6" class="jev"/>
+  <text x="340" y="451" class="h c">3b. jev coverage check</text>
+  <text x="340" y="471" class="c">"Does the plan fix or skip finding X?"</text>
+  <text x="340" y="488" class="c">once per finding; never on the last plan round</text>
+
+  <!-- implement -->
+  <rect x="180" y="540" width="320" height="64" rx="6" class="box"/>
+  <text x="340" y="563" class="h c">4. Implement (IMPL_MODEL, full tools)</text>
+  <text x="340" y="583" class="c">orchestrator commits; empty diff = FATAL</text>
+
+  <!-- gate -->
+  <rect x="180" y="634" width="320" height="80" rx="6" class="box"/>
+  <text x="340" y="657" class="h c">5. Three-lens gate (LENS)</text>
+  <text x="340" y="677" class="c">adversarial, correctness, simplification</text>
+  <text x="340" y="694" class="c">pass = zero BLOCKING findings</text>
+
+  <!-- pr -->
+  <rect x="180" y="744" width="320" height="60" rx="6" class="box"/>
+  <text x="340" y="767" class="h c">6. Pull request (gh pr create)</text>
+  <text x="340" y="786" class="c">never merged; NIT findings go in the PR body</text>
+
+  <!-- main arrows -->
+  <line x1="340" y1="100" x2="340" y2="128" class="edge" marker-end="url(#arr)"/>
+  <line x1="340" y1="194" x2="340" y2="222" class="edge" marker-end="url(#arr)"/>
+  <line x1="340" y1="288" x2="340" y2="316" class="edge" marker-end="url(#arr)"/>
+  <line x1="340" y1="398" x2="340" y2="426" class="edge" marker-end="url(#arr)"/>
+  <text x="348" y="417">approved or revise_minor</text>
+  <line x1="340" y1="508" x2="340" y2="538" class="edge" marker-end="url(#arr)"/>
+  <text x="348" y="528">jev yes, unsure, or off</text>
+  <line x1="340" y1="604" x2="340" y2="632" class="edge" marker-end="url(#arr)"/>
+  <line x1="340" y1="714" x2="340" y2="742" class="edge" marker-end="url(#arr)"/>
+  <text x="348" y="733">pass</text>
+
+  <!-- plan revise loop -->
+  <rect x="580" y="350" width="220" height="104" rx="6" class="loop"/>
+  <text x="690" y="373" class="h c">Revise plan (PLAN_MODEL)</text>
+  <text x="690" y="393" class="c">PLAN_ROUNDS reviews max (5)</text>
+  <text x="690" y="410" class="c">then FATAL: the epic</text>
+  <text x="690" y="426" class="c">retries on the next run</text>
+  <line x1="500" y1="380" x2="578" y2="380" class="ledge" marker-end="url(#arr-loop)"/>
+  <text x="539" y="373" class="c">revise</text>
+  <line x1="500" y1="440" x2="578" y2="440" class="jedge" marker-end="url(#arr-jev)"/>
+  <text x="539" y="457" class="c" style="fill:#8250df">jev no</text>
+  <path d="M690 350 V306 H440 V316" class="ledge" marker-end="url(#arr-loop)"/>
+  <text x="565" y="300" class="c">new plan.md, review again</text>
+
+  <!-- gate revise loop -->
+  <rect x="580" y="600" width="220" height="56" rx="6" class="loop"/>
+  <text x="690" y="623" class="h c">Revise code (IMPL_MODEL)</text>
+  <text x="690" y="643" class="c">max GATE_ROUNDS rounds (2)</text>
+  <line x1="500" y1="646" x2="578" y2="646" class="ledge" marker-end="url(#arr-loop)"/>
+  <text x="539" y="640" class="c">BLOCKING</text>
+  <path d="M650 656 V682 H502" class="ledge" marker-end="url(#arr-loop)"/>
+  <text x="660" y="678">re-gate the delta</text>
+
+  <!-- park -->
+  <path d="M500 706 H600 V742" class="edge" marker-end="url(#arr)"/>
+  <text x="608" y="726">budget spent</text>
+  <rect x="580" y="744" width="220" height="60" rx="6" class="park"/>
+  <text x="690" y="767" class="h c">Parked</text>
+  <text x="690" y="786" class="c">findings in blocked.md; no PR</text>
+</svg>

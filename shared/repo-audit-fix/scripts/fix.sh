@@ -40,6 +40,12 @@ TIMEOUT="${TIMEOUT:-3600}"
 EPIC_FILTER="${EPIC_FILTER:-}"
 ISSUE_LABEL="${ISSUE_LABEL:-audit}"
 DRY_RUN="${DRY_RUN:-0}"
+# jev (shared/jev): cheap calibrated yes/no checks. auto = use it when on PATH; off = never.
+JEV="${JEV:-auto}"
+# No gate by default: on the plan-coverage benchmark (bench/jev/RESULTS.md)
+# confidence does not predict correctness, and with the question below every
+# "no" was right at any bar while 0.5 dropped 6 of 27 caught gaps.
+JEV_CONFIDENCE="${JEV_CONFIDENCE:-0}"
 # Project context for every child. Generic default; override per project.
 REPO_CTX="${REPO_CTX:-Context: this repo documents its stack, layout and house rules in AGENTS.md (and README) — read it first and follow its conventions: branch/PR workflow, commit style, test and lint commands, code style. Prefer the smallest complete diff; small pure modules; no speculative flexibility.}"
 
@@ -62,6 +68,9 @@ fi
 log()  { echo "fix: $*" >&2; }
 die()  { echo "fix: FATAL: $*" >&2; exit 1; }
 
+# jev_verdict, plan_coverage_gaps, jev_flag: the jev plan-coverage gate
+. "$LIB/jev-gate.sh"
+
 # run_pi <provider> <model> <thinking> <tools> <prompt-file> <out-file> [cwd]
 run_pi() {
     _p="$1"; _m="$2"; _th="$3"; _tools="$4"; _pf="$5"; _of="$6"
@@ -71,7 +80,7 @@ run_pi() {
     # shellcheck disable=SC2086
     ( cd "$_cwd" && $TIMEOUT_BIN pi -p \
         --provider "$_p" --model "$_m" --thinking "$_th" \
-        --tools "$_tools" --no-session "$(cat "$_pf")" ) >"$_of" 2>"${_of%.txt}.err"
+        --tools "$_tools" --no-session "$(cat "$_pf")" ) </dev/null >"$_of" 2>"${_of%.txt}.err"
     _rc=$?
     set -e
     # dead/timed-out child = FATAL: discard partial output, stage retries
@@ -244,6 +253,24 @@ stage_planreview() {
         done
         [ "$_ok" = 1 ] || die "plan review child failed for $_ep"
         _verdict="$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).verdict)' "$_dir/plan-review.tmp")"
+        # second opinion on the reviewer's coverage check: a dropped finding is a defect
+        # only with a round left to act on it: on the last round a wrong "no"
+        # would turn an approved plan into "plan review loop exhausted"
+        _gaps=""
+        if [ "$_verdict" != revise ] && [ "$_rounds" -lt "$PLAN_ROUNDS" ]; then
+            _gaps="$(plan_coverage_gaps "$_ep")"
+            if [ -n "$_gaps" ]; then
+                printf '%s\n' "$_gaps" | node -e '
+const fs=require("fs"); const f=process.argv[1];
+const r=JSON.parse(fs.readFileSync(f,"utf8"));
+const gaps=fs.readFileSync(0,"utf8").split("\n").filter(Boolean);
+r.verdict="revise";
+r.blocking=r.blocking.concat(gaps.map(g=>`Plan does not address finding ${g} (fix it or state why it is skipped).`));
+fs.writeFileSync(f, JSON.stringify(r));' "$_dir/plan-review.tmp"
+                _verdict=revise
+                log "plan review: jev flagged unaddressed findings in $_ep: $(printf '%s' "$_gaps" | tr '\n' ' ')"
+            fi
+        fi
         if [ "$_verdict" = "approved" ]; then
             mv "$_dir/plan-review.tmp" "$_dir/plan-review.json"
             echo ok >"$_dir/plan-approved"
@@ -266,7 +293,7 @@ stage_planreview() {
         } >"$_dir/plan-prompt-r$_rounds.txt"
         run_read "$PLAN_PROVIDER" "$PLAN_MODEL" "$PLAN_THINKING" "$_dir/plan-prompt-r$_rounds.txt" "$_dir/plan.tmp" "$(epic_worktree "$_ep")"
         [ -s "$_dir/plan.tmp" ] || die "plan revision child empty for $_ep"
-        mv "$_dir/plan.tmp" "$_dir/plan.md"
+        jev_save_revision "$_ep" "$_gaps" "$_dir/plan.tmp" "$_dir/plan.md"
     done
     rm -f "$_dir/preview-prompt.txt" "$_dir/plan-review.tmp.err"
 }
@@ -653,11 +680,15 @@ GH_REPO="${GH_REPO:-$( ( cd "$REPO_DIR" && git remote get-url origin 2>/dev/null
 # derived vars are read inside backgrounded stage functions — export them so
 # subshells always inherit the same values even if the caller forgot export
 export STATE FIXROOT REPO_DIR AUDIT_STATE BASE_REF LENS SCRIPTS LIB GH_REPO
-export CONCURRENCY GATE_ROUNDS PLAN_ROUNDS EPIC_FILTER DRY_RUN ISSUE_LABEL
+export CONCURRENCY GATE_ROUNDS PLAN_ROUNDS EPIC_FILTER DRY_RUN ISSUE_LABEL JEV JEV_CONFIDENCE
 
 case "${1:-help}" in
     plan)   step_plan ;;
-    run)    step_run ;;
+    run)    rm -f "$STATE/jev-down"   # a new run tries jev again
+            if [ "$JEV" != off ] && command -v jev >/dev/null 2>&1; then
+                log "jev on: plan text and finding titles go to Mimir SystemOne for coverage checks (JEV=off to disable)"
+            fi
+            step_run ;;
     status) step_status ;;
     clean)  step_clean ;;
     *) grep '^#' "$0" | sed 's/^# \{0,1\}//' ;;

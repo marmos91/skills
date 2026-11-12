@@ -6,6 +6,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")" && pwd)"
 PI_DIR="${PI_DIR:-$HOME/.pi/agent/skills}"
 CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude/skills}"
+BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
 
 link() { # link <src-dir> <dest-dir>
     local src="$1" dest="$2"
@@ -40,8 +41,8 @@ unlink() { # unlink <dest-dir>
 }
 
 if [ "${1:-}" = "--rm" ]; then
-    echo "Removing $REPO symlinks from agent skill dirs:"
-    unlink "$PI_DIR"; unlink "$CLAUDE_DIR"
+    echo "Removing $REPO symlinks from agent skill dirs and $BIN_DIR:"
+    unlink "$PI_DIR"; unlink "$CLAUDE_DIR"; unlink "$BIN_DIR"
     exit 0
 fi
 
@@ -56,5 +57,8 @@ echo "Installing skills into:"
 echo "  pi: $PI_DIR";      install_group "$REPO/pi" "$PI_DIR"
 echo "  claude: $CLAUDE_DIR"; install_group "$REPO/claude" "$CLAUDE_DIR"
 echo "  shared -> both";     install_group "$REPO/shared" "$PI_DIR"; install_group "$REPO/shared" "$CLAUDE_DIR"
+
+echo "  tools: $BIN_DIR"; mkdir -p "$BIN_DIR"
+for b in "$REPO"/shared/*/bin/*; do [ -e "$b" ] && link "$b" "$BIN_DIR"; done
 
 echo "Done. (Uninstall: ./install.sh --rm)"

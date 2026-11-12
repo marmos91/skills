@@ -67,7 +67,7 @@ RULES
 } >"$PROMPT"
 
 if ( cd "$REPO_DIR" && pi -p --provider "${REVIEW_PROVIDER:-cubbit}" --model "${REVIEW_MODEL:-cubbit/mimir}" \
-      --thinking "${REVIEW_THINKING:-high}" --tools read,bash,grep,find --no-session "$(cat "$PROMPT")" ) >"$OUT" 2>"$ERR"; then
+      --thinking "${REVIEW_THINKING:-high}" --tools read,bash,grep,find --no-session "$(cat "$PROMPT")" ) </dev/null >"$OUT" 2>"$ERR"; then
     :
 else
     echo "review-lens: child failed" >&2; sed -n 1,10p "$ERR" >&2; exit 1

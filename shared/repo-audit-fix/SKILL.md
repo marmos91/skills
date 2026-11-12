@@ -85,6 +85,8 @@ its own git worktree** so two agents never touch the same checkout.
 | `GATE_ROUNDS` | 2 | max revise rounds after failed gates (counted from disk), then park |
 | `EPIC_FILTER` | — | comma list of epics (testing/partial runs) |
 | `DRY_RUN` | 0 | 1 = skip actual `gh pr create` |
+| `JEV` | auto | `auto` = use the `jev` CLI when on PATH: flags findings an approved plan drops (once per finding, never on the last plan round); the first jev outage turns it off for the rest of the run; `off` = never |
+| `JEV_CONFIDENCE` | 0 | minimum jev confidence to act on its answer; 0 = no gate, because confidence does not predict correctness (`bench/jev/RESULTS.md`) |
 | `REPO_CTX` | generic | one-line project context for every child |
 | `LENS` | `$REPO_DIR/scripts/review-lens.sh` | the 3-lens gate script — see *Lens contract*. REQUIRED: set `LENS` if the repo has no such script (e.g. `LENS=<skill>/scripts/review-lens.sh`, the shipped template) — the engine dies rather than fakes a passed review |
 
@@ -160,6 +162,10 @@ at the on-disk round), NIT-only lens output passes with nits collected, crash-re
 wave-batch parallelism. Re-validate after changes with the same technique:
 `EPIC_FILTER=<one small epic> DRY_RUN=1 LENS=<stub>` is cheap and asserts
 the state machine, not the models.
+
+The jev plan-coverage gate (`scripts/lib/jev-gate.sh`) has its own test with
+a stub `jev` on PATH: `sh scripts/test/jev-gate.test.sh` (exit-code mapping,
+outage latch, once-per-finding guard, crash before the revised plan is saved).
 
 ## Relation to the audit
 
