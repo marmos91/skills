@@ -30,7 +30,8 @@
   ],
   "scripts": {
     "test": "node --test test/*.test.mjs shared/pr-review/scripts/test/*.test.mjs && python3 -m unittest discover shared/jev && sh shared/repo-audit-fix/scripts/test/jev-gate.test.sh",
-    "check-pack": "node tools/check-pack.mjs"
+    "check-pack": "node tools/check-pack.mjs",
+    "smoke": "sh tools/smoke.sh"
   },
   "publishConfig": {
     "access": "public",

@@ -17,14 +17,4 @@ jobs:
       - run: npm run check-pack
       # shellcheck is on the ubuntu runners; notes (style) do not fail the build
       - run: git ls-files '*.sh' shared/pr-review/scripts/pr-review shared/pr-review-loop/scripts/pr-review-loop install.sh | xargs shellcheck -S warning
-      # install the real tarball on a clean HOME, then run the CLIs it links
-      - name: smoke test of the tarball
-        run: |
-          npm pack --ignore-scripts
-          export HOME="$RUNNER_TEMP/home" && mkdir -p "$HOME"
-          npx --yes "./$(ls marmos91-skills-*.tgz)" install --claude
-          "$HOME/.local/bin/pr-review" --help
-          "$HOME/.local/bin/pr-review-loop" --help
-          "$HOME/.local/bin/jev" --help
-          "$HOME/.local/bin/repo-audit" status
-          npx --yes "./$(ls marmos91-skills-*.tgz)" list
+      - run: sh tools/smoke.sh

@@ -84,6 +84,16 @@ function bins(names) {
   });
 }
 
+function linkBin(target, dest, log) {
+  // only when needed: under --link the target is the package itself, read-only in the Nix store or a root-owned prefix
+  const mode = statSync(target).mode;
+  if ((mode & 0o111) !== 0o111) chmodSync(target, mode | 0o111);
+  mkdirSync(dirname(dest), { recursive: true });
+  rmSync(dest, { force: true });
+  symlinkSync(target, dest);
+  log(`  ${dest.split(sep).pop()} -> ${target}`);
+}
+
 export function run(argv, { env = process.env, log = console.log } = {}) {
   const { values: v, positionals: [cmd, ...wanted] } = parseArgs({
     args: argv, allowPositionals: true,
@@ -136,19 +146,12 @@ export function run(argv, { env = process.env, log = console.log } = {}) {
       rmSync(dest);
       // the other agent's copy stays: its CLIs run from there now
       const rest = Object.values(dirs).map((d) => join(d, skill)).find((d) => exists(d) && ours(d));
-      if (rest) { symlinkSync(join(rest, rel), dest); log(`  ${bin} -> ${join(rest, rel)}`); } else log(`  ${bin}: removed`);
+      if (rest) linkBin(join(rest, rel), dest, log); else log(`  ${bin}: removed`);
       continue;
     }
     if (exists(dest) && !to) { log(`  ${bin}: WARNING ${dest} is not a link; left as it is`); continue; }
     if (to && !inside(to, ROOT) && !Object.values(dirs).some((d) => inside(to, d))) log(`  ${bin}: WARNING replaced the link to ${to}`);
-    const target = join(placed.get(skill), rel);
-    // only when needed: under --link the target is the package itself, read-only in the Nix store or a root-owned prefix
-    const mode = statSync(target).mode;
-    if ((mode & 0o111) !== 0o111) chmodSync(target, mode | 0o111);
-    mkdirSync(binDir, { recursive: true });
-    rmSync(dest, { force: true });
-    symlinkSync(target, dest);
-    log(`  ${bin} -> ${target}`);
+    linkBin(join(placed.get(skill), rel), dest, log);
   }
   return 0;
 }

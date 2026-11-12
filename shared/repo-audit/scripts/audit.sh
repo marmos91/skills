@@ -601,6 +601,7 @@ step_status() {
     d="$STATE/findings"; [ -d "$d" ] && echo "findings/: $(nfiles "$d" json) files"
     d="$STATE/verified"; [ -d "$d" ] && echo "verified/: $(nfiles "$d" json) files"
     d="$STATE/issues";  [ -d "$d" ] && echo "issues/:   $(nfiles "$d" md) bodies"
+    return 0 # a report: a missing folder is not an error (set -e would exit 1 on the test above)
 }
 
 step_clean() {

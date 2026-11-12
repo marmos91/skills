@@ -55,6 +55,10 @@ test("install copies each skill to its agents, links the CLIs, and a re-install 
     assert.equal(r.status, 0, `${bin}: ${r.stderr}`);
     assert.match(r.stdout, /usage: pr-review/);
   }
+  // audit.sh finds its lib/ through the link, and a report with no audit yet exits 0
+  const a = spawnSync(join(env.BIN_DIR, "repo-audit"), ["status"], { env: { ...env, REPO: root, WORKTREE: join(root, "wt") }, encoding: "utf8" });
+  assert.equal(a.status, 0, a.stderr);
+  assert.match(a.stdout, /repo-audit state/);
   const list = run(pkg, "list");
   assert.match(list.stdout, new RegExp(`pr-review\\s+claude: ${VERSION.replaceAll(".", "\\.")}\\s+pi: ${VERSION.replaceAll(".", "\\.")}`));
   assert.match(list.stdout, /refute-root-cause\s+claude: -\s+pi: /);
@@ -137,4 +141,17 @@ test("a link that the package did not make is replaced with a warning", (t) => {
   assert.match(r.stdout, new RegExp(`jev: WARNING replaced the link to ${join(root, "mine", "jev")}`));
   assert.equal((r.stdout.match(/WARNING replaced the link/g) ?? []).length, 2, "skill folder and CLI");
   assert.ok(existsSync(join(env.CLAUDE_DIR, "jev", ".skills-package")));
+});
+
+test("a CLI without the exec bit runs from the copy that stays after a partial uninstall", (t) => {
+  const { root, env, run } = setup(t);
+  const pkg = join(root, "pkg");
+  for (const p of ["package.json", "bin", "shared", "pi"]) cpSync(join(REPO, p), join(pkg, p), { recursive: true, verbatimSymlinks: true });
+  const audit = join(pkg, "shared", "repo-audit", "scripts", "audit.sh");
+  chmodSync(audit, 0o644);
+  assert.equal(run(pkg, "install", "repo-audit").status, 0);
+  assert.equal(run(pkg, "uninstall", "--claude", "repo-audit").status, 0);
+  assert.equal(readlinkSync(join(env.BIN_DIR, "repo-audit")), join(env.PI_DIR, "repo-audit", "scripts", "audit.sh"));
+  const r = spawnSync(join(env.BIN_DIR, "repo-audit"), ["status"], { env: { ...env, REPO: root, WORKTREE: join(root, "wt") }, encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
 });

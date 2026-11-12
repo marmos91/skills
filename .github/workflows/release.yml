@@ -33,4 +33,5 @@ jobs:
       - run: npm install -g npm@^11.5.1 # trusted publishing needs npm 11.5.1 or later
       - run: npm test
       - run: npm run check-pack
+      - run: sh tools/smoke.sh
       - run: npm publish --provenance --access public
