@@ -51,8 +51,9 @@ function baseConfigText(repoDir) {
  * Injectable: gh, review (default: lazy review.mjs), reply, frame, loadCfg(repoText), log, now.
  * -> { processed, skipped, questions, todos, paused?, locked? }
  */
-export async function tick({ repo, repoDir = process.cwd(), gh = github, review, reply = realReply, frame = realFrame, loadCfg, log = (m) => console.error(m), now = Date.now }) {
+export async function tick({ repo, repoDir = process.cwd(), gh = github, review, reply = realReply, frame = realFrame, sweep, loadCfg, log = (m) => console.error(m), now = Date.now }) {
   review ??= async (o) => (await import("./review.mjs")).review(o);
+  sweep ??= async (rs) => (await import("./review.mjs")).sweepWorktrees(rs);
   loadCfg ??= (repoText = baseConfigText(repoDir)) => loadConfig({ userPath: userConfigPath(), repoText });
   const rs = stateRoot(repo);
   const out = { processed: 0, skipped: 0, questions: 0, todos: 0 };
@@ -65,7 +66,7 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
   }
   try {
     // reply-only runs end here, not in review(): sweep their worktrees too
-    (await import("./review.mjs")).sweepWorktrees(rs);
+    await sweep(rs);
     await run();
   } finally { release(); }
   out.questions = openQuestions(rs).length;

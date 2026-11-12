@@ -75,11 +75,11 @@ export async function review(opts) {
 }
 
 /**
- * Removes the worktree of every finished run of the repo, and of every run of PR `n` at a head other than `head`
- * (never resumed). ctx stays (the loop reads it later); a resume makes the worktree again. Best effort: a folder
+ * Removes the worktree of every finished run of the repo, and of every run of PR `n` except `keep`, the run
+ * this review resumes or starts (no other run of PR `n` is ever resumed). ctx stays (the loop reads it later); a resume makes the worktree again. Best effort: a folder
  * that cannot go is tried again on the next sweep, and never fails a review.
  */
-export function sweepWorktrees(repoState, n, head) {
+export function sweepWorktrees(repoState, n, keep) {
   const root = join(repoState, "pr");
   let ls = [];
   try { ls = readdirSync(root); } catch { return; }
@@ -88,7 +88,7 @@ export function sweepWorktrees(repoState, n, head) {
     try { runs = readdirSync(join(root, p, "runs")); } catch { continue; }
     for (const r of runs) {
       const dir = join(root, p, "runs", r);
-      if (done(dir, FINAL_STAGE) || (String(n) === p && head && !r.startsWith(`${head}-`))) {
+      if (dir !== keep && (done(dir, FINAL_STAGE) || String(n) === p)) {
         try { cleanupWorktree(dir); } catch {}
       }
     }
@@ -206,13 +206,14 @@ async function once(o, restart) {
   const userConfig = config0({ userPath, cliPath: o.configPath }, o.maxDiffLines);
   let config = userConfig;
   const head = (await gh.pr(repo, n)).headSha;
-  sweepWorktrees(repoState, n, head);
   const runDir = pickRunDir(repoState, n, head, { restart });
   const runId = basename(runDir);
   const pst0 = prState(repoState, n);
+  const skip = !restart && pst0.lastReviewedSha === head && pst0.lastRunId !== runId;
+  sweepWorktrees(repoState, n, skip ? null : runDir); // a skipped review keeps no worktree of this PR
   // Same sha, posted before: nothing new to say. Exceptions: --restart, answers that wait for a run, and the
   // posted run itself when it crashed before its bookkeeping ended (lastRunId).
-  if (!restart && pst0.lastReviewedSha === head && pst0.lastRunId !== runId) {
+  if (skip) {
     const answered = pendingAnswers(repoState).filter((q) => q.pr === n && !q.finding?.kind);
     if (answered.length) return followUp(o, head, pst0, answered);
     return { exit: 0, runDir, skipped: true, summary: `already reviewed ${head}; use --restart to review it again` };

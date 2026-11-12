@@ -1137,6 +1137,22 @@ test("the next review removes the worktree of a finished run and keeps its ctx",
   assert.ok(existsSync(join(r2.runDir, "wt")), "the new run keeps its own until it is swept");
 });
 
+test("sweep: a --restart at the same head removes the crashed run's worktree", async () => {
+  const fx = fixture(); routes(fx);
+  const { r } = await go(fx, happy(), { until: "round1" });
+  rmSync(join(r.runDir, "post.done"), { force: true }); // crashed at this head
+  assert.ok(existsSync(join(r.runDir, "wt")));
+  const { r: r2 } = await go(fx, happy(), { restart: true });
+  assert.equal(r2.exit, 0, r2.summary);
+  assert.notEqual(r2.runDir, r.runDir);
+  assert.equal(existsSync(join(r.runDir, "wt")), false, "the crashed run is never resumed");
+  assert.doesNotMatch(git(fx.repoDir, "worktree", "list"), new RegExp(basename(r.runDir)));
+  // a third review at the same head is skipped and keeps no worktree of this PR
+  const { r: r3 } = await go(fx, happy());
+  assert.ok(r3.skipped);
+  assert.equal(existsSync(join(r2.runDir, "wt")), false);
+});
+
 test("sweep: a run at an old head loses its worktree; a folder that cannot go never fails the review", async () => {
   const fx = fixture(); routes(fx);
   const { r } = await go(fx, happy(), { until: "round1" });
