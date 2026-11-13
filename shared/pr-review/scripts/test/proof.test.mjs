@@ -244,3 +244,38 @@ test("checked fix: a run cut short by the total cap is unchecked, not failed", a
   assert.equal(existsSync(join(runDir, "fixes")), false, "not cached: a resume tries again");
   clean(f.worktree);
 });
+
+test("applyProof: a member from a seat dropped in the vote proves nothing", () => {
+  const fids = new Map([["f1", { seat: "s0", lens: "correctness", evidence_run: true }]]);
+  const c = { id: "a", fp: "a", lens: "correctness", severity: "must", found: ["s0"], seats: ["s0", "s1"], members: ["f1"] };
+  applyProof([c], [{ cluster: { ...c, found: [], seats: ["s1"] }, votes: [], status: "split" }], fids);
+  assert.deepEqual([c.proven, c.severity], [false, "should"]);
+});
+
+test("mutants: a baseline the total cap starves is no result: skipped for the time cap, not cached", async () => {
+  const { f, config, runDir } = wt({ check: { run: "sleep 3", timeout_s: 60 } });
+  config.review.mutants.total_s = 1;
+  const r = await runMutants(f, config, runDir);
+  assert.deepEqual([...new Set(r.mutants.map((m) => m.reason))], ["time cap"]);
+  const b = wt({ check: { run: "sleep 3", timeout_s: 60 } });
+  const body = "x\n\n```suggestion\nexport const inc = (x) => x + 2;\n```";
+  assert.deepEqual(await checkFix(b.f, b.config, b.runDir, { fp: "a", file: "m.js", line: 3, body }, [], Date.now() + 1000), { unchecked: "the time cap ran out" });
+  assert.equal(existsSync(join(b.runDir, "mutants")), false, "nothing cached: a resume runs the baseline again");
+});
+
+test("mutants: only lines the PR adds, also when delta.patch holds lines a rebase brought in", () => {
+  const { f, config } = wt();
+  writeFileSync(join(f.ctxDir, "delta.patch"), readFileSync(join(f.ctxDir, "diff.patch"), "utf8"));
+  writeFileSync(join(f.ctxDir, "diff.patch"), "diff --git a/m.js b/m.js\n--- a/m.js\n+++ b/m.js\n@@ -1,1 +1,3 @@\n+export const LIMIT = 10;\n+export const big = (x) => x > LIMIT;\n export const inc = (x) => x + 1;\n");
+  assert.deepEqual(planMutants(f, config).map((x) => x.line), [1, 2]);
+});
+
+test("checked fix: the verdict is per line and command, not per fingerprint", async () => {
+  const { f, config, runDir } = wt();
+  const s = (line) => ({ fp: "same", file: "m.js", line, body: "x\n\n```suggestion\nexport const inc = (x) => x + 2;\n```" });
+  const far = Date.now() + 60_000;
+  assert.deepEqual(await checkFix(f, config, runDir, s(3), [], far), { ok: true });
+  assert.equal((await checkFix(f, config, runDir, s(2), [], far)).ok, false, "at line 2 it removes big()");
+  config.review.checks[0].run = "exit 0";
+  assert.deepEqual(await checkFix(f, config, runDir, s(2), [], far), { ok: true }, "another command checks again");
+});

@@ -162,7 +162,10 @@ export function runCommand(cmd, cwd, timeoutMs) {
   });
 }
 
-/** One check: up to c.repeat runs, the first failure stops it, all within timeoutMs (> 0). Never throws on a failed run. */
+/**
+ * One check: up to c.repeat runs, the first failure stops it, all within timeoutMs (> 0). Never throws on a failed run.
+ * Passing runs cut short by the time cap are a time-out: not every run passed.
+ */
 export async function runCheck(c, wt, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let r, runs = 0;
@@ -172,7 +175,7 @@ export async function runCheck(c, wt, timeoutMs) {
     if (stopping) throw new ChildFailed("engine is stopping on a signal"); // a killed check is not a result
     if (r.exit !== 0) break;
   }
-  return { ...r, runs };
+  return { ...r, runs, timedOut: r.timedOut || (r.exit === 0 && runs < c.repeat) };
 }
 
 /** Back to the PR head: tracked edits, commits and new files go. Throws when git fails. */
@@ -208,7 +211,7 @@ export async function runSetup(f, config, runDir, log = () => {}) {
       if (done(runDir, "setup", key)) { checks.push(JSON.parse(readFileSync(one, "utf8"))); continue; }
       log(`setup: ${c.name}: ${c.run}`);
       const r = await runCheck(c, f.worktree, c.timeout_s * 1000);
-      const v = { name: c.name, command: c.run, exit: r.exit, timed_out: r.timedOut, runs: r.runs, repeat: c.repeat, ok: r.exit === 0, output: redact(r.output.slice(-OUT_MAX)) };
+      const v = { name: c.name, command: c.run, exit: r.exit, timed_out: r.timedOut, runs: r.runs, repeat: c.repeat, ok: r.exit === 0 && !r.timedOut, output: redact(r.output.slice(-OUT_MAX)) };
       writeAtomic(one, JSON.stringify(v, null, 2) + "\n");
       markDone(runDir, "setup", key);
       checks.push(v);

@@ -1870,3 +1870,33 @@ test("full depth: proof follows a finding by its content, also after a resume th
   assert.equal(c1.severity, "should", "c1 has no run of its own: R's run does not prove it");
   assert.match(threadAt(fx, 2), /Unproven/);
 });
+
+test("full depth: at review 3 an unproven must lowered to should does not post", async () => {
+  const fx = fixture(); routes(fx); trusted(fx);
+  savePrState(fx.state, N, { ...prState(fx.state, N), reviews: 2 });
+  const { r } = await go(fx, split(), { decide: async () => ({ decision: "agreed", raw: null }), depth: "full" });
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(posts(fx)[0].threads.length, 0);
+  assert.notEqual(posts(fx)[0].event, "REQUEST_CHANGES");
+});
+
+test("full depth: a `proven` the judge copies into a merge cluster proves nothing", async () => {
+  const fx = fixture(); routes(fx); trusted(fx);
+  const { r, run } = await go(fx, split({ merge: [C("c1", { found: [S0], proven: true })] }), { decide: async () => ({ decision: "agreed", raw: null }), depth: "full" });
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(agreedInCompose(run)[0].severity, "should");
+  assert.match(threadAt(fx, 2), /Unproven/);
+});
+
+test("full depth: a comment held by the secret scan keeps its proof status in the follow-up", async () => {
+  const fx = fixture(); routes(fx); trusted(fx);
+  const token = "ghp_" + "E".repeat(36);
+  const answers = happy({ compose: { body: "Summary.", comments: [{ id: "c1", body: `**must:** token ${token} leaks` }] } });
+  await go(fx, answers, { mode: "loop", depth: "full" });
+  const [q] = openQuestions(fx.state);
+  assert.equal(q.finding.proven, false);
+  answer(fx.state, q.id, "post");
+  const again = await go(fx, answers, { depth: "full" });
+  assert.equal(again.r.exit, 0, again.r.summary);
+  assert.match(posts(fx)[1].threads[0].body, /\[REDACTED:github-token\] leaks\n\nUnproven: no run in this review shows this case\.\n\n<!--/);
+});

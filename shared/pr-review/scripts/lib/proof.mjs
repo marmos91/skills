@@ -116,9 +116,12 @@ function testFor(config, f, file, tests) {
   return c && (!c.dirs || own.some((t) => c.dirs.includes(t.includes("/") ? `./${dirname(t)}` : "."))) ? c : null;
 }
 
-/** Mutants for the added lines (scopePatch) of changed non-test files that have a test and a test command. At most review.mutants.max. */
+/**
+ * Mutants for the added lines (scopePatch) of changed non-test files that have a test and a test command. At most
+ * review.mutants.max. A line must be added by the PR too (diff.patch): after a rebase, delta.patch holds main's lines.
+ */
 export function planMutants(f, config) {
-  const tests = trackedTests(f);
+  const tests = trackedTests(f), pr = parseHunks(readFileSync(join(f.ctxDir, "diff.patch"), "utf8"));
   const plan = [];
   for (const [file, h] of parseHunks(readFileSync(scopePatch(f), "utf8"))) {
     const p = !isTest(file) && safeFile(f.worktree, file);
@@ -126,7 +129,7 @@ export function planMutants(f, config) {
     if (!c) continue;
     const text = readFileSync(p, "utf8"), lines = text.split("\n"), inside = insideLines(text, file);
     for (const [n, kind] of h.right) {
-      const m = kind === "add" && lines[n - 1] !== undefined && !inside.has(n) && mutateLine(lines[n - 1], file);
+      const m = kind === "add" && pr.get(file)?.right.get(n) === "add" && lines[n - 1] !== undefined && !inside.has(n) && mutateLine(lines[n - 1], file);
       if (m) plan.push({ file, line: n, op: m.op, before: lines[n - 1], after: m.after, name: c.name, command: c.run, repeat: c.repeat, timeout_s: c.timeout_s });
     }
   }
@@ -155,9 +158,12 @@ async function runWith(f, file, text, c, ms) {
   } finally { resetWorktree(f.worktree, f.headSha); }
 }
 const withLine = (text, n, line) => { const l = text.split("\n"); l.splice(n - 1, 1, ...line.split("\n")); return l.join("\n"); };
-// The check at the head, once per command for mutants and fixes alike.
-// shortcut: a time-out under the total cap is cached too; a resume does not try it again with more time.
-const baseline = (f, runDir, c, ms) => cached(runDir, "mutants", `base-${sha1(`${c.command}\0${c.repeat}`)}`, () => runWith(f, null, null, c, ms));
+// The check at the head, once per command for mutants and fixes alike. A run the total cap cut short is no
+// result: it is not cached, and a resume tries again.
+const baseline = (f, runDir, c, ms) => cached(runDir, "mutants", `base-${sha1(`${c.command}\0${c.repeat}`)}`, async () => {
+  const r = await runWith(f, null, null, c, ms);
+  return r.timed_out && ms < c.timeout_s * 1000 ? { unchecked: "the time cap ran out" } : r;
+});
 const headFails = (b) => (b.timed_out ? "the tests time out with no mutant" : b.exit !== 0 ? "the tests fail with no mutant" : null);
 
 /**
@@ -180,7 +186,8 @@ export async function runMutants(f, config, runDir, log = () => {}) {
       const key = sha1(`${m.file}\0${m.line}\0${m.before}\0${m.after}\0${m.command}\0${m.repeat}`).slice(0, 16);
       const ran = done(runDir, "mutants", key);
       if (!ran && left(m) <= 0) { mutants.push({ ...m, status: "skipped", reason: "time cap" }); continue; }
-      const why = headFails(await baseline(f, runDir, m, left(m)));
+      const b = await baseline(f, runDir, m, left(m));
+      const why = b.unchecked ? "time cap" : headFails(b);
       if (why) { mutants.push({ ...m, status: "skipped", reason: why }); continue; }
       if (!ran && left(m) <= 0) { mutants.push({ ...m, status: "skipped", reason: "time cap" }); continue; }
       mutants.push(await cached(runDir, "mutants", key, async () => {
@@ -229,8 +236,9 @@ export const mutantFindings = (r) => (r?.mutants ?? []).filter((m) => m.status =
  */
 export const isProven = (c, t, fids) => c.proven === true
   || (t ? validVotes(t) : []).some((v) => v.vote === "keep" && v.evidence_run === true)
-  // a member counts only from a seat that found the cluster, in its lens: a wrong id from the judge proves nothing
-  || (Array.isArray(c.members) ? c.members : []).some((id) => { const x = fids.get(id); return x?.evidence_run === true && x.lens === c.lens && (c.found ?? []).includes(x.seat); });
+  // a member counts only from a seat that found the cluster and still counts in the tally, in its lens: a wrong
+  // id from the judge proves nothing
+  || (Array.isArray(c.members) ? c.members : []).some((id) => { const x = fids.get(id); return x?.evidence_run === true && x.lens === c.lens && ((t?.cluster ?? c).found ?? []).includes(x.seat); });
 
 export function applyProof(agreed, tallied, fids) {
   const byFp = new Map(tallied.map((t) => [t.cluster.fp, t]));
@@ -255,20 +263,21 @@ export async function checkFix(f, config, runDir, item, mutants, deadline) {
   const p = s && typeof item.line === "number" && safeFile(f.worktree, String(item.file));
   const t = p && testFor(config, f, item.file, trackedTests(f));
   if (!t) return null;
-  const c = { command: t.run, repeat: t.repeat }, ms = () => Math.min(t.timeout_s * 1000, deadline - Date.now());
+  const c = { command: t.run, repeat: t.repeat, timeout_s: t.timeout_s }, ms = () => Math.min(t.timeout_s * 1000, deadline - Date.now());
   const cut = { unchecked: "the time cap ran out" };
   try {
     if (ms() <= 0) return cut;
     const b = await baseline(f, runDir, c, ms());
+    if (b.unchecked) return cut;
     if (headFails(b)) return null;
     if (ms() <= 0) return cut;
-    return await cached(runDir, "fixes", `${item.fp}-${sha1(s.code)}`, async () => {
+    return await cached(runDir, "fixes", sha1([item.fp, item.line, s.code, t.run, t.repeat].join("\0")), async () => {
       const text = readFileSync(p, "utf8"), n = text.split("\n").length;
       if (item.line < 1 || item.line > n) return null; // a line past the file would append the code
       const fixed = withLine(text, item.line, s.code), shift = fixed.split("\n").length - n;
       const budget = ms(), r = await runWith(f, item.file, fixed, c, budget);
       if (r.timed_out && budget < t.timeout_s * 1000) return cut; // the total cap cut it short: not the fix's fault
-      if (r.exit !== 0) return { ok: false, why: `${t.name} ${r.timed_out ? "timed out" : `failed (exit ${r.exit})`} with it` };
+      if (r.exit !== 0 || r.timed_out) return { ok: false, why: `${t.name} ${r.timed_out ? "timed out" : `failed (exit ${r.exit})`} with it` };
       for (const m of mutants.filter((x) => x.status === "killed" && x.file === item.file && x.line !== item.line)) {
         const at = m.line > item.line ? m.line + shift : m.line;
         if (fixed.split("\n")[at - 1] !== m.before) continue;

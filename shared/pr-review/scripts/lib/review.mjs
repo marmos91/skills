@@ -384,7 +384,8 @@ async function once(o, restart) {
     keys.some((key) => key === c.fp || (agreedLens.has(key) && agreedLens.get(key) === c.lens)));
   const all = raw.filter((c) => run.lenses.includes(c.lens)).map((c) => {
     const seats = [...new Set(seatsForLens(config, c.lens).map(seatId))].filter((id) => !isDropped(id));
-    return { ...c, found: [...new Set(c.found)].filter((s) => seats.includes(s)), seats, fp: fingerprint(c) };
+    // proof comes from engine data only: a `proven` the judge copied into a cluster is dropped
+    return { ...c, found: [...new Set(c.found)].filter((s) => seats.includes(s)), seats, fp: fingerprint(c), proven: undefined };
   });
   const reversed = all.filter((c) => c.reverses), linked = all.filter((c) => !c.reverses && resolvedThread(c));
   const { keep: clusters, dropped } = filterNew(all.filter((c) => !c.reverses && !resolvedThread(c)), {
@@ -480,6 +481,9 @@ async function once(o, restart) {
   // same delta and severity filters as a council finding.
   if (depth === "full") {
     applyProof(agreed, tallied, fids);
+    // a must lowered for want of proof meets the severity floor again: review 3+ posts no should
+    const floor = allowedSeverities(f.reviewNumber);
+    agreed.splice(0, agreed.length, ...agreed.filter((c) => c.answered || floor.has(c.severity)));
     const mf = filterNew(mutantFindings(mutants), { reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: changedLines(f) }).keep;
     agreed.push(...mf.map((m, i) => ({ ...m, id: `m${i + 1}`, found: [], seats: [], fp: fingerprint(m) })));
   }
@@ -642,7 +646,7 @@ async function once(o, restart) {
     // Held back. The question keeps the fingerprint and the rule ids only: never the text, which holds the secret.
     open.push(queueQuestion(repoState, {
       pr: n, sha: f.headSha, fingerprint: x.fp, file: x.file, line: x.line, snippet: "",
-      finding: { lens: x.lens, severity: x.severity, file: x.file, line: x.line, title: "Comment held by the secret scan", case: `Secret rules: ${ruleIds(s.hits)}`, fix: "", secret: true },
+      finding: { lens: x.lens, severity: x.severity, file: x.file, line: x.line, title: "Comment held by the secret scan", case: `Secret rules: ${ruleIds(s.hits)}`, fix: "", secret: true, ...(depth === "full" && { proven: !!x.proven }) },
       sides: { keep: "post: post the comment with the secret redacted.", drop: "drop: do not post this finding." }, failure: `Secret rules: ${ruleIds(s.hits)}`,
     }));
   }
@@ -767,7 +771,8 @@ async function followUp(o, head, pst, answered) {
     if (seen.has(sha1(`inline\0${head}\0${q.fingerprint}`))) { already.push(q.fingerprint); continue; }
     if (codeMoved(o.repoDir ?? process.cwd(), q, head)) { o.log(`question ${q.id}: the code at ${q.finding?.file}:${q.finding?.line} changed since ${q.sha}; its answer is dropped`); continue; }
     const f = q.finding;
-    const text = f.secret ? heldText(repoState, n, pst.lastRunId, q.fingerprint)
+    const held = f.secret && heldText(repoState, n, pst.lastRunId, q.fingerprint);
+    const text = f.secret ? held && `${held}${f.proven === false ? `\n\n${UNPROVEN}` : ""}`
       : `**${f.severity}:** ${f.title}\n\n${f.case}${f.fix ? `\n\n${f.fix}` : ""}${q.answer === "ask-author" ? "\n\nCan you confirm this case?" : ""}${f.proven === false ? `\n\n${UNPROVEN}` : ""}`;
     if (text && scanOutbound(text).ok) items.push({ q, text });
   }
