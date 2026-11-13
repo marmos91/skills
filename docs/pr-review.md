@@ -442,12 +442,14 @@ PR head.
 2. **Children get a clean environment.** The environment is an allowlist.
    `GH_TOKEN`, `GITHUB_PERSONAL_ACCESS_TOKEN` and `AWS_*` never reach a child.
    Only the engine talks to GitHub, and it posts from validated JSON.
-3. **Code runs only when every author is trusted.** A trusted author has the
-   association `OWNER`, `MEMBER` or `COLLABORATOR`. A shell needs a trusted
+3. **Code runs only when every author is trusted.** A trusted author has
+   `write` or `admin` permission on the repo (`lib/trust.mjs`, the same rule
+   as the replies, the loop and pr-respond). The org association `MEMBER`
+   alone does not count. Bots do not count either. A shell needs a trusted
    PR author, and every author of text in the run's `ctx` folder (review
    threads and their comments, PR comments, reviews and linked issues) must
-   be you or trusted. A linked-issue author whose association is unknown
-   counts as untrusted. One third-party comment makes every seat read-only.
+   be you or trusted. A linked-issue author that is unknown counts as
+   untrusted. One third-party comment makes every seat read-only.
    Then each round-1 job that runs the adversarial lens
    gets a shell (`Bash` or `bash`) to run a repro in the worktree, with a
    timeout that sends SIGTERM to the whole process group, then SIGKILL after
@@ -793,7 +795,7 @@ Each prints JSON. Without `--pr`, they act on the PR of the current branch.
 |---|---|
 | `pr-respond findings` | Lists the unresolved threads that pr-respond did not handle at their newest comment by someone else (a council thread with only its first comment counts; a thread longer than one page always counts). Rounds and handled threads live in `pr/<n>/respond.json`, apart from `state.json`. A head not seen before counts one round; past `respond.max_rounds` (default 5) with findings left, it exits `5` |
 | `pr-respond decide <thread>` | Reads the PR diff of the file and the file at the PR head with `git` (not the working tree). A comment by a person without write or admin access (bots and you aside) gives `ask` at once, unless the thread is approved. Else jev answers "correct on the head?" and "about code this PR adds or changes?": 2 yeses give `fix`, a no or unsure gives `ask` and the agent checks the code. jev never declines: `bench/jev/respond.mjs` replays PR 44's threads |
-| `pr-respond approve <thread>` | Records the user's yes for a thread with a comment by a person without write access (by `gh.permission`, as the loop checks it). Until then `decide` gives `ask` and `fixed` posts nothing |
+| `pr-respond approve <thread>` | Records the user's yes for a thread with a comment by a person without write access (by `lib/trust.mjs`, as the loop checks it). Until then `decide` gives `ask` and `fixed` posts nothing |
 | `pr-respond decline <thread> "<reason>"` | Replies with the reason; the thread stays open. Skips when our reply is already the newest comment |
 | `pr-respond fixed <thread> <sha>` | Refuses a sha that is not in the PR head. jev checks the commit first; only on a yes: `Fixed in <commit link>.`, or the link added to our newest reply (never a second reply), then resolve. On a no or unsure it posts nothing |
 | `pr-respond summary <points.json>` | One PR comment that answers the review point by point and opens with the count. Once per head |

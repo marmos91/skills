@@ -5,7 +5,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { scanOutbound } from "./secrets.mjs";
 import { prData } from "./prompts.mjs";
-import { COLLABORATOR, linkFix } from "./reply.mjs";
+import { linkFix } from "./reply.mjs";
+import { canDrive } from "./trust.mjs";
 import { stateRoot, writeAtomic } from "./state.mjs";
 
 export const Q = {
@@ -60,13 +61,14 @@ const handledNow = (t, me, handled) => whole(t) && t.id in handled && handled[t.
 const open = (t, me, handled) => !t.isResolved && !handledNow(t, me, handled);
 const markHandled = (repo, n, t, me) => { const s = load(repo, n); s.handled[t.id] = lastOther(t, me); save(repo, n, s); };
 
-// The agent edits and runs code on what a thread says: every author must be a bot (Copilot), us, or have
-// write access, by the same gh.permission rule as reply.mjs and tick.mjs (MEMBER alone is not write access).
+// The agent edits and runs code on what a thread says: every author must pass canDrive (trust.mjs), or be a
+// review bot: a bot comment in a review thread is a finding on the diff (Copilot), not text relayed from others.
 // An approval (`approve`) covers the comments up to the newest one when the user said yes, never later ones.
 async function trusted(gh, repo, n, t, me) {
   const upTo = load(repo, n).approved[t.id] ?? -Infinity;
-  for (const a of new Set(t.comments.filter((c) => c.authorType !== "Bot" && c.author !== me && !(c.id <= upTo)).map((c) => c.author))) {
-    if (!COLLABORATOR.has(await gh.permission(repo, a))) return false;
+  const ok = canDrive(gh, repo, me);
+  for (const a of new Set(t.comments.filter((c) => c.authorType !== "Bot" && !(c.id <= upTo)).map((c) => c.author))) {
+    if (!(await ok(a))) return false;
   }
   return true;
 }

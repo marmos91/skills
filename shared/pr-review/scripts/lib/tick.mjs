@@ -4,7 +4,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import * as github from "./github.mjs";
-import { COLLABORATOR, reply as realReply } from "./reply.mjs";
+import { reply as realReply } from "./reply.mjs";
+import { canDrive } from "./trust.mjs";
 import { frame as realFrame, SEVERITY } from "./frame.mjs";
 import { loadUserConfig, pickEffort, lowerEffort } from "./config.mjs";
 import { budgetLeft } from "./convergence.mjs";
@@ -217,7 +218,7 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
       if (own) toReply.push(...fresh);
       else for (const [t, c] of fresh) {
         if (!mention.test(c.body ?? "")) continue;
-        if (!COLLABORATOR.has(await gh.permission(repo, c.author))) { log(`#${n}: mention by ${c.author} (no write access) not answered`); markSeen(t, c); continue; }
+        if (!(await canDrive(gh, repo, me)(c.author))) { log(`#${n}: mention by ${c.author} (no write access) not answered`); markSeen(t, c); continue; }
         toReply.push([t, c]);
         if (asksReview(c.body)) { wantReview = true; if (c.author === r.author) requested = true; }
       }
