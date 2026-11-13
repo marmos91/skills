@@ -274,3 +274,11 @@ test("status: lastRunTokens follows the newest run, also a finished dry run, and
   assert.equal(pr.lastRunTokens.reply.input, 5);
   assert.equal(pr.lastRunTokens.total.input, 15);
 });
+
+test("respond loads the config: a missing --config file is a usage error that names it", () => {
+  const fx = fixture();
+  const r = cli(fx, "respond", "findings", "--pr", "7", "--config", join(fx.root, "nope.json"));
+  assert.equal(r.status, 1, r.stderr);
+  assert.doesNotMatch(r.stderr, /is not defined/);
+  assert.match(r.stderr, /nope\.json/);
+});
