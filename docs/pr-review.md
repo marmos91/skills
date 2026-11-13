@@ -451,7 +451,8 @@ Each check runs once per run, before round 1, in the run's worktree.
 "checks": [
   // {dirs}: the folders of the changed paths that match "paths", quoted.
   { "name": "go vet", "run": "go vet {dirs}", "paths": ["**/*.go"] },
-  { "name": "go test", "run": "go test -race -count=1 {dirs}", "paths": ["**/*.go"], "repeat": 3, "timeout_s": 900 },
+  // "mutate": true: the test command for mutants and checked fixes (full depth).
+  { "name": "go test", "run": "go test -race -count=1 {dirs}", "paths": ["**/*.go"], "repeat": 3, "timeout_s": 900, "mutate": true },
   { "name": "docs", "run": "sh scripts/check-docs.sh", "paths": ["docs/**"] }
 ]
 ```
@@ -504,6 +505,80 @@ Checks run code from the PR. So:
   so. The worktree is removed with the run.
 - A check runs as you, with no file sandbox: it can read files in your
   home folder. That is why it needs trusted authors.
+
+### Proven findings
+
+At `full` depth the engine also tries to prove the findings. It uses the
+setup runner, so the same rules apply: trusted authors only, the short
+environment, the process-group kill, and the `repeat` and `timeout_s` of
+the check. Before and after each run the engine resets the worktree to the
+PR head (`git reset --hard`, `git clean -fd`). At `light` depth none of this
+runs.
+
+**Mutants.** A check with `"mutate": true` is the test command. The Go
+default `go test` has it. A custom `review.checks` list needs it on its test
+command, or no mutant and no fix check runs.
+
+- Mutants run only when a surviving one can be posted: the correctness lens
+  runs, and the review can post `should` (reviews 1 and 2).
+- The engine picks the changed files that are not tests, match the check's
+  `paths`, and have a test that the command runs. The tests of a file are
+  the tracked test files in its folder, and the test files whose name starts
+  with the file's name (`a.go`: `a_test.go`; `lib/x.mjs`:
+  `test/x.test.mjs`). A command without `{dirs}` runs every test. With
+  `{dirs}`, the command gets the folder of the file and the folder of each of
+  its tests that the check's `paths` match. A test in a folder that the
+  command does not get does not count.
+- It mutates the added lines of the diff, or of the delta in a later review.
+  On each line it makes one small break, with the first of these that
+  applies: flip `==`/`!=`, move a boundary (`<` and `<=`, `>` and `>=`),
+  flip `&&`/`||`, negate `if (...)`, flip `true`/`false`, add 1 to a
+  number, drop a return value, drop a call statement (not a log or print
+  call).
+- String literals and comments never change. Only files with a known line
+  comment get mutants (`//`: JS, TS, Go, Rust, Java, C and similar; `#`:
+  Python, Ruby, shell). A line with an open string or comment gets none, and
+  neither does a line inside a backtick string, a block comment or a
+  triple-quoted string.
+- The engine runs the test command once with no break. When that fails or
+  times out, it runs no mutant for that command, and the brief says why.
+  Then it runs each mutant alone. A mutant survives only when every run
+  (`repeat`) passes.
+- A surviving mutant becomes a `should` finding of the correctness lens:
+  "No test catches a break in ...", with the mutant and the command. A caught
+  or timed-out mutant is not a finding.
+- `review.mutants` (user level): `max` (default 20) mutants and `total_s`
+  (default 900) for all runs. The results go to `ctx/mutants.json`, and each
+  seat gets a short summary. Each run has a `.done` marker, so a resumed run
+  does not run it again. A resume resets the worktree first. When a reset
+  fails, no mutant runs, and the brief says why.
+
+**Proof.** Run evidence is one of these:
+
+- a round-1 finding with `evidence_run` from a seat with a shell, that the
+  merge put in the cluster (`members`);
+- a keep vote with `evidence_run` that the tally counts (an eligible seat,
+  its first vote);
+- a surviving mutant.
+
+A finding with no run evidence gets the engine line "Unproven: no run in
+this review shows this case." in its comment. It is never dropped. Findings
+with and without run evidence are never put in one comment. An unproven
+`must` stays `must` only when the tally agreed with no drop, or when you
+answered it. Otherwise it is posted as `should`. The summary gets an engine
+line, for example `Proof: 2 proven, 1 unproven.`
+
+**Checked fixes.** Before the post, the engine applies the first
+`suggestion` block of each comment at its line and runs the file's test
+command. Then it runs the caught mutants of that file on the fixed code.
+When the tests fail, or a caught mutant is no longer caught, the comment
+keeps its text but loses its code blocks, and gets a short engine note.
+When the tests already fail at the PR head, the fix is not checked. The
+check is best effort, capped by `review.mutants.total_s`. When the cap stops
+a check, the comment keeps its code and gets the engine note "this fix was
+not checked". A plain code snippet, and a comment outside the diff (only its
+first line is posted), are not checked. An answered question keeps the
+proof status of its finding.
 
 ## CI
 

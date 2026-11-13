@@ -41,6 +41,23 @@ export function parseHunks(patch) {
 // A fence of 3 or more backticks: a suggestion that itself holds ``` needs a longer one.
 const FENCE = /^(\s*`{3,})suggestion\b/gm;
 
+/**
+ * The fenced code blocks of a comment, by line: { start, end, info, code, closed }. A block closes at a line of
+ * at least as many backticks and nothing else; an unclosed block runs to the end (GitHub renders it so).
+ */
+export function fences(text) {
+  const lines = String(text).split("\n"), out = [];
+  let open = null;
+  lines.forEach((l, i) => {
+    const m = /^\s*(`{3,})(.*)$/.exec(l);
+    if (!m) return;
+    if (!open) open = { start: i, ticks: m[1].length, info: m[2].trim() };
+    else if (m[1].length >= open.ticks && !m[2].trim()) { out.push({ start: open.start, end: i, info: open.info, code: lines.slice(open.start + 1, i).join("\n"), closed: true }); open = null; }
+  });
+  if (open) out.push({ start: open.start, end: lines.length - 1, info: open.info, code: lines.slice(open.start + 1).join("\n"), closed: false });
+  return out;
+}
+
 /** The diff-line kind of a finding's RIGHT-side line (add or ctx); undefined off the diff. */
 export const diffLine = (hunks, file, line) => (line == null ? undefined : hunks.get(file)?.right.get(line));
 

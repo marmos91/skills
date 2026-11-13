@@ -9,7 +9,7 @@ import { WHOLE_PR_LENSES, applyEffort, loadUserConfig, lowerEffort, pickEffort, 
 import { frame as realFrame, git, readTree, cleanupWorktree, HeadMoved, DiffTooLarge } from "./frame.mjs";
 import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.mjs";
 import { tally } from "./tally.mjs";
-import { filterNew, fingerprint } from "./convergence.mjs";
+import { allowedSeverities, filterNew, fingerprint } from "./convergence.mjs";
 import { diffLine, parseHunks, place } from "./hunks.mjs";
 import { verdict } from "./verdict.mjs";
 import { redact, scanOutbound } from "./secrets.mjs";
@@ -18,6 +18,7 @@ import { limiter } from "./limit.mjs";
 import { decide as realDecide } from "./decider.mjs";
 import { linkFix } from "./reply.mjs";
 import { appliedAnswer, pendingAnswers, queueQuestion } from "./questions.mjs";
+import { applyProof, checkFix, directionOnly, isProven, mutantFindings, proofLine, runMutants, scopePatch, uncheckedNote, UNPROVEN } from "./proof.mjs";
 import { cherryPicked, coreCandidates, depthLine, pickDepth, queueCoreQuestion, readCorePaths, runSetup, settleCoreQuestions } from "./setup.mjs";
 import { FINAL_STAGE, VERSION, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, usageByStage, writeAtomic } from "./state.mjs";
 
@@ -111,10 +112,11 @@ async function child(ctx, stage, key, { seat, prompt, schema, tools = "read", le
   mkdirSync(dir, { recursive: true });
   const promptFile = join(dir, `${key}.prompt`);
   const limited = withLimits(ctx.config, seat, lens, stage);
-  // pi has no sandboxed shell: decide before the prompt, so a pi seat is never told it can run a repro
+  // pi has no sandboxed shell: decide before the prompt, so a pi seat is never told it can run a repro.
+  // The prompt follows the tools the child gets: a read-only child is never told to run anything.
   const pi = (await harnessFor(limited, ctx.routerUp)) === "pi";
   if (pi) tools = "read";
-  writeFileSync(promptFile, prompt(limited, pi ? { ...ctx.frame, shellOk: false } : ctx.frame));
+  writeFileSync(promptFile, prompt(limited, tools !== "shell" ? { ...ctx.frame, shellOk: false } : ctx.frame));
   let v;
   try { v = await ctx.runChild({ trusted: ctx.frame.shellOk, seat: limited, tools, promptFile, outFile, worktree: ctx.frame.worktree, ctxDir: ctx.frame.ctxDir, schema, routerUp: ctx.routerUp, droppable: council }); } catch (e) {
     if (!(e instanceof SeatDropped) || !council) throw e;
@@ -122,8 +124,9 @@ async function child(ctx, stage, key, { seat, prompt, schema, tools = "read", le
     ctx.drop(seat, e.reason, stage);
     return null;
   }
-  // a vote run without a shell carries no run evidence, whatever it claims (tally: evidence beats drops)
+  // a vote or a finding run without a shell carries no run evidence, whatever it claims (tally: evidence beats drops)
   if (stage === "round2" && tools !== "shell" && Array.isArray(v)) v = v.map((x) => ({ ...x, evidence_run: false }));
+  if (stage === "round1" && tools !== "shell" && Array.isArray(v?.findings)) v = { ...v, findings: v.findings.map((x) => ({ ...x, evidence_run: false })) };
   save(outFile, v);
   markDone(ctx.runDir, stage, key);
   return v;
@@ -182,9 +185,8 @@ export function codeMoved(repoDir, q, head) {
 }
 
 function changedLines(f) {
-  const d = join(f.ctxDir, existsSync(join(f.ctxDir, "delta.patch")) ? "delta.patch" : "diff.patch");
   const out = new Map();
-  for (const [file, h] of parseHunks(readFileSync(d, "utf8"))) out.set(file, new Set([...h.right].filter(([, k]) => k === "add").map(([l]) => l)));
+  for (const [file, h] of parseHunks(readFileSync(scopePatch(f), "utf8"))) out.set(file, new Set([...h.right].filter(([, k]) => k === "add").map(([l]) => l)));
   return out;
 }
 
@@ -279,12 +281,18 @@ async function once(o, restart) {
   if (o.until === "frame") return finish("frame");
 
   // Setup (#38): checks run once, before round 1, only at full depth. A run from before depth existed is light.
-  // Later full-depth work (mutants, checked fixes: #37) belongs here too.
+  // Mutants (#37) run here too, after the checks, when a surviving one can be posted.
   const depth = run.depth ?? "light";
-  let setup = null;
+  let setup = null, mutants = null;
+  f.depth = depth;
   if (depth === "full") {
     setup = await runSetup(f, config, runDir, log);
+    const why = setup.reset_failed ? "the worktree reset failed"
+      : !run.lenses.includes("correctness") ? "the correctness lens does not run"
+      : !allowedSeverities(f.reviewNumber).has("should") ? `review ${f.reviewNumber} posts no should finding` : null;
+    mutants = why ? { ran: false, reason: why, mutants: [] } : await runMutants(f, config, runDir, log);
     f.setup = setup; // prompts.mjs renders it for round 1 and the votes only
+    f.mutants = mutants;
   } else markDone(runDir, "setup");
   f.checked = depthLine(depth, setup, safeText); // the "What was checked" line of the summary (#46)
   if (o.until === "setup") return finish("setup");
@@ -336,10 +344,17 @@ async function once(o, restart) {
   ]);
   enoughSeats();
   markDone(runDir, "round1");
-  const bySeat = {}, earlier = new Map();
+  // fid: the id the merge lists in a cluster's `members`, so proof follows the finding, not its file. It comes
+  // from the seat and the finding, so a resume that leaves out a dropped seat keeps every other fid.
+  const bySeat = {}, earlier = new Map(), fids = new Map();
   for (const { seat, lenses, v } of outs) {
     const id = seatId(seat);
-    (bySeat[id] ??= []).push(...v.findings.filter((x) => lenses.includes(x.lens)));
+    for (const x of v.findings.filter((y) => lenses.includes(y.lens))) {
+      const fid = `f${sha1(JSON.stringify([id, x.lens, x.file, x.line, x.title, x.case])).slice(0, 8)}`;
+      if (fids.has(fid)) { fids.get(fid).evidence_run ||= x.evidence_run; continue; }
+      fids.set(fid, { ...x, seat: id });
+      (bySeat[id] ??= []).push({ fid, ...x });
+    }
     for (const e of v.earlier ?? []) {
       const r = earlier.get(e?.thread_id) ?? { fixed: new Set(), open: new Set(), wrong: new Set(), why: "" };
       (e?.status === "fixed" ? r.fixed : e?.status === "wrong" ? r.wrong : r.open).add(id);
@@ -395,7 +410,7 @@ async function once(o, restart) {
   const votesOf = (c) => ballots.flatMap((b) => b.votes.filter((v) => v.id === c.id).map((v) => ({ ...v, seat: b.id })));
   // The tally runs over the seats that remain: a seat dropped in the vote no longer counts, not even its own find.
   const live = (c) => ({ ...c, seats: c.seats.filter((id) => !isDropped(id)), found: c.found.filter((id) => !isDropped(id)) });
-  const tallied = clusters.map((c) => ({ c, votes: votesOf(c), status: tally({ cluster: live(c), votes: votesOf(c) }) }));
+  const tallied = clusters.map((c) => ({ c, cluster: live(c), votes: votesOf(c), status: tally({ cluster: live(c), votes: votesOf(c) }) }));
   save(join(runDir, "tally.json"), tallied.map(({ c, status }) => ({ id: c.id, fp: c.fp, status })));
   markDone(runDir, "tally");
   if (o.until === "tally") return finish("tally");
@@ -434,8 +449,10 @@ async function once(o, restart) {
       if (o.stopping()) throw new ChildFailed("engine is stopping on a signal");
       const d = { decision: r.decision, raw: r.raw ?? null };
       if (d.decision === "unsure") {
+        // full depth: the record keeps the proof status, so an answered finding posts with its Unproven line
+        const finding = depth === "full" ? { ...view(c), proven: isProven(c, { cluster: live(c), votes }, fids) } : view(c);
         d.question = queueQuestion(repoState, {
-          pr: n, sha: f.headSha, fingerprint: c.fp, file: c.file, line: c.line, snippet, finding: view(c),
+          pr: n, sha: f.headSha, fingerprint: c.fp, file: c.file, line: c.line, snippet, finding,
           sides: { keep: c.evidence || c.case, drop: votes.find((v) => v.vote === "drop" && v.counter_case?.trim())?.counter_case ?? "No seat gave a counter-case." },
           failure: c.case,
         });
@@ -458,6 +475,14 @@ async function once(o, restart) {
   }
   markDone(runDir, "decide");
   if (o.until === "decide") return finish("decide");
+
+  // Proof (#37), full depth: see applyProof. A surviving mutant is a finding of the correctness lens, under the
+  // same delta and severity filters as a council finding.
+  if (depth === "full") {
+    applyProof(agreed, tallied, fids);
+    const mf = filterNew(mutantFindings(mutants), { reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: changedLines(f) }).keep;
+    agreed.push(...mf.map((m, i) => ({ ...m, id: `m${i + 1}`, found: [], seats: [], fp: fingerprint(m) })));
+  }
 
   // Compose (spec 6.8, 5.1): drop findings outside the effort's severities and above its limit, lowest severity first.
   // A finding Marco answered "post" or "ask-author" is posted at any effort: he decided (it is not marked applied unposted).
@@ -501,14 +526,27 @@ async function once(o, restart) {
     const h = byId.get(x.id);
     for (const id of x.also ?? []) {
       const c = byId.get(id);
-      if (c && !hosts.has(id) && !hostOf.has(id) && c.file === h.file && c.line === h.line) hostOf.set(id, x.id);
+      // a host carries one Unproven line: a finding of another proof status keeps its own comment
+      if (c && !hosts.has(id) && !hostOf.has(id) && c.file === h.file && c.line === h.line && !!c.proven === !!h.proven) hostOf.set(id, x.id);
     }
   }
   const folded = posted.filter((c) => hostOf.has(c.id));
+  // Full depth: an unproven finding says so in its body (engine text).
+  const mark = (c, b) => (depth === "full" && !c.proven ? `${b}\n\n${UNPROVEN}` : b);
   const items = posted.filter((c) => !hostOf.has(c.id)).map((c) => ({
     ...c, fps: [c.fp, ...folded.filter((o) => hostOf.get(o.id) === c.id).map((o) => o.fp)],
-    body: text.get(c.id) ?? `**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}`,
+    body: mark(c, text.get(c.id) ?? `**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}`),
   }));
+  // Checked fixes (#37), full depth: a suggestion that fails the tests, or lets a caught mutant pass, is posted
+  // as text only. Best effort, capped by review.mutants.total_s; a comment unfolded at post time is checked too.
+  const fixDeadline = Date.now() + config.review.mutants.total_s * 1000;
+  // A comment off the diff posts only its first line: its code never shows, so it is not checked.
+  const checked = async (x) => {
+    if (depth !== "full" || offDiff(x)) return x;
+    const r = await checkFix(f, config, runDir, x, mutants?.mutants ?? [], fixDeadline);
+    return r?.ok === false ? { ...x, body: directionOnly(x.body, r.why) } : r?.unchecked ? { ...x, body: uncheckedNote(x.body, r.unchecked) } : x;
+  };
+  for (const [i, x] of items.entries()) items[i] = await checked(x);
   // Misses of this run's final round 1: a resume that finished the part clears it.
   const missedNow = run.missed.filter((m) => !done(runDir, "round1", m.key) && !isDropped(m.seat));
   let ci = ciOf(f);
@@ -551,6 +589,7 @@ async function once(o, restart) {
       : one(composed.verdict),
     // The setup stage (#38) sets f.checked: the depth and the checks run.
     f.checked ? `What was checked: ${one(f.checked)}` : "",
+    depth === "full" ? proofLine(posted) : "",
     replies.length ? `Your questions:\n${replies.map(([i, a]) => `${i}. ${a}`).join("\n")}` : "",
     ...indexOf(inline),
     one(composed.praise),
@@ -587,13 +626,13 @@ async function once(o, restart) {
   if (now !== f.headSha) throw new HeadMoved(f.headSha, now);
   const clean = [];
   // A host the scan holds keeps none of its folded findings: they go out on their own, through the same scan.
-  const own = (c) => ({ ...c, fps: [c.fp], body: `**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}` });
+  const own = (c) => ({ ...c, fps: [c.fp], body: mark(c, `**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}`) });
   // One scan per item: each scan spawns gitleaks.
   const scans = new Map();
   const scan1 = (x) => { if (!scans.has(x)) scans.set(x, scanOutbound(x.answered ? redact(x.body) : x.body)); return scans.get(x); };
   const passes = (x) => scan1(x).ok;
   const heldHosts = new Set(items.filter((x) => !passes(x)).map((x) => x.id));
-  for (const c of folded.filter((c) => heldHosts.has(hostOf.get(c.id)))) { hostOf.delete(c.id); items.push(own(c)); }
+  for (const c of folded.filter((c) => heldHosts.has(hostOf.get(c.id)))) { hostOf.delete(c.id); items.push(await checked(own(c))); }
   for (const x of items) {
     // Marco answered "post" on a held comment: post it with the secret redacted. If it still hits, it stays out.
     const text = x.answered ? redact(x.body) : x.body;
@@ -729,7 +768,7 @@ async function followUp(o, head, pst, answered) {
     if (codeMoved(o.repoDir ?? process.cwd(), q, head)) { o.log(`question ${q.id}: the code at ${q.finding?.file}:${q.finding?.line} changed since ${q.sha}; its answer is dropped`); continue; }
     const f = q.finding;
     const text = f.secret ? heldText(repoState, n, pst.lastRunId, q.fingerprint)
-      : `**${f.severity}:** ${f.title}\n\n${f.case}${f.fix ? `\n\n${f.fix}` : ""}${q.answer === "ask-author" ? "\n\nCan you confirm this case?" : ""}`;
+      : `**${f.severity}:** ${f.title}\n\n${f.case}${f.fix ? `\n\n${f.fix}` : ""}${q.answer === "ask-author" ? "\n\nCan you confirm this case?" : ""}${f.proven === false ? `\n\n${UNPROVEN}` : ""}`;
     if (text && scanOutbound(text).ok) items.push({ q, text });
   }
   let url = null;

@@ -50,7 +50,10 @@ export const DEFAULTS = {
   // and max_parallel the round-1 children that run at once.
   // depth: light|full|auto (setup.mjs). checks: null = the built-in Go checks when go.mod is at the root.
   // core_paths has no default: auto asks for it once per repo.
-  review: { guidance: [], ci: "use", max_diff_lines: 6000, chunk_lines: 500, max_children: 60, max_parallel: 9, max_turns: 40, timeout_minutes: 10, depth: "light", checks: null },
+  review: { guidance: [], ci: "use", max_diff_lines: 6000, chunk_lines: 500, max_children: 60, max_parallel: 9, max_turns: 40, timeout_minutes: 10, depth: "light", checks: null,
+    // mutants (proof.mjs): at most max mutants, total_s for all of them (and again for the fix checks). Each run
+    // keeps the repeat and timeout_s of its check.
+    mutants: { max: 20, total_s: 900 } },
   hygiene: { enabled: true },
   // pr-respond: the review rounds on your own PR before it stops and reports
   respond: { max_rounds: 5 },
@@ -204,7 +207,10 @@ function validate(c, known) {
     need(typeof x.run === "string" && x.run, `${w}.run`, "a non-empty string");
     need(x.paths === undefined || strList(x.paths), `${w}.paths`, "an array of strings");
     for (const k of ["repeat", "timeout_s"]) need(x[k] === undefined || posInt(x[k]), `${w}.${k}`, "a positive integer");
+    need(x.mutate === undefined || typeof x.mutate === "boolean", `${w}.mutate`, "a boolean");
   });
+  need(isObj(c.review.mutants), "review.mutants", "an object");
+  for (const k of ["max", "total_s"]) need(posInt(c.review.mutants[k]), `review.mutants.${k}`, "a positive integer");
   for (const k of ["max_diff_lines", "chunk_lines", "max_children", "max_parallel", "max_turns", "timeout_minutes"]) need(posInt(c.review[k]), `review.${k}`, "a positive integer");
 }
 

@@ -24,7 +24,8 @@ sh "$SKILL_DIR/scripts/pr-review" review <n> [--repo owner/repo] \
   of the current directory.
 - `--effort auto` picks the level from the changed paths.
 - `--depth full` runs the setup checks (build, vet, tests) once before the
-  seats start. `light` (the default) runs nothing. `auto` picks one from the
+  seats start. It also runs mutants on the changed lines, marks findings
+  with no run evidence as unproven, and runs the tests on each suggested fix. `light` (the default) runs nothing. `auto` picks one from the
   changed paths and `review.core_paths`.
 - `--lens a,b` runs only these lenses. The review then never approves. Your
   own lenses are files in `~/.config/pr-review/lenses/<name>.md`.
