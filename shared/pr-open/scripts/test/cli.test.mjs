@@ -4,6 +4,7 @@ import { join } from "node:path";
 import assert from "node:assert/strict";
 import { initRepo, commit, git } from "./repo.mjs";
 import { ghStub } from "./gh.mjs";
+import { runTests } from "../lib/counts.mjs";
 import { main } from "../main.mjs";
 
 function capture(t) {
@@ -19,6 +20,7 @@ test("check: an unsigned commit exits 2 with JSON", async (t) => {
   const dir = initRepo({ origin: true });
   git(dir, "checkout", "-q", "-b", "feat/x");
   commit(dir, "a.txt", "a", "feat: a", { sign: false });
+  await runTests(dir, 'echo "ℹ pass 1"', { quiet: true });
   ghStub({ "repo view": { stdout: { defaultBranchRef: { name: "main" } } } });
   const cwd = process.cwd(); process.chdir(dir); t.after(() => process.chdir(cwd));
   const json = capture(t);
@@ -33,6 +35,7 @@ test("check without --base uses the default branch from gh, like open", async (t
   git(dir, "push", "-q", "origin", "trunk");
   git(dir, "checkout", "-q", "-b", "feat/x");
   commit(dir, "a.txt", "a", "feat: a");
+  await runTests(dir, 'echo "ℹ pass 1"', { quiet: true });
   ghStub({ "repo view": { stdout: { defaultBranchRef: { name: "trunk" } } } });
   const cwd = process.cwd(); process.chdir(dir); t.after(() => process.chdir(cwd));
   const json = capture(t);
@@ -60,6 +63,21 @@ test("a missing body file or a bad .pr-open.json exits 1", async (t) => {
   assert.equal(await main(["check", "--body-file", "nope.md"]), 1);
   writeFileSync(join(dir, ".pr-open.json"), "{");
   assert.equal(await main(["detect"]), 1);
+});
+
+test("check tests the body as open will post it, and needs a test record", async (t) => {
+  const dir = initRepo({ origin: true });
+  git(dir, "checkout", "-q", "-b", "feat/x");
+  commit(dir, "a.txt", "a", "feat: a");
+  ghStub({ "repo view": { stdout: { defaultBranchRef: { name: "main" } } } });
+  const cwd = process.cwd(); process.chdir(dir); t.after(() => process.chdir(cwd));
+  const json = capture(t);
+  assert.equal(await main(["check"]), 2);
+  assert.match(json().blocked, /no test run/);
+  assert.equal(await main(["test", "--command", 'echo "ℹ pass 1" # not llm']), 0);
+  const out = capture(t);
+  assert.equal(await main(["check"]), 2);
+  assert.deepEqual(out().ai, [{ where: "body", hits: ["llm"] }]);
 });
 
 test("unknown command exits 1", async (t) => {

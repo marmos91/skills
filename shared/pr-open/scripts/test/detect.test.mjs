@@ -42,7 +42,7 @@ test("Makefile and justfile targets", () => {
 });
 
 test("go.mod and Cargo.toml defaults", () => {
-  assert.deepEqual(pick(detect(tmp({ "go.mod": "module x\n" }), {})), { format: "gofmt -w .", lint: "go vet ./...", test: "go test ./..." });
+  assert.deepEqual(pick(detect(tmp({ "go.mod": "module x\n" }), {})), { format: "gofmt -w .", lint: "go vet ./...", test: "go test -v ./..." });
   assert.deepEqual(pick(detect(tmp({ "Cargo.toml": "[package]\n" }), {})), { format: "cargo fmt", lint: "cargo clippy -- -D warnings", test: "cargo test" });
 });
 

@@ -74,9 +74,18 @@ test("a run that commits or edits tracked files is blocked and writes no record"
   }
 });
 
+test("untracked artifacts of the run do not block the record", async () => {
+  const dir = initRepo();
+  const sha = git(dir, "rev-parse", "HEAD");
+  await runTests(dir, 'mkdir -p coverage && echo x > coverage/l && echo "ℹ pass 1"', { quiet: true });
+  assert.equal(readRecord(dir, sha).counts.passed, 1);
+  await runTests(dir, 'echo "ℹ pass 2"', { quiet: true });
+  assert.equal(readRecord(dir, sha).counts.passed, 2);
+});
+
 test("runTests on a dirty tree is blocked and writes no record", async () => {
   const dir = initRepo();
-  writeFileSync(join(dir, "new.txt"), "x");
+  writeFileSync(join(dir, "README.md"), "changed");
   await assert.rejects(runTests(dir, "true", { quiet: true }), Blocked);
   assert.equal(readRecord(dir, git(dir, "rev-parse", "HEAD")), null);
   assert.equal(existsSync(join(dir, ".git", "pr-open")), false);

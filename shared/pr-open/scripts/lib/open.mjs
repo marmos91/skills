@@ -15,11 +15,13 @@ const MARKER_RE = /^<!-- pr-open parent: (\S+) -->$/m;
 /** The parent branch a stacked PR body names, or null. pr-land (#40) reads this. */
 export const parentOf = (body) => MARKER_RE.exec(body)?.[1] ?? null;
 
-// Drop the `## Tests` section, up to the next `## ` heading; headings inside a ``` or ~~~ fence do not count.
+// Drop the `## Tests` section, up to the next `## ` heading; headings inside a fence do not count.
+// A fence closes only on the same character, at least as long (CommonMark), so nested samples stay whole.
 function dropTests(body) {
-  let fence = false, skip = false;
+  let fence = null, skip = false;
   return body.split("\n").filter((l) => {
-    if (/^ {0,3}(?:`{3,}|~{3,})/.test(l)) fence = !fence;
+    const m = /^ {0,3}(`{3,}|~{3,})/.exec(l);
+    if (m) { if (!fence) fence = m[1]; else if (m[1][0] === fence[0] && m[1].length >= fence.length) fence = null; }
     else if (!fence && /^## /.test(l)) skip = /^## Tests\b/.test(l);
     return !skip;
   }).join("\n");
@@ -63,6 +65,15 @@ export function resolveBase(dir, base) {
   return { base, def, ref: `origin/${base}` };
 }
 
+/** What check and open both gate: the record of HEAD, and the commits, title and body as posted (without the engine's stack lines). */
+export function gate(dir, { title, body, ref, sha }) {
+  const record = readRecord(dir, sha);
+  if (!record) throw new Blocked(`no test run for ${sha.slice(0, 7)}: run pr-open test`);
+  if (record.exit !== 0 || record.counts?.failed > 0) throw new Blocked(`tests failed at ${sha.slice(0, 7)}`, record);
+  const check = checkBranch(dir, ref, { title, body: buildBody({ body, record }), allow: readOverride(dir).allow ?? [], head: sha });
+  return { record, check };
+}
+
 export async function openPr(dir, { title, bodyFile, base: wanted, draft = false }) {
   if (!title) throw new Usage("--title is required");
   let body;
@@ -79,17 +90,12 @@ export async function openPr(dir, { title, bodyFile, base: wanted, draft = false
   if (existing) return { url: existing.url, number: existing.number, base, parent, warnings: ["a PR is already open"] };
 
   const sha = git(dir, "rev-parse", "HEAD");
-  const record = readRecord(dir, sha);
-  if (!record) throw new Blocked(`no test run for ${sha.slice(0, 7)}: run pr-open test`);
-  if (record.exit !== 0 || record.counts?.failed > 0) throw new Blocked(`tests failed at ${sha.slice(0, 7)}`, record);
+  const { record, check } = gate(dir, { title, body, ref, sha });
   if (!record.counts) warnings.push("counts not found in the test output");
-
-  // Checks and scans see the body as it will be posted, and the commits up to the tested sha.
-  const final = buildBody({ body, record, parent, parentPr: parentPr?.number });
-  const check = checkBranch(dir, ref, { title, body: final, allow: readOverride(dir).allow ?? [], head: sha });
   if (!check.ok) throw new Blocked("unsigned commits or AI mentions", check);
 
-  // Every commit's patch and message is pushed, not only the net diff.
+  // The secret scan sees everything that is posted: every commit's patch and message, the title, the final body.
+  const final = buildBody({ body, record, parent, parentPr: parentPr?.number });
   const hits = secretHits(`${git(dir, "log", "-p", "--cc", "--no-ext-diff", "--no-textconv", "--format=%B", `${ref}..${sha}`)}\n${title}\n${final}`);
   if (hits.length) throw new Blocked("the secret scan found a hit", { hits });
 

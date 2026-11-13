@@ -4,10 +4,9 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { checkBranch } from "./lib/check.mjs";
 import { Blocked, Usage, runTests } from "./lib/counts.mjs";
-import { detect, readOverride } from "./lib/detect.mjs";
-import { openPr, resolveBase } from "./lib/open.mjs";
+import { detect } from "./lib/detect.mjs";
+import { gate, openPr, resolveBase } from "./lib/open.mjs";
 
 const USAGE = `usage: pr-open detect
        pr-open test [--command "<cmd>"]
@@ -36,7 +35,7 @@ async function run(cmd, v) {
   if (cmd === "check") {
     let body = "";
     try { if (v["body-file"]) body = readFileSync(v["body-file"], "utf8"); } catch (e) { throw new Usage(`cannot read the body file: ${e.message}`); }
-    const r = checkBranch(dir, resolveBase(dir, v.base).ref, { title: v.title ?? "", body, allow: readOverride(dir).allow ?? [] });
+    const { check: r } = gate(dir, { title: v.title ?? "", body, ref: resolveBase(dir, v.base).ref, sha: git("rev-parse", "HEAD") });
     print(r);
     return r.ok ? 0 : 2;
   }
@@ -60,4 +59,4 @@ export async function main(argv) {
   }
 }
 
-if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) process.exit(await main(process.argv.slice(2)));
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) process.exitCode = await main(process.argv.slice(2)); // not process.exit: it can cut the JSON on a pipe

@@ -43,7 +43,7 @@ export function detect(dir, env = process.env) {
     ["Makefile", fromTargets(dir, "Makefile", "make")],
     ["justfile", fromTargets(dir, "justfile", "just")],
     ["Cargo.toml", fixed(dir, "Cargo.toml", { format: "cargo fmt", lint: "cargo clippy -- -D warnings", test: "cargo test" })],
-    ["go.mod", fixed(dir, "go.mod", { format: "gofmt -w .", lint: "go vet ./...", test: "go test ./..." })],
+    ["go.mod", fixed(dir, "go.mod", { format: "gofmt -w .", lint: "go vet ./...", test: "go test -v ./..." })],
   ].filter(([, get]) => get);
   const out = { source: {} };
   for (const key of KEYS) {

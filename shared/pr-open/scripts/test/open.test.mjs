@@ -52,6 +52,8 @@ test("buildBody: the tests line comes from the record and replaces an agent-writ
   assert.match(fenced, /```md\n## Tests\n\nEdit me\.\n```\n\n## Why\n\nBecause\./);
   const tilde = buildBody({ body: "Intro.\n\n~~~md\n## Tests\n\nEdit me.\n~~~\n\n   ```md\n## Tests\n   ```\n\n## Why\n\nBecause.\n", record });
   assert.match(tilde, /~~~md\n## Tests\n\nEdit me\.\n~~~\n\n   ```md\n## Tests\n   ```\n\n## Why/);
+  const nested = buildBody({ body: "Body.\n\n````md\n```md\n## Tests\n\nEdit me.\n```\n````\n\n## Why\n\nBecause.\n", record });
+  assert.match(nested, /````md\n```md\n## Tests\n\nEdit me\.\n```\n````\n\n## Why/);
   const none = buildBody({ body: "x", record: { ...record, counts: null } });
   assert.match(none, /`npm test` at abcdef1: counts not found in the output\./);
 });
@@ -249,6 +251,18 @@ test("a single-branch clone fetches the base into origin/<base>", async () => {
   ghStub(routes());
   const r = await openPr(dir, { title: "feat: b", bodyFile, base: "feat/a" });
   assert.equal(r.parent, "feat/a");
+});
+
+test("a parent branch with an AI word in its name can be stacked on", async () => {
+  const { dir, bodyFile } = await stack();
+  git(dir, "branch", "-m", "feat/b", "feat/b2");
+  git(dir, "checkout", "-q", "feat/a"); git(dir, "branch", "-m", "feat/a", "claude/fix-x"); git(dir, "push", "-q", "origin", "claude/fix-x");
+  git(dir, "checkout", "-q", "feat/b2");
+  await runTests(dir, 'echo "ℹ pass 1"', { quiet: true });
+  const gh = ghStub(routes({ "pr list --head claude/fix-x": { stdout: [{ number: 7 }] }, "pr list --head feat/b2": { stdout: [] } }));
+  const r = await openPr(dir, { title: "feat: b", bodyFile, base: "claude/fix-x" });
+  assert.equal(r.parent, "claude/fix-x");
+  assert.ok(created(gh));
 });
 
 test("a PR is already open: returned, no push, no create", async () => {

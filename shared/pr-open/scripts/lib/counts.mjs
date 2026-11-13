@@ -49,7 +49,7 @@ export function readRecord(dir, sha) {
 
 /** Run `command` at HEAD on a clean tree; record and return { sha, command, exit, counts, at }. */
 export async function runTests(dir, command, { quiet = false } = {}) {
-  if (git(dir, "status", "--porcelain")) throw new Blocked("the tree has changes: commit or stash, then run the tests");
+  if (git(dir, "status", "--porcelain", "--untracked-files=no")) throw new Blocked("the tree has changes: commit or stash, then run the tests");
   const sha = git(dir, "rev-parse", "HEAD");
   let out = "";
   const exit = await new Promise((resolve, reject) => {
@@ -60,8 +60,8 @@ export async function runTests(dir, command, { quiet = false } = {}) {
     p.on("error", reject);
     p.on("close", (code, signal) => resolve(code ?? (signal ? 128 : 1)));
   });
-  // The record must describe the tree that ran: a run that commits or edits tracked files gets none.
-  if (git(dir, "rev-parse", "HEAD") !== sha || git(dir, "status", "--porcelain")) throw new Blocked("the test run changed HEAD or the tree: commit the changes, then run the tests again");
+  // The record must describe the commit that ran: a run that commits or edits tracked files gets none. Untracked artifacts (coverage/, report.xml) are not in the commit.
+  if (git(dir, "rev-parse", "HEAD") !== sha || git(dir, "status", "--porcelain", "--untracked-files=no")) throw new Blocked("the test run changed HEAD or the tree: commit the changes, then run the tests again");
   const record = { sha, command, exit, counts: parseCounts(out), at: new Date().toISOString() };
   const f = recordPath(dir, sha);
   mkdirSync(join(f, ".."), { recursive: true });
