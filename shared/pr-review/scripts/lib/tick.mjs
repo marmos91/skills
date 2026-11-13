@@ -10,6 +10,7 @@ import { loadUserConfig, pickEffort, lowerEffort } from "./config.mjs";
 import { budgetLeft } from "./convergence.mjs";
 import { FINAL_STAGE, acquireLock, Locked, markDone, prState, savePrState, runDir, stateRoot, writeAtomic } from "./state.mjs";
 import { limiter } from "./limit.mjs";
+import { settleCoreQuestions } from "./setup.mjs";
 import { appliedAnswer, openQuestions, pendingAnswers, queueQuestion, questionWarnings } from "./questions.mjs";
 
 const sha1 = (s) => createHash("sha1").update(s).digest("hex");
@@ -100,6 +101,7 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
           continue;
         }
         if (kind === "approve" && q.answer === "post" && !(await approve(q))) continue; // CI pending: retry next tick
+        if (kind === "core-paths") { settleCoreQuestions(rs); continue; }
         appliedAnswer(rs, q.id);
       } catch (e) { log(`question ${q.id}: ${e.message}; retried next tick`); }
     }

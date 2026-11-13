@@ -18,9 +18,10 @@ import { limiter } from "./limit.mjs";
 import { decide as realDecide } from "./decider.mjs";
 import { linkFix } from "./reply.mjs";
 import { appliedAnswer, pendingAnswers, queueQuestion } from "./questions.mjs";
+import { cherryPicked, coreCandidates, depthLine, pickDepth, queueCoreQuestion, readCorePaths, runSetup, settleCoreQuestions } from "./setup.mjs";
 import { FINAL_STAGE, VERSION, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, usageByStage, writeAtomic } from "./state.mjs";
 
-export const STAGES = ["frame", "round1", "merge", "round2", "tally", "decide", "compose", "post"];
+export const STAGES = ["frame", "setup", "round1", "merge", "round2", "tally", "decide", "compose", "post"];
 const RANK = { must: 0, should: 1, nit: 2 };
 const sha1 = (s) => createHash("sha1").update(s).digest("hex");
 const readJson = (f) => JSON.parse(readFileSync(f, "utf8"));
@@ -46,7 +47,7 @@ const config0 = (o, maxDiffLines) => {
 
 /**
  * Review one PR. -> { exit: 0|3|4, summary, runDir?, url?, event?, questions?, planned? }
- * Options: repo, n, mode ("interactive"|"loop"), effort, dryRun, until, restart, lenses, maxDiffLines, configPath, repoDir;
+ * Options: repo, n, mode ("interactive"|"loop"), effort, depth, dryRun, until, restart, lenses, maxDiffLines, configPath, repoDir;
  * injectable gh, runChild, decide, frame, hygiene, log(line); lock=false when the caller holds it.
  */
 export async function review(opts) {
@@ -229,6 +230,26 @@ async function once(o, restart) {
     if (effort === "auto") effort = pickEffort(f.changedPaths, config);
     const lenses = Object.keys(config.lenses).filter((l) => config.lenses[l].enabled && (!o.lenses || o.lenses.includes(l)));
     if (!lenses.length) throw new SetupError("no lens runs: the requested lens is disabled in the config, or every lens is disabled");
+    let depth = o.depth ?? config.review.depth;
+    if (depth === "auto") {
+      const facts = { paths: f.changedPaths, diff: readFileSync(join(f.ctxDir, "diff.patch"), "utf8"), cherryPick: cherryPicked(f) };
+      settleCoreQuestions(repoState); // a drop answered since the last tick counts now
+      // repo config first (merged with no user-level value: loadConfig rejects one), then the saved answer
+      depth = pickDepth(facts, config.review.core_paths ?? readCorePaths(repoState));
+      // Asked only when the answer can change this PR's depth, once per repo.
+      if (depth === "needs-core") {
+        const candidates = coreCandidates(f);
+        if (mode === "interactive") {
+          // nothing ran: close the run, so status shows no open run and the rerun frames again
+          cleanupWorktree(runDir);
+          markDone(runDir, FINAL_STAGE);
+          return { exit: 3, runDir, corePaths: { repo, candidates }, summary: `core paths not set for ${repo}: ask which paths are core, then run: pr-review config core-paths ${repo} [glob...] (no glob = none). Candidates: ${candidates.join(" ") || "none"}` };
+        }
+        queueCoreQuestion(repoState, repo, candidates);
+        depth = pickDepth(facts, []);
+      }
+      log(`depth auto: ${depth}`);
+    }
     // Each diff part multiplies round 1: an effort the user did not pin (config, auto, the loop) steps down
     // until the PR fits max_children.
     const parts = f.chunks?.length ?? 1, cap = config.review.max_children;
@@ -245,7 +266,7 @@ async function once(o, restart) {
     }
     // A lens the user runs but this run skips (--lens, or off in the repo config) counts as failed: no APPROVE.
     // planned: the count for this run's merged config, which status shows.
-    save(runFile, { version: VERSION, effort, lenses, missing: Object.keys(userConfig.lenses).filter((l) => userConfig.lenses[l].enabled && !lenses.includes(l)), planned: count(effort) });
+    save(runFile, { version: VERSION, effort, depth, lenses, missing: Object.keys(userConfig.lenses).filter((l) => userConfig.lenses[l].enabled && !lenses.includes(l)), planned: count(effort) });
   }
   const run = readJson(runFile);
   const gone = run.lenses.filter((l) => !Object.hasOwn(config.lenses, l));
@@ -256,6 +277,17 @@ async function once(o, restart) {
 
   const finish = (stage, extra = {}) => { markDone(runDir, FINAL_STAGE); return { exit: 0, runDir, planned, summary: `stopped after ${stage}`, ...extra }; };
   if (o.until === "frame") return finish("frame");
+
+  // Setup (#38): checks run once, before round 1, only at full depth. A run from before depth existed is light.
+  // Later full-depth work (mutants, checked fixes: #37) belongs here too.
+  const depth = run.depth ?? "light";
+  let setup = null;
+  if (depth === "full") {
+    setup = await runSetup(f, config, runDir, log);
+    f.setup = setup; // prompts.mjs renders it for round 1 and the votes only
+  } else markDone(runDir, "setup");
+  f.checked = depthLine(depth, setup, safeText); // the "What was checked" line of the summary (#46)
+  if (o.until === "setup") return finish("setup");
 
   // Round 1 (spec 6.2) and the hygiene check (6.3.1) run side by side.
   // Dropped seats (turn limit, timeout) stay dropped for the rest of the run, also on resume.
@@ -517,7 +549,7 @@ async function once(o, restart) {
         ? `${blocking.length} earlier must ${blocking.length === 1 ? "finding is" : "findings are"} still open, so the PR is blocked.`
         : "The must findings block the merge.")
       : one(composed.verdict),
-    // Hook for the setup checks (#38): an engine line that says what was checked. Empty until frame sets f.checked.
+    // The setup stage (#38) sets f.checked: the depth and the checks run.
     f.checked ? `What was checked: ${one(f.checked)}` : "",
     replies.length ? `Your questions:\n${replies.map(([i, a]) => `${i}. ${a}`).join("\n")}` : "",
     ...indexOf(inline),

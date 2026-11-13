@@ -5,7 +5,8 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { queueQuestion } from "../lib/questions.mjs";
+import { openQuestions, queueQuestion } from "../lib/questions.mjs";
+import { queueCoreQuestion, readCorePaths } from "../lib/setup.mjs";
 import { stateRoot } from "../lib/state.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -76,6 +77,9 @@ test("status shows a stale lock, open questions, an unfinished run and the inter
   mkdirSync(join(run, "round1"), { recursive: true });
   writeFileSync(join(run, "run.json"), JSON.stringify({ effort: "low", lenses: ["correctness"], missing: [], planned: 9 }));
   writeFileSync(join(run, "frame.done"), "");
+  writeFileSync(join(run, "setup.done"), "");
+  mkdirSync(join(run, "setup"));
+  writeFileSync(join(run, "setup", "0123abcd.done"), ""); // a check, not a child
   writeFileSync(join(run, "round1", "all~0.done"), "");
   writeFileSync(join(fx.state, "pr", "7", "state.json"), JSON.stringify({ reviews: 2, replies: { t1: 1, t2: 2 } }));
   mkdirSync(join(fx.state, "pr", "7", "lock"));
@@ -273,4 +277,28 @@ test("status: lastRunTokens follows the newest run, also a finished dry run, and
   assert.equal(pr.lastRunTokens.round1.input, 10);
   assert.equal(pr.lastRunTokens.reply.input, 5);
   assert.equal(pr.lastRunTokens.total.input, 15);
+});
+
+test("config core-paths saves the globs (none too) and closes the core-paths question; --depth is checked", () => {
+  const fx = fixture();
+  process.env.XDG_STATE_HOME = fx.env.XDG_STATE_HOME;
+  const id = queueCoreQuestion(stateRoot("o/r"), "o/r", ["pkg/**"]);
+  let r = cli(fx, "config", "core-paths", "O/R", "pkg/**", "cmd/**");
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(readCorePaths(fx.state), ["pkg/**", "cmd/**"]);
+  assert.equal(openQuestions(fx.state).some((q) => q.id === id), false);
+  r = cli(fx, "config", "core-paths", "o/r");
+  assert.deepEqual(readCorePaths(fx.state), []);
+  assert.equal(cli(fx, "config", "nope").status, 1);
+  assert.match(cli(fx, "review", "1", "--depth", "deep").stderr, /--depth must be light\|full\|auto/);
+});
+
+test("review passes --depth to the engine", async () => {
+  const fx = fixture();
+  const { main } = await import("../main.mjs");
+  const cwd = process.cwd();
+  process.chdir(fx.dir);
+  let got;
+  try { await main(["review", "5", "--depth", "full"], { review: async (o) => { got = o; return { exit: 0, summary: "" }; } }); } finally { process.chdir(cwd); }
+  assert.equal(got.depth, "full");
 });

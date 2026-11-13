@@ -278,6 +278,19 @@ The engine writes one context folder. All seats read the same folder.
 The engine stops with a clear error when the diff is above a size cap. The
 builder sets the cap. There is no diff splitter in v1.
 
+### 6.1b Setup and depth
+
+`review.depth` (`--depth`) is `light`, `full` or `auto`. At `full` the
+engine runs the checks of `review.checks` once in the worktree, after frame
+and before round 1, and adds a short result to the brief of the round-1
+and vote seats. Checks
+run only for trusted authors, with a minimal environment, a time cap and a
+kill of the process group. A failed check is data for the seats, never a
+failed stage. `auto` is `light` for docs-only, test-only and cherry-picked
+PRs, and `full` for a change in `review.core_paths` or a new exported name.
+Later full-depth work (mutants, checked fixes) runs in this stage too. The
+guide (`docs/pr-review.md`, Depth and setup checks) has the details.
+
 ### 6.2 Round 1: independent review
 
 Each seat reviews with no view of the other seats. The `round1` key sets the

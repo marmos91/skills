@@ -15,13 +15,17 @@ and shows the result. `$SKILL_DIR` is the folder of this file. Full guide:
 
 ```sh
 sh "$SKILL_DIR/scripts/pr-review" review <n> [--repo owner/repo] \
-  [--effort low|medium|high|max|auto] [--lens a,b] [--max-diff-lines N] \
+  [--effort low|medium|high|max|auto] [--depth light|full|auto] \
+  [--lens a,b] [--max-diff-lines N] \
   [--dry-run] [--until <stage>] [--restart]
 ```
 
 - `<n>` is the PR number or URL. Without `--repo`, the engine uses the repo
   of the current directory.
 - `--effort auto` picks the level from the changed paths.
+- `--depth full` runs the setup checks (build, vet, tests) once before the
+  seats start. `light` (the default) runs nothing. `auto` picks one from the
+  changed paths and `review.core_paths`.
 - `--lens a,b` runs only these lenses. The review then never approves. Your
   own lenses are files in `~/.config/pr-review/lenses/<name>.md`.
 - `--max-diff-lines N` reviews a diff above `review.max_diff_lines` (exit
@@ -29,7 +33,7 @@ sh "$SKILL_DIR/scripts/pr-review" review <n> [--repo owner/repo] \
   splits into parts by folder, and round 1 reviews each part.
 - `--dry-run` posts nothing. It prints the planned children and models, and
   writes the review to a file in the run folder.
-- `--until <stage>` stops after `frame`, `round1`, `merge`, `round2`,
+- `--until <stage>` stops after `frame`, `setup`, `round1`, `merge`, `round2`,
   `tally`, `decide`, `compose` or `post`.
 - `--restart` starts a new run. Without it, a run for the same head SHA
   continues from the last finished child.
@@ -64,6 +68,18 @@ questions.
    does not start the finished children again.
 
 `ask-author` posts the finding as a question to the PR author.
+
+## Core paths (exit 3, summary starts with `core paths not set`)
+
+The depth is `auto` and the repo has no core paths yet. Ask this one time:
+
+1. Ask the user which paths are core: a change there gets a full review.
+   Offer the candidates from the summary as globs (for example `pkg/store/**`),
+   and "none".
+2. Save the answer:
+   `sh "$SKILL_DIR/scripts/pr-review" config core-paths <owner/repo> ['glob'...]`.
+   Quote each glob, or the shell expands it. For "none", give no glob. The engine saves it and never asks again.
+3. Run the same `review` command again.
 
 ## Show the result
 

@@ -11,6 +11,8 @@ Look for:
   rounding, time zone), an inverted condition, an off-by-one.
 - Broken callers. When a signature, a return value or a behavior changes,
   grep each caller and check that it still works.
+- A general claim ("X is never nil", "every caller does Y"): sweep the whole
+worktree for it, not only the diff. One counter-example is the finding.
 - A fix in one caller while the shared function stays broken.
 - Lost data: a swallowed error, writes in the wrong order, no transaction.
 - Scale: a check-then-write race, a list that only grows, a query per item,
