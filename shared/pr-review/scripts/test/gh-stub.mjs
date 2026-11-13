@@ -1,6 +1,6 @@
 // Test stand-in for `gh`. Routes live in $GH_STUB_DIR/routes.json:
 //   { "<key>": { "stdout": <json|string>, "stderr": "...", "exit": 0 } }
-// key = argv joined with spaces; for `api graphql` it is "graphql <OperationName>".
+// key = argv joined with spaces; for `api graphql` it is "graphql <OperationName>". A route can also be a prefix of the key.
 // Every mutation (GraphQL `mutation`, REST POST/PATCH/PUT/DELETE) is appended to mutations.jsonl.
 import { readFileSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
@@ -29,7 +29,9 @@ appendFileSync(join(dir, "calls.jsonl"), JSON.stringify({ key, argv, variables: 
 const routes = JSON.parse(readFileSync(join(dir, "routes.json"), "utf8"));
 // Paging: a route "graphql Op cursor=c1" answers the call whose cursor variable (cursor|cc|rc) is c1.
 const page = vars ? ["cursor", "cc", "rc"].filter((k) => typeof vars[k] === "string").map((k) => `${k}=${vars[k]}`).join(" ") : "";
-const r = (page && routes[`${key} ${page}`]) || routes[key];
+// Else the longest route that is a prefix of the key (word by word), for calls with free text such as `pr create --title`.
+const prefix = Object.keys(routes).filter((k) => key.startsWith(k + " ")).sort((a, b) => b.length - a.length)[0];
+const r = (page && routes[`${key} ${page}`]) || routes[key] || routes[prefix];
 if (!r) { console.error(`gh-stub: no route for key: ${key}`); process.exit(1); }
 if (r.stderr) process.stderr.write(r.stderr);
 if (r.stdout !== undefined) process.stdout.write(typeof r.stdout === "string" ? r.stdout : JSON.stringify(r.stdout));

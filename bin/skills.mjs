@@ -12,7 +12,7 @@ import { parseArgs } from "node:util";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PKG = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 const MARKER = ".skills-package"; // written into each copy: tells our copies from the user's
-const NEEDS = { "pr-review-loop": ["pr-review"] }; // pr-review-loop runs the pr-review engine from its sibling folder
+const NEEDS = { "pr-review-loop": ["pr-review"], "pr-open": ["pr-review"] }; // both run code from their sibling pr-review folder
 const USAGE = "usage: skills install|uninstall|list [--claude] [--pi] [--link] [skill...]";
 
 const isLink = (p) => { try { return lstatSync(p).isSymbolicLink(); } catch { return false; } };

@@ -75,6 +75,16 @@ test("install of one skill brings what it needs; --claude leaves pi alone", (t) 
   assert.equal(run(REPO, "install", "nope").status, 1);
 });
 
+test("install of pr-open brings pr-review, whose secret scan it imports", (t) => {
+  const { env, run } = setup(t);
+  const r = run(REPO, "install", "--claude", "pr-open");
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(readdirSync(env.CLAUDE_DIR).sort(), ["pr-open", "pr-review"]);
+  assert.deepEqual(readdirSync(env.BIN_DIR).sort(), ["pr-open", "pr-review"]);
+  const d = spawnSync(join(env.BIN_DIR, "pr-open"), ["detect"], { env, cwd: REPO, encoding: "utf8" });
+  assert.equal(d.status, 0, d.stderr);
+});
+
 test("a local copy is moved aside once; a link is replaced; --link links to the package", (t) => {
   const { env, run } = setup(t);
   mkdirSync(join(env.CLAUDE_DIR, "jev"), { recursive: true });

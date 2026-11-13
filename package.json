@@ -15,6 +15,7 @@
     "skills": "bin/skills.mjs",
     "pr-review": "shared/pr-review/scripts/pr-review",
     "pr-review-loop": "shared/pr-review-loop/scripts/pr-review-loop",
+    "pr-open": "shared/pr-open/scripts/pr-open",
     "jev": "shared/jev/jev.py",
     "repo-audit": "shared/repo-audit/scripts/audit.sh"
   },
@@ -29,7 +30,7 @@
     "!**/__pycache__/"
   ],
   "scripts": {
-    "test": "node --test test/*.test.mjs shared/pr-review/scripts/test/*.test.mjs && python3 -m unittest discover shared/jev && sh shared/repo-audit-fix/scripts/test/jev-gate.test.sh",
+    "test": "node --test test/*.test.mjs shared/pr-review/scripts/test/*.test.mjs shared/pr-open/scripts/test/*.test.mjs && python3 -m unittest discover shared/jev && sh shared/repo-audit-fix/scripts/test/jev-gate.test.sh",
     "check-pack": "node tools/check-pack.mjs",
     "smoke": "sh tools/smoke.sh"
   },
