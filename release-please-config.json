@@ -9,6 +9,7 @@
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
         "shared/jev/SKILL.md",
+        "shared/pr-open/SKILL.md",
         "shared/pr-review/SKILL.md",
         "shared/pr-review-loop/SKILL.md",
         "shared/pr-respond/SKILL.md",

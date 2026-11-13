@@ -16,7 +16,8 @@ The skills:
 - `jev` answers yes/no questions. `repo-audit-fix` uses it as a second check on plans.
 - `pr-review` reviews one GitHub PR with a council of different models and posts only the findings they agree on. It uses `jev` to settle splits.
 - `pr-review-loop` runs `pr-review` and thread replies for a whole repo on an interval.
-- `pr-respond` fixes the review findings on your own PR, round by round, until a round adds nothing new. It uses `jev` to decide each finding.
+- `pr-respond` fixes the review findings on your own PR, round by round, until a round adds nothing new. It uses `jev` to confirm each finding.
+- `pr-open` takes a finished branch to an open PR, with signed commits, real test counts and a secret scan.
 - `refute-root-cause` tries to disprove a claimed root cause. It stands alone.
 
 ## Install
@@ -49,7 +50,7 @@ links, run `./install.sh --rm`.
 | `pi/<skill>` | `~/.pi/agent/skills/<skill>` | `PI_DIR` |
 | `claude/<skill>` | `~/.claude/skills/<skill>` | `CLAUDE_DIR` |
 | `shared/<skill>` | both directories above | |
-| CLIs (`bin` in `package.json`) | `~/.local/bin/` (for example `jev`, `pr-review` and `pr-review-loop`) | `BIN_DIR` |
+| CLIs (`bin` in `package.json`) | `~/.local/bin/` (for example `jev`, `pr-review`, `pr-review-loop` and `pr-open`) | `BIN_DIR` |
 
 - You can run `install.sh` again after a pull. It is idempotent.
 - If a real directory has the same name, `install.sh` moves it to `<name>.pre-skills-repo`.
@@ -60,7 +61,7 @@ links, run `./install.sh --rm`.
 | Tool | Used by |
 |---|---|
 | `pi` CLI | `repo-audit`, `repo-audit-fix`, `review-lens.sh` (headless `pi -p` children); `refute-root-cause` (pi `subagent` tool); `pr-review` seats with `harness: pi`, and `auto` seats when no router answers (pi seats run only for trusted authors) |
-| `gh` (logged in) | `audit.sh issues`, `fix.sh plan` (issue map), `fix.sh` PR stage; `pr-review` and `pr-review-loop`: all GitHub reads and posts |
+| `gh` (logged in) | `audit.sh issues`, `fix.sh plan` (issue map), `fix.sh` PR stage; `pr-review` and `pr-review-loop`: all GitHub reads and posts; `pr-open`: opens the PR |
 | `node` | JSON steps in `audit.sh` and `fix.sh`; the `pr-review` engine |
 | `claude` CLI | `pr-review` seats with `harness: claude` (the default judge and first seat) |
 | `gitleaks` (optional) | `pr-review` outbound secret scan; built-in patterns without it |
@@ -222,6 +223,13 @@ See [pr-review.md](pr-review.md#the-loop) for one tick and the thread rules.
    It stops when a round has no new findings, or at `respond.max_rounds` (exit `5`).
 
 See [pr-review.md](pr-review.md#pr-respond) for the commands.
+
+### pr-open
+
+On the branch to open, ask "open a PR" in Claude Code or pi. The skill runs
+format and lint, shows a plan for the commits, runs `pr-open test`, writes
+the body and runs `pr-open open`. For a stack, pass the parent branch as the
+base. The steps are in `shared/pr-open/SKILL.md`.
 
 ## Troubleshooting
 
