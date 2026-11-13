@@ -40,6 +40,7 @@ const stages = {
       if (typeof x?.line !== "number") errs.push(`${p}.line: must be a number`);
       if (!Array.isArray(x?.found)) errs.push(`${p}.found: must be an array`);
       if (x?.reverses !== undefined && !str(x.reverses)) errs.push(`${p}.reverses: must be a non-empty string`);
+      if (x?.members !== undefined && !(Array.isArray(x.members) && x.members.every(str))) errs.push(`${p}.members: must be an array of finding ids`);
     });
   },
   compose(v, errs) {

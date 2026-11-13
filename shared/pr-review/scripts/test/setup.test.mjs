@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../lib/config.mjs";
-import { addsExportedApi, checksFor, cherryPicked, depthLine, pickDepth, readCorePaths, runCommand, runSetup, saveCorePaths, setCorePaths, setupBrief, queueCoreQuestion } from "../lib/setup.mjs";
+import { addsExportedApi, checksFor, cherryPicked, depthLine, pickDepth, readCorePaths, runCheck, runCommand, runSetup, saveCorePaths, setCorePaths, setupBrief, queueCoreQuestion } from "../lib/setup.mjs";
 import { answer, openQuestions, pendingAnswers } from "../lib/questions.mjs";
 import { CHECK_ENV_OK } from "../lib/env.mjs";
 
@@ -271,4 +271,14 @@ test("a failed reset keeps git's error text out of the brief", async () => {
   const s = await runSetup(f, cfg([{ name: "lock", run: "echo z > secret-name.txt; touch .git/index.lock" }]), runDir);
   assert.ok(s.reset_failed);
   assert.doesNotMatch(setupBrief(s, f.ctxDir), /index\.lock|secret-name/);
+});
+
+test("runCheck: passing runs cut short by the time cap are a time-out, not a pass", async () => {
+  const real = Date.now;
+  let calls = 0;
+  Date.now = () => real() + (++calls > 3 ? 1e9 : 0); // the cap ends right after the first run
+  try {
+    const r = await runCheck({ run: "true", repeat: 3 }, mkdtempSync(join(tmpdir(), "prr-cut-")), 60_000);
+    assert.deepEqual([r.exit, r.runs, r.timedOut], [0, 1, true]);
+  } finally { Date.now = real; }
 });

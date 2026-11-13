@@ -19,11 +19,11 @@ export const DEPTHS = ["light", "full", "auto"];
 export const GO_CHECKS = [
   { name: "go build", run: "go build ./...", paths: ["**/*.go", "**/go.mod", "**/go.sum"] },
   { name: "go vet", run: "go vet {dirs}", paths: ["**/*.go"] },
-  { name: "go test", run: "go test -race -count=1 {dirs}", paths: ["**/*.go"], repeat: 3, timeout_s: 900 },
+  { name: "go test", run: "go test -race -count=1 {dirs}", paths: ["**/*.go"], repeat: 3, timeout_s: 900, mutate: true },
 ];
 
 const DOC_PATHS = ["**/*.md", "docs/**", "**/*.txt", "**/*.rst", "**/*.png", "**/*.jpg", "**/*.svg"];
-const TEST_PATHS = ["**/*_test.go", "**/*.test.*", "**/*.spec.*", "**/test/**", "**/tests/**", "**/__tests__/**", "**/testdata/**"];
+export const TEST_PATHS = ["**/*_test.go", "**/*.test.*", "**/*.spec.*", "**/test/**", "**/tests/**", "**/__tests__/**", "**/testdata/**"];
 // An added line that declares an exported name, by file type: Go (capital name), JS/TS (export), Rust (pub).
 const EXPORTED = [
   [/\.go$/, /^\+(?:func (?:\([^)]*\) )?[A-Z]|type [A-Z])/],
@@ -122,16 +122,16 @@ export function checksFor(config, f) {
   for (const c of list) {
     const hit = c.paths ? f.changedPaths.filter((p) => any(c.paths, p)) : f.changedPaths;
     if (c.paths && !hit.length) continue;
-    let run = c.run;
+    let run = c.run, dirs;
     if (run.includes("{dirs}")) {
       // Paths come from the PR: quoted, and only folders of the head that still hold a matching file
       // (go vet fails on a folder whose last .go file the PR deletes).
       const holds = (d) => { try { return readdirSync(join(f.worktree, d)).some((n) => any(c.paths ?? ["**"], d === "." ? n : `${d.slice(2)}/${n}`)); } catch { return false; } };
-      const dirs = [...new Set(hit.map((p) => (p.includes("/") ? `./${dirname(p)}` : ".")))].filter(holds);
+      dirs = [...new Set(hit.map((p) => (p.includes("/") ? `./${dirname(p)}` : ".")))].filter(holds);
       if (!dirs.length) continue;
       run = run.replaceAll("{dirs}", dirs.map(quote).join(" "));
     }
-    out.push({ name: c.name, run, repeat: c.repeat ?? 1, timeout_s: c.timeout_s ?? 300 });
+    out.push({ name: c.name, run, repeat: c.repeat ?? 1, timeout_s: c.timeout_s ?? 300, ...(c.mutate && { mutate: true, ...(dirs && { dirs }) }) });
   }
   return out;
 }
@@ -163,6 +163,28 @@ export function runCommand(cmd, cwd, timeoutMs) {
 }
 
 /**
+ * One check: up to c.repeat runs, the first failure stops it, all within timeoutMs (> 0). Never throws on a failed run.
+ * Passing runs cut short by the time cap are a time-out: not every run passed.
+ */
+export async function runCheck(c, wt, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let r, runs = 0;
+  while (runs < c.repeat && Date.now() < deadline) {
+    runs++;
+    r = await runCommand(c.run, wt, deadline - Date.now());
+    if (stopping) throw new ChildFailed("engine is stopping on a signal"); // a killed check is not a result
+    if (r.exit !== 0) break;
+  }
+  return { ...r, runs, timedOut: r.timedOut || (r.exit === 0 && runs < c.repeat) };
+}
+
+/** Back to the PR head: tracked edits, commits and new files go. Throws when git fails. */
+export function resetWorktree(wt, sha) {
+  git(wt, ["reset", "-q", "--hard", sha]);
+  git(wt, ["clean", "-fdxq"]); // -x: ignored build output from one check must not reach the next
+}
+
+/**
  * Runs each check once (repeat: up to N runs, the first failure stops it), resumable by a marker per check.
  * A failed or timed-out check is a result, never an error. Results go to ctx/setup.json, where seats read them.
  */
@@ -175,9 +197,8 @@ export async function runSetup(f, config, runDir, log = () => {}) {
     const checks = [];
     let resetFailed = null;
     // Each check, and then the seats, start from the PR head: a check may write or commit in the worktree.
-    // -x: ignored build output from one check must not reach the next.
     const reset = () => {
-      try { git(f.worktree, ["reset", "-q", "--hard", f.headSha]); git(f.worktree, ["clean", "-fdxq"]); } catch (e) {
+      try { resetWorktree(f.worktree, f.headSha); } catch (e) {
         log(`setup: worktree reset failed: ${e.message}`);
         resetFailed = String(e.stderr || e.message).trim().slice(0, 200);
       }
@@ -189,15 +210,8 @@ export async function runSetup(f, config, runDir, log = () => {}) {
       const one = join(runDir, "setup", `${key}.json`);
       if (done(runDir, "setup", key)) { checks.push(JSON.parse(readFileSync(one, "utf8"))); continue; }
       log(`setup: ${c.name}: ${c.run}`);
-      const deadline = Date.now() + c.timeout_s * 1000;
-      let r, runs = 0;
-      while (runs < c.repeat && Date.now() < deadline) {
-        runs++;
-        r = await runCommand(c.run, f.worktree, deadline - Date.now());
-        if (stopping) throw new ChildFailed("engine is stopping on a signal"); // a killed check is not a result
-        if (r.exit !== 0) break;
-      }
-      const v = { name: c.name, command: c.run, exit: r.exit, timed_out: r.timedOut, runs, repeat: c.repeat, ok: r.exit === 0, output: redact(r.output.slice(-OUT_MAX)) };
+      const r = await runCheck(c, f.worktree, c.timeout_s * 1000);
+      const v = { name: c.name, command: c.run, exit: r.exit, timed_out: r.timedOut, runs: r.runs, repeat: c.repeat, ok: r.exit === 0 && !r.timedOut, output: redact(r.output.slice(-OUT_MAX)) };
       writeAtomic(one, JSON.stringify(v, null, 2) + "\n");
       markDone(runDir, "setup", key);
       checks.push(v);

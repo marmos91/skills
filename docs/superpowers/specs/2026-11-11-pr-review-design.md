@@ -288,8 +288,15 @@ run only for trusted authors, with a minimal environment, a time cap and a
 kill of the process group. A failed check is data for the seats, never a
 failed stage. `auto` is `light` for docs-only, test-only and cherry-picked
 PRs, and `full` for a change in `review.core_paths` or a new exported name.
-Later full-depth work (mutants, checked fixes) runs in this stage too. The
-guide (`docs/pr-review.md`, Depth and setup checks) has the details.
+At `full` the engine also runs mutants after the checks: one small break
+per added line of a changed file that has a test, with the check marked
+`mutate`. String literals and comments never change. A mutant that the tests do not catch becomes a `should` finding.
+A finding with no run evidence is marked unproven in its comment, and an
+unproven `must` stays `must` only when the tally agreed with no drop, or
+when you answered it. Before
+the post, the engine runs the tests on the first `suggestion` block of
+each comment; a fix that fails is posted as text only. The summary counts proven and unproven
+findings. The guide (`docs/pr-review.md`, Proven findings) has the details.
 
 ### 6.2 Round 1: independent review
 
