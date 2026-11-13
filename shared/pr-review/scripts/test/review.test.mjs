@@ -1877,7 +1877,8 @@ test("full depth: at review 3 an unproven must lowered to should does not post",
   const { r } = await go(fx, split(), { decide: async () => ({ decision: "agreed", raw: null }), depth: "full" });
   assert.equal(r.exit, 0, r.summary);
   assert.equal(posts(fx)[0].threads.length, 0);
-  assert.notEqual(posts(fx)[0].event, "REQUEST_CHANGES");
+  assert.equal(posts(fx)[0].event, "COMMENT", "the lowered finding still counts: no APPROVE");
+  assert.match(posts(fx)[0].body, /1 finding was left out/);
 });
 
 test("full depth: a `proven` the judge copies into a merge cluster proves nothing", async () => {
@@ -1899,4 +1900,31 @@ test("full depth: a comment held by the secret scan keeps its proof status in th
   const again = await go(fx, answers, { depth: "full" });
   assert.equal(again.r.exit, 0, again.r.summary);
   assert.match(posts(fx)[1].threads[0].body, /\[REDACTED:github-token\] leaks\n\nUnproven: no run in this review shows this case\.\n\n<!--/);
+});
+
+test("full depth: a held comment answered post goes out with its checked body: a failing suggestion keeps no code", async () => {
+  const fx = fixture({ "a.test.js": "" }); routes(fx); trusted(fx);
+  userConfig({ review: { checks: [MUTATE], mutants: { max: 1 } } });
+  const token = "ghp_" + "F".repeat(36);
+  const answers = happy({ compose: { body: "Summary.", comments: [{ id: "c1", body: `${suggest("const b = 99;")}\n\ntoken ${token}` }] } });
+  await go(fx, answers, { mode: "loop", depth: "full" });
+  const [q] = openQuestions(fx.state);
+  answer(fx.state, q.id, "post");
+  const again = await go(fx, answers, { depth: "full" });
+  assert.equal(again.r.exit, 0, again.r.summary);
+  const t = posts(fx)[1].threads[0].body;
+  assert.doesNotMatch(t, /const b = 99/);
+  assert.match(t, /Engine note: the suggested code was left out, because t failed/);
+  assert.equal(t.match(/Unproven/g).length, 1, "one engine Unproven line");
+});
+
+test("full depth: an answered finding posted by a follow-up says its suggestion was not checked", async () => {
+  const fx = fixture(); routes(fx); trusted(fx);
+  const answers = split({ merge: [C("c1", { found: [S0], fix: "```suggestion\nconst b = 99;\n```" })] });
+  await go(fx, answers, { mode: "loop", depth: "full", decide: async () => ({ decision: "unsure", raw: null }) });
+  const [q] = openQuestions(fx.state);
+  answer(fx.state, q.id, "post");
+  const again = await go(fx, answers, { depth: "full" });
+  assert.equal(again.r.exit, 0, again.r.summary);
+  assert.match(posts(fx)[1].threads[0].body, /const b = 99;\n```\n\nEngine note: this fix was not checked, because a follow-up runs no test\./);
 });

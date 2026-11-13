@@ -18,7 +18,7 @@ import { limiter } from "./limit.mjs";
 import { decide as realDecide } from "./decider.mjs";
 import { linkFix } from "./reply.mjs";
 import { appliedAnswer, pendingAnswers, queueQuestion } from "./questions.mjs";
-import { applyProof, checkFix, directionOnly, isProven, mutantFindings, proofLine, runMutants, scopePatch, uncheckedNote, UNPROVEN } from "./proof.mjs";
+import { applyProof, checkFix, directionOnly, isProven, mutantFindings, proofLine, runMutants, scopePatch, suggestionOf, uncheckedNote, UNPROVEN } from "./proof.mjs";
 import { cherryPicked, coreCandidates, depthLine, pickDepth, queueCoreQuestion, readCorePaths, runSetup, settleCoreQuestions } from "./setup.mjs";
 import { FINAL_STAGE, VERSION, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, usageByStage, writeAtomic } from "./state.mjs";
 
@@ -481,9 +481,6 @@ async function once(o, restart) {
   // same delta and severity filters as a council finding.
   if (depth === "full") {
     applyProof(agreed, tallied, fids);
-    // a must lowered for want of proof meets the severity floor again: review 3+ posts no should
-    const floor = allowedSeverities(f.reviewNumber);
-    agreed.splice(0, agreed.length, ...agreed.filter((c) => c.answered || floor.has(c.severity)));
     const mf = filterNew(mutantFindings(mutants), { reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: changedLines(f) }).keep;
     agreed.push(...mf.map((m, i) => ({ ...m, id: `m${i + 1}`, found: [], seats: [], fp: fingerprint(m) })));
   }
@@ -491,8 +488,11 @@ async function once(o, restart) {
   // Compose (spec 6.8, 5.1): drop findings outside the effort's severities and above its limit, lowest severity first.
   // A finding Marco answered "post" or "ask-author" is posted at any effort: he decided (it is not marked applied unposted).
   const allowed = new Set(config.post.severities);
+  // a must lowered for want of proof meets the severity floor again (review 3+ posts no should); it stays in
+  // agreed, so the verdict and the left-out count still see it
+  const floor = allowedSeverities(f.reviewNumber);
   const forced = agreed.filter((c) => c.answered);
-  const ranked = agreed.filter((c) => !c.answered && allowed.has(c.severity)).sort((a, b) => RANK[a.severity] - RANK[b.severity]);
+  const ranked = agreed.filter((c) => !c.answered && allowed.has(c.severity) && floor.has(c.severity)).sort((a, b) => RANK[a.severity] - RANK[b.severity]);
   const posted = [...forced, ...ranked.slice(0, Math.max(0, (config.post.maxFindings ?? Infinity) - forced.length))];
   const leftOut = agreed.length - posted.length;
   // Hygiene obeys the same severity floor and settled list as council findings (spec 7.5).
@@ -643,6 +643,9 @@ async function once(o, restart) {
     const s = scan1(x);
     if (s.ok) { clean.push({ ...x, body: text }); continue; }
     if (x.answered) continue;
+    // A later "post" answer posts this engine-final body (checked, marked). A held host keeps its own finding
+    // only: its folded findings went out on their own.
+    save(join(runDir, "held", `${x.fp}.json`), { body: redact(x.fps.length > 1 ? (await checked(own(x))).body : x.body) });
     // Held back. The question keeps the fingerprint and the rule ids only: never the text, which holds the secret.
     open.push(queueQuestion(repoState, {
       pr: n, sha: f.headSha, fingerprint: x.fp, file: x.file, line: x.line, snippet: "",
@@ -742,18 +745,9 @@ async function once(o, restart) {
   };
 }
 
-// The text of a comment that an earlier run composed and the secret scan held back, redacted; null when gone.
+// The engine-final body of a comment that an earlier run held back by the secret scan, redacted; null when gone.
 function heldText(repoState, n, runId, fp) {
-  const dir = join(repoState, "pr", String(n), "runs", runId ?? "");
-  try {
-    const c = readJson(join(dir, "clusters.json")).clusters.find((x) => x.fp === fp);
-    // Rebuild from the cluster when there is no composed comment of its own (a folded finding), or when the
-    // comment merged others (a held host): those were posted on their own, and must not be posted twice.
-    const cmt = readJson(join(dir, "compose", "compose.json")).comments.find((x) => x.id === c?.id);
-    const body = (cmt && !cmt.also?.length ? cmt.body : undefined)
-      ?? (c && `**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}`);
-    return body ? redact(body) : null;
-  } catch { return null; }
+  try { return readJson(join(repoState, "pr", String(n), "runs", runId ?? "", "held", `${fp}.json`)).body; } catch { return null; }
 }
 
 /**
@@ -771,9 +765,10 @@ async function followUp(o, head, pst, answered) {
     if (seen.has(sha1(`inline\0${head}\0${q.fingerprint}`))) { already.push(q.fingerprint); continue; }
     if (codeMoved(o.repoDir ?? process.cwd(), q, head)) { o.log(`question ${q.id}: the code at ${q.finding?.file}:${q.finding?.line} changed since ${q.sha}; its answer is dropped`); continue; }
     const f = q.finding;
-    const held = f.secret && heldText(repoState, n, pst.lastRunId, q.fingerprint);
-    const text = f.secret ? held && `${held}${f.proven === false ? `\n\n${UNPROVEN}` : ""}`
-      : `**${f.severity}:** ${f.title}\n\n${f.case}${f.fix ? `\n\n${f.fix}` : ""}${q.answer === "ask-author" ? "\n\nCan you confirm this case?" : ""}${f.proven === false ? `\n\n${UNPROVEN}` : ""}`;
+    // full depth (proven is set): a suggestion the follow-up cannot test says so, like one the time cap cut
+    const fix = f.fix && f.proven !== undefined && suggestionOf(f.fix) ? uncheckedNote(f.fix, "a follow-up runs no test") : f.fix;
+    const text = f.secret ? heldText(repoState, n, pst.lastRunId, q.fingerprint)
+      : `**${f.severity}:** ${f.title}\n\n${f.case}${fix ? `\n\n${fix}` : ""}${q.answer === "ask-author" ? "\n\nCan you confirm this case?" : ""}${f.proven === false ? `\n\n${UNPROVEN}` : ""}`;
     if (text && scanOutbound(text).ok) items.push({ q, text });
   }
   let url = null;

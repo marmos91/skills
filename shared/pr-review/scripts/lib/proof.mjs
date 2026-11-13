@@ -160,7 +160,7 @@ async function runWith(f, file, text, c, ms) {
 const withLine = (text, n, line) => { const l = text.split("\n"); l.splice(n - 1, 1, ...line.split("\n")); return l.join("\n"); };
 // The check at the head, once per command for mutants and fixes alike. A run the total cap cut short is no
 // result: it is not cached, and a resume tries again.
-const baseline = (f, runDir, c, ms) => cached(runDir, "mutants", `base-${sha1(`${c.command}\0${c.repeat}`)}`, async () => {
+const baseline = (f, runDir, c, ms) => cached(runDir, "mutants", `base-${sha1(`${c.command}\0${c.repeat}\0${c.timeout_s}`)}`, async () => {
   const r = await runWith(f, null, null, c, ms);
   return r.timed_out && ms < c.timeout_s * 1000 ? { unchecked: "the time cap ran out" } : r;
 });
@@ -183,19 +183,22 @@ export async function runMutants(f, config, runDir, log = () => {}) {
     const left = (m) => Math.min(m.timeout_s * 1000, deadline - Date.now());
     for (const m of planMutants(f, config)) {
       // keyed by the mutant itself: a config edited before a resume never reuses another mutant's run
-      const key = sha1(`${m.file}\0${m.line}\0${m.before}\0${m.after}\0${m.command}\0${m.repeat}`).slice(0, 16);
+      const key = sha1(`${m.file}\0${m.line}\0${m.before}\0${m.after}\0${m.command}\0${m.repeat}\0${m.timeout_s}`).slice(0, 16);
       const ran = done(runDir, "mutants", key);
       if (!ran && left(m) <= 0) { mutants.push({ ...m, status: "skipped", reason: "time cap" }); continue; }
       const b = await baseline(f, runDir, m, left(m));
       const why = b.unchecked ? "time cap" : headFails(b);
       if (why) { mutants.push({ ...m, status: "skipped", reason: why }); continue; }
       if (!ran && left(m) <= 0) { mutants.push({ ...m, status: "skipped", reason: "time cap" }); continue; }
-      mutants.push(await cached(runDir, "mutants", key, async () => {
+      const res = await cached(runDir, "mutants", key, async () => {
         log(`mutant: ${m.file}:${m.line} ${m.op}`);
-        const text = readFileSync(join(f.worktree, m.file), "utf8");
-        const r = await runWith(f, m.file, withLine(text, m.line, m.after), m, left(m));
+        const text = readFileSync(join(f.worktree, m.file), "utf8"), ms = left(m);
+        const r = await runWith(f, m.file, withLine(text, m.line, m.after), m, ms);
+        // the total cap cut it short: no result, and a resume runs it again
+        if (r.timed_out && ms < m.timeout_s * 1000) return { unchecked: "the time cap ran out" };
         return { ...m, ...r, status: r.timed_out ? "timeout" : r.exit === 0 ? "survived" : "killed" };
-      }));
+      });
+      mutants.push(res.unchecked ? { ...m, status: "skipped", reason: "time cap" } : res);
     }
   } catch (e) {
     if (e instanceof ChildFailed) throw e;
@@ -236,9 +239,9 @@ export const mutantFindings = (r) => (r?.mutants ?? []).filter((m) => m.status =
  */
 export const isProven = (c, t, fids) => c.proven === true
   || (t ? validVotes(t) : []).some((v) => v.vote === "keep" && v.evidence_run === true)
-  // a member counts only from a seat that found the cluster and still counts in the tally, in its lens: a wrong
-  // id from the judge proves nothing
-  || (Array.isArray(c.members) ? c.members : []).some((id) => { const x = fids.get(id); return x?.evidence_run === true && x.lens === c.lens && ((t?.cluster ?? c).found ?? []).includes(x.seat); });
+  // a member counts only as a round-1 finding of this run, from a seat that found the cluster and still counts in
+  // the tally, in its lens and file: a wrong id from the judge proves nothing
+  || (Array.isArray(c.members) ? c.members : []).some((id) => { const x = fids.get(id); return x?.evidence_run === true && x.lens === c.lens && x.file === c.file && ((t?.cluster ?? c).found ?? []).includes(x.seat); });
 
 export function applyProof(agreed, tallied, fids) {
   const byFp = new Map(tallied.map((t) => [t.cluster.fp, t]));
@@ -250,7 +253,7 @@ export function applyProof(agreed, tallied, fids) {
   return agreed;
 }
 
-const suggestionOf = (body) => fences(body).find((b) => b.closed && /^suggestion\b/.test(b.info));
+export const suggestionOf = (body) => fences(body).find((b) => b.closed && /^suggestion\b/.test(b.info));
 /**
  * Checks the first `suggestion` block of a comment: applies it at the comment line and runs the file's test
  * command, then the mutants of the file that the tests caught (they must still be caught). A check that
@@ -271,7 +274,7 @@ export async function checkFix(f, config, runDir, item, mutants, deadline) {
     if (b.unchecked) return cut;
     if (headFails(b)) return null;
     if (ms() <= 0) return cut;
-    return await cached(runDir, "fixes", sha1([item.fp, item.line, s.code, t.run, t.repeat].join("\0")), async () => {
+    return await cached(runDir, "fixes", sha1([item.fp, item.line, s.code, t.run, t.repeat, t.timeout_s].join("\0")), async () => {
       const text = readFileSync(p, "utf8"), n = text.split("\n").length;
       if (item.line < 1 || item.line > n) return null; // a line past the file would append the code
       const fixed = withLine(text, item.line, s.code), shift = fixed.split("\n").length - n;

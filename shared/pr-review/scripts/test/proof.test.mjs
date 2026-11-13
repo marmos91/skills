@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../lib/config.mjs";
@@ -278,4 +278,38 @@ test("checked fix: the verdict is per line and command, not per fingerprint", as
   assert.equal((await checkFix(f, config, runDir, s(2), [], far)).ok, false, "at line 2 it removes big()");
   config.review.checks[0].run = "exit 0";
   assert.deepEqual(await checkFix(f, config, runDir, s(2), [], far), { ok: true }, "another command checks again");
+});
+
+test("proof cache: an edited timeout_s runs the baseline, the mutants and the fix check again", async () => {
+  const count = join(mkdtempSync(join(tmpdir(), "prr-count-")), "n");
+  const { f, config, runDir } = wt({ count, check: { run: `echo x >> '${count}'; grep -q SLOW m.js && sleep 2; node m.test.mjs`, timeout_s: 1 } });
+  await runMutants(f, config, runDir);
+  const runs = () => readFileSync(count, "utf8").split("\n").length - 1;
+  const before = runs();
+  rmSync(join(runDir, "mutants.done"));
+  config.review.checks[0].timeout_s = 10;
+  await runMutants(f, config, runDir);
+  assert.equal(runs() - before, 4, "the baseline and the 3 mutants run again");
+  const item = { fp: "a", file: "m.js", line: 3, body: "x\n\n```suggestion\nexport const inc = (x) => x + 1; // SLOW\n```" };
+  config.review.checks[0].timeout_s = 1;
+  assert.equal((await checkFix(f, config, runDir, item, [], Date.now() + 60_000)).ok, false);
+  config.review.checks[0].timeout_s = 10;
+  assert.deepEqual(await checkFix(f, config, runDir, item, [], Date.now() + 60_000), { ok: true });
+});
+
+test("mutants: a mutant the total cap cuts short is skipped for the time cap, not cached as a timeout", async () => {
+  const { f, config, runDir } = wt({ check: { run: "git diff --quiet || sleep 5; node m.test.mjs", timeout_s: 60 } });
+  config.review.mutants.total_s = 2;
+  const r = await runMutants(f, config, runDir);
+  assert.deepEqual(r.mutants.map((m) => m.status), ["skipped", "skipped", "skipped"]);
+  assert.deepEqual([...new Set(r.mutants.map((m) => m.reason))], ["time cap"]);
+  assert.deepEqual(readdirSync(join(runDir, "mutants")).filter((n) => !n.startsWith("base-")), [], "a resume runs it again");
+  clean(f.worktree);
+});
+
+test("applyProof: a member from another file proves nothing", () => {
+  const fids = new Map([["f1", { seat: "s0", lens: "correctness", file: "b.js", evidence_run: true }]]);
+  const c = { id: "a", fp: "a", lens: "correctness", file: "a.js", severity: "must", found: ["s0"], seats: ["s0", "s1"], members: ["f1"] };
+  applyProof([c], [{ cluster: c, votes: [], status: "split" }], fids);
+  assert.deepEqual([c.proven, c.severity], [false, "should"]);
 });
