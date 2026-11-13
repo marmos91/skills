@@ -5,6 +5,8 @@ import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { lensFile } from "./config.mjs";
 import { allowedSeverities } from "./convergence.mjs";
+import { setupBrief } from "./setup.mjs";
+import { mutantBrief } from "./proof.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const read = (p) => readFileSync(join(ROOT, p), "utf8").trim();
@@ -63,7 +65,7 @@ function context(frame, extra = "", from) {
   ].join("\n");
 }
 
-const finding = (sev) => `{"lens": "<lens>", "severity": "${sev}", "file": "path/from/repo/root", "line": 42, "symbol": "functionName (optional)", "title": "short title", "case": "input or situation -> wrong result", "evidence": "trace through the code, or a command and its output", "fix": "smallest fix, with a snippet"}`;
+const finding = (sev) => `{"lens": "<lens>", "severity": "${sev}", "file": "path/from/repo/root", "line": 42, "symbol": "functionName (optional)", "title": "short title", "case": "input or situation -> wrong result", "evidence": "trace through the code, or a command and its output", "evidence_run": false, "fix": "smallest fix, with a snippet"}`;
 
 // The patch of a part goes into the prompt up to this many lines; above it the seat reads the file.
 const INLINE_LINES = 2500;
@@ -98,6 +100,13 @@ function partSection(frame, part) {
   ];
 }
 
+// Setup check and mutant results (full depth), for the seats that judge the code: not the judge or hygiene. Engine
+// data from the reviewer's config, so it sits outside the PR-data fence; the briefs print no PR text (names, not commands).
+const checks = (frame) => {
+  const b = [frame.setup ? setupBrief(frame.setup, frame.ctxDir) : "", mutantBrief(frame.mutants, frame.ctxDir)].filter(Boolean);
+  return b.length ? ["## Setup checks", ...b, ""] : [];
+};
+
 export function round1Prompt(frame, lenses, maxTurns, part) {
   const ctx = context(frame);
   const n = frame.reviewNumber ?? 1;
@@ -110,6 +119,7 @@ export function round1Prompt(frame, lenses, maxTurns, part) {
   return [
     ctx,
     "",
+    ...checks(frame),
     ...partSection(frame, part),
     "## Task",
     "You are one seat of a review council. Review this pull request alone. Other seats review it too, and you do not see their work.",
@@ -122,6 +132,7 @@ export function round1Prompt(frame, lenses, maxTurns, part) {
       : "- Review each line that the diff adds or changes. Read other code only to judge those lines.",
     "- `file` is relative to the repo root. `line` is a line number in the head version of that file.",
     "- Add `symbol` (the function or type) when the finding is about one symbol.",
+    ...(frame.shellOk ? ["- Set `evidence_run` to true on a finding only when you ran a command that shows it. Put the command and its output in `evidence`."] : []),
     ...(frame.reviewNumber > 1 && !part?.whole
       ? [`- Earlier findings of this reviewer that are still open are in ${earlier}. Check each one against the head. Report each in \`earlier\` with its \`thread_id\`, \`status\` (fixed, open, or wrong when the code shows that the finding was never right), and \`evidence\` (the line that fixes it, the line that still has the defect, or the line that proves it wrong). Do not repeat them in \`findings\`.`]
       : []),
@@ -141,6 +152,7 @@ export function votePrompt(frame, clusters, maxTurns) {
   return [
     context(frame),
     "",
+    ...checks(frame),
     "## Task",
     "You are one seat of a review council. Other seats found the findings below. Check each one against the code, and vote on it.",
     "",
@@ -152,6 +164,7 @@ export function votePrompt(frame, clusters, maxTurns) {
     "- keep: the case is real. The input or situation leads to the wrong result in the head commit.",
     "- drop: the case is wrong. `counter_case` must show why, with a concrete input or a trace: the guard at file:line, or the caller that never passes the bad value. A drop with no counter-case counts as no vote.",
     "- Do not drop for taste, for severity, or because the fix is hard. For a keep, `counter_case` is \"\".",
+    "- A finding that claims something general (\"X is never nil\", \"every caller does Y\") needs a sweep: grep the whole worktree for each use or caller, not only the diff. One counter-example decides the vote.",
     frame.shellOk
       ? "- `evidence_run`: true only when you ran a command in the worktree that proves your vote. Put the command and its output in `counter_case` for a drop."
       : "- You have no shell. Set `evidence_run` to false.",
@@ -192,13 +205,14 @@ export function mergePrompt(frame, findingsBySeat, earlierAgreed = [], maxTurns)
     "- `severity`: the severity that the best case supports. When the seats disagree and the case does not decide, take the lower one.",
     "- Mark each cluster that reverses an earlier agreed finding: it asks for the opposite of that finding, for example to add back what it asked to remove. Keep the cluster, and set `reverses` to the id of the earlier finding. The engine drops and records it. Leave `reverses` out on other clusters.",
     "- Do not add findings. Do not judge if a finding is real; the vote does that.",
+    "- `members` lists the `fid` of each finding in the cluster.",
     "- Number the clusters c1, c2, c3, and so on.",
     "",
     budget(maxTurns),
     "",
     "## Output",
     OUT,
-    '[{"id": "c1", "lens": "<lens>", "severity": "must|should|nit", "file": "path", "line": 42, "symbol": "optional", "title": "...", "case": "...", "evidence": "...", "fix": "...", "found": ["<seat id>"], "reverses": "<earlier id>"}]',
+    '[{"id": "c1", "lens": "<lens>", "severity": "must|should|nit", "file": "path", "line": 42, "symbol": "optional", "title": "...", "case": "...", "evidence": "...", "fix": "...", "found": ["<seat id>"], "members": ["f1"], "reverses": "<earlier id>"}]',
   ].join("\n");
 }
 
@@ -251,6 +265,9 @@ export function composePrompt(frame, agreed, guidance, { retracted = [], blockin
       : []),
     "- A finding with `outside: true` is not on a diff line. The engine lists it under \"Outside the diff\" from your comment: do not list it in `body`.",
     "- Keep each claim, severity and fix of the findings. Add no findings.",
+    ...(frame.depth === "full"
+      ? ["- State the evidence of each finding in its comment: the command and its output, or the trace. Do not write whether a finding is proven: the engine adds that."]
+      : []),
     "- Add no signature and no marker. The engine adds the marker.",
     "",
     "## Output",

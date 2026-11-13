@@ -48,14 +48,19 @@ export const DEFAULTS = {
   // max_turns and timeout_minutes: defaults for every child; a seat or a lens may set its own.
   // A diff above chunk_lines splits into parts that round 1 reviews one by one; max_children caps the cost of a PR,
   // and max_parallel the round-1 children that run at once.
-  review: { guidance: [], ci: "use", max_diff_lines: 6000, chunk_lines: 500, max_children: 60, max_parallel: 9, max_turns: 40, timeout_minutes: 10 },
+  // depth: light|full|auto (setup.mjs). checks: null = the built-in Go checks when go.mod is at the root.
+  // core_paths has no default: auto asks for it once per repo.
+  review: { guidance: [], ci: "use", max_diff_lines: 6000, chunk_lines: 500, max_children: 60, max_parallel: 9, max_turns: 40, timeout_minutes: 10, depth: "light", checks: null,
+    // mutants (proof.mjs): at most max mutants, total_s for all of them (and again for the fix checks). Each run
+    // keeps the repeat and timeout_s of its check.
+    mutants: { max: 20, total_s: 900 } },
   hygiene: { enabled: true },
   // pr-respond: the review rounds on your own PR before it stops and reports
   respond: { max_rounds: 5 },
 };
 
 // Repo level may set only these paths; "*" matches one lens name.
-const REPO_ALLOWED = ["lenses.*.enabled", "loop.authors_ignore", "loop.max_prs_per_run", "review.guidance", "effort_auto.high_paths", "hygiene.enabled"];
+const REPO_ALLOWED = ["lenses.*.enabled", "loop.authors_ignore", "loop.max_prs_per_run", "review.guidance", "review.core_paths", "effort_auto.high_paths", "hygiene.enabled"];
 
 // Strip // comments outside of strings.
 export function stripComments(text) {
@@ -193,6 +198,19 @@ function validate(c, known) {
   need(["use", "ignore"].includes(c.review.ci), "review.ci", "use or ignore");
   need(isObj(c.hygiene) && typeof c.hygiene.enabled === "boolean", "hygiene.enabled", "a boolean");
   need(isObj(c.respond) && posInt(c.respond.max_rounds), "respond.max_rounds", "a positive integer");
+  need(["light", "full", "auto"].includes(c.review.depth), "review.depth", "light, full or auto");
+  need(c.review.core_paths === undefined || strList(c.review.core_paths), "review.core_paths", "an array of strings");
+  need(c.review.checks === null || Array.isArray(c.review.checks), "review.checks", "an array");
+  (c.review.checks ?? []).forEach((x, i) => {
+    const w = `review.checks[${i}]`;
+    need(isObj(x) && typeof x.name === "string" && x.name, `${w}.name`, "a non-empty string");
+    need(typeof x.run === "string" && x.run, `${w}.run`, "a non-empty string");
+    need(x.paths === undefined || strList(x.paths), `${w}.paths`, "an array of strings");
+    for (const k of ["repeat", "timeout_s"]) need(x[k] === undefined || posInt(x[k]), `${w}.${k}`, "a positive integer");
+    need(x.mutate === undefined || typeof x.mutate === "boolean", `${w}.mutate`, "a boolean");
+  });
+  need(isObj(c.review.mutants), "review.mutants", "an object");
+  for (const k of ["max", "total_s"]) need(posInt(c.review.mutants[k]), `review.mutants.${k}`, "a positive integer");
   for (const k of ["max_diff_lines", "chunk_lines", "max_children", "max_parallel", "max_turns", "timeout_minutes"]) need(posInt(c.review[k]), `review.${k}`, "a positive integer");
 }
 
@@ -207,7 +225,12 @@ export function loadConfig({ userPath, repoText, cliPath, lensDir } = {}) {
   const path = cliPath ?? userPath;
   // A missing --config file is an error; a missing user file is not.
   if (cliPath && !existsSync(cliPath)) throw new Error(`config file not found: ${cliPath}`);
-  if (path && existsSync(path)) cfg = merge(cfg, parse(readFileSync(path, "utf8"), path));
+  if (path && existsSync(path)) {
+    const user = parse(readFileSync(path, "utf8"), path);
+    // One value per repo: a user-level list would hide every saved answer of `pr-review config core-paths`.
+    if (user?.review?.core_paths !== undefined) throw new Error(`review.core_paths is per repo: set it with pr-review config core-paths <owner/repo>, or in the repo's .pr-review.json (${path})`);
+    cfg = merge(cfg, user);
+  }
   if (repoText) {
     const repo = parse(repoText, ".pr-review.json");
     checkRepoKeys(repo);

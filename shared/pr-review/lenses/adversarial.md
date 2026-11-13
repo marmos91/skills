@@ -14,7 +14,7 @@ Attack these points:
   unicode, a path with spaces, a value that starts with `-`.
 - Order and time: two runs at the same time, a retry after a partial write,
   a crash between 2 steps, a time zone, a clock change.
-- Callers that the author did not read. Grep each changed function name.
+- Callers the author did not read. Grep the whole worktree for each changed name.
 - Error paths: what happens when the call fails, times out, or returns null.
 
 When the approach itself is weak, say so once. Name the simpler approach and

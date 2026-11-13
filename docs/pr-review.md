@@ -17,11 +17,12 @@ attribution.
 
 | Command | What it does |
 |---|---|
-| `pr-review review <n> [--repo o/r] [--effort low\|medium\|high\|max\|auto] [--lens a,b] [--max-diff-lines N] [--dry-run] [--until stage] [--restart]` | Review one PR. `<n>` is a number or a PR URL. Without `--repo`, the repo of the current directory |
+| `pr-review review <n> [--repo o/r] [--effort low\|medium\|high\|max\|auto] [--depth light\|full\|auto] [--lens a,b] [--max-diff-lines N] [--dry-run] [--until stage] [--restart]` | Review one PR. `<n>` is a number or a PR URL. Without `--repo`, the repo of the current directory |
 | `pr-review answer` | Print the open questions as JSON |
 | `pr-review answer <id> <post\|drop\|ask-author>` | Record your answer to one question |
 | `pr-review status [owner/repo]` | Questions, to-do items, review and reply counts per PR, lock holder, unfinished runs, tokens per stage, paused flag |
 | `pr-review doctor` | Merged config, the loaded lenses, a 1-token probe per seat, `gh auth status`, jev, gitleaks, claude login mode, planned child count per effort level |
+| `pr-review config core-paths <owner/repo> [glob...]` | Save the core paths of a repo for `auto` depth. No glob saves "none" |
 | `pr-review tick [owner/repo]` | One loop run (a tick); `pr-review-loop` calls it |
 | `pr-review-loop [owner/repo]` | One loop run (a tick) |
 | `pr-review-loop pause` / `resume [owner/repo]` | Stop or restart every tick for the repo |
@@ -31,6 +32,7 @@ attribution.
 Review flags:
 
 - `--effort auto` picks the level from the changed paths (see [Effort](#effort)).
+- `--depth light|full|auto` sets the review depth (see [Depth and setup checks](#depth-and-setup-checks)).
 - `--lens a,b` runs only these lenses. The other lenses count as failed, so
   the review never approves.
 - `--max-diff-lines N` raises `review.max_diff_lines` for this run.
@@ -54,7 +56,7 @@ result.
 
 ## One review, step by step
 
-The engine runs 8 stages in order: `frame`, `round1`, `merge`, `round2`,
+The engine runs 9 stages in order: `frame`, `setup`, `round1`, `merge`, `round2`,
 `tally`, `decide`, `compose`, `post`. Each stage, and each child inside a
 stage, writes a `.done` marker after its output passes the stage schema.
 `--until <stage>` stops after that stage.
@@ -104,6 +106,13 @@ Each part adds a full set of round-1 children. When the run needs more than
 down until the run fits. An explicit `--effort` stops the run with exit `1`
 instead. `review.max_parallel` (default 9) sets how many round-1 children run
 at the same time.
+
+### 1b. Setup
+
+At `full` depth the engine runs the setup checks once in the worktree, and
+gives a short result to the round-1 and vote seats (not the judge or the
+hygiene check). At `light` depth this stage does nothing.
+See [Depth and setup checks](#depth-and-setup-checks).
 
 ### 2. Round 1: independent review
 
@@ -387,6 +396,190 @@ Patterns match the whole path and ignore case (`Dockerfile*` matches
 below that, never below `low`. A repo can add patterns to `high_paths` only,
 so a PR cannot lower its own review.
 
+## Depth and setup checks
+
+`--depth` (config `review.depth`, default `light`) sets how much the engine
+runs before the seats start.
+
+- `light`: the seats read and vote. The engine runs nothing.
+- `full`: the engine runs the setup checks first (below).
+- `auto`: `full` or `light`, from the PR. The first match wins:
+  1. No path changed (the head is already in the base), or every changed path is docs (`*.md`, `docs/**`, `*.txt`, `*.rst`,
+     images) or tests (`*_test.go`, `*.test.*`, `*.spec.*`, `test/`,
+     `tests/`, `__tests__/`, `testdata/`): `light`.
+  2. Every commit of the PR has the `(cherry picked from commit ...)` line:
+     `light`.
+  3. A changed path matches `review.core_paths`: `full`.
+  4. The diff adds a line that declares an exported name, outside docs and
+     test files. The pattern follows the file type: Go (`.go`) `func Name` or
+     `type Name`; JS/TS (`.js`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.jsx`, ...)
+     `export`; Rust (`.rs`) `pub fn`, `pub struct`, `pub static`, and the
+     like. Other files never count: `export X=1` in a shell script is not an
+     API. `full`.
+  5. Otherwise: `light`.
+
+A run keeps its depth when it resumes.
+
+### Core paths
+
+`review.core_paths` is a list of globs. There is no default. The engine
+reads it from the repo's `.pr-review.json` first, then from the answer saved
+for the repo (`core-paths.json` in the repo's state folder). It is a per-repo
+value: the loader rejects it in the user config.
+
+When the depth is `auto`, the repo has no core paths yet, and the answer can
+change the depth of this PR (rules 1, 2 and 4 do not decide it):
+
+- An interactive review stops with exit `3` before round 1, and closes the
+  run (nothing ran). The summary
+  starts with `core paths not set` and lists candidates: the top folders that
+  changed most often on the base branch. Save the answer with
+  `pr-review config core-paths <owner/repo> [glob...]`, then run the review
+  again. No glob saves "none", so the engine never asks again.
+- The loop does not stop. It queues one question for the repo (once), and
+  reviews with no core paths until you answer. Answer with
+  `pr-review config core-paths`, or `drop` the question to save "none".
+  The question offers only `drop`. `config core-paths`
+  also closes the question, and a `drop` never replaces saved paths.
+
+### Setup checks
+
+Each check runs once per run, before round 1, in the run's worktree.
+`review.checks` is a list:
+
+```jsonc
+"checks": [
+  // {dirs}: the folders of the changed paths that match "paths", quoted.
+  { "name": "go vet", "run": "go vet {dirs}", "paths": ["**/*.go"] },
+  // "mutate": true: the test command for mutants and checked fixes (full depth).
+  { "name": "go test", "run": "go test -race -count=1 {dirs}", "paths": ["**/*.go"], "repeat": 3, "timeout_s": 900, "mutate": true },
+  { "name": "docs", "run": "sh scripts/check-docs.sh", "paths": ["docs/**"] }
+]
+```
+
+- A check runs only when a changed path matches its `paths`. With no
+  `paths`, it always runs. Use this for the repo's own checkers.
+- `repeat` (default 1) runs the command up to N times, to find a flaky
+  test. The first failed run stops it.
+- `timeout_s` (default 300) caps the whole check, all repeats included.
+- Without `review.checks`, a repo with `go.mod` at its root gets
+  `go build ./...`, `go vet {dirs}` and `go test -race -count=1 {dirs}`
+  (3 runs). `-race` needs cgo. Set `"checks": []` to run no check.
+- The results (command, exit code, number of runs, the last 4000 characters
+  of the output, redacted) go to `ctx/setup.json`. The round-1 and vote
+  seats get a short summary in their brief, in its own section outside the
+  PR-data block: it is engine data. It names each check and its result; the
+  commands, which hold PR paths, stay in `ctx/setup.json`. The judge and the hygiene check
+  do not. A failed check is a fact for the review, never a
+  failure of the run.
+- The review summary says what was checked, in an engine line after the
+  verdict, for example `What was checked: full depth; go build ok, go test failed (exit 1, run 2 of 3: flaky).`
+  At light depth: `What was checked: light depth, no checks run.`
+- Each check has a `.done` marker, keyed by its name, command, `repeat` and
+  `timeout_s`. A run that stopped during setup does not run a finished check
+  again, and runs a check that you edited. A run whose setup finished keeps
+  its results on resume, also when you edit `review.checks`: the seats of
+  that run already read them. Use `--restart` to run the checks again.
+- `{dirs}` keeps only the folders that still hold a file that matches
+  `paths`. A folder whose last `.go` file the PR deletes is left out.
+
+Checks run code from the PR. So:
+
+- They run only when every author is trusted (the shell rule of
+  [Trust and isolation](#trust-and-isolation), item 3). Otherwise the
+  summary says that the checks did not run.
+- `review.checks` and `review.depth` are user-level keys. A repo or a PR
+  cannot add a command.
+- The working folder is the worktree. The environment is the child
+  allowlist (item 2 of Trust and isolation) without the login and engine
+  variables (`ANTHROPIC_*`, `CLAUDE_*`), plus the Go build variables
+  (`GOPROXY`, `GOFLAGS`, `GOCACHE`, ...). Proxy and TLS variables stay. No
+  token reaches a check.
+- Each check runs in its own process group. At the time cap the engine sends
+  SIGTERM to the group, then SIGKILL after 3 s. When the command exits, the
+  rest of its group is killed too.
+- Before each check, and after the last one, the engine resets the worktree
+  to the PR head (`git reset --hard <head>`, `git clean -fd`), also when a
+  check made a commit. So a check never sees what an earlier check wrote, and
+  the seats read the PR head as it is. If the reset fails, the engine logs it and the seats' brief says
+  so. The worktree is removed with the run.
+- A check runs as you, with no file sandbox: it can read files in your
+  home folder. That is why it needs trusted authors.
+
+### Proven findings
+
+At `full` depth the engine also tries to prove the findings. It uses the
+setup runner, so the same rules apply: trusted authors only, the short
+environment, the process-group kill, and the `repeat` and `timeout_s` of
+the check. Before and after each run the engine resets the worktree to the
+PR head (`git reset --hard`, `git clean -fd`). At `light` depth none of this
+runs.
+
+**Mutants.** A check with `"mutate": true` is the test command. The Go
+default `go test` has it. A custom `review.checks` list needs it on its test
+command, or no mutant and no fix check runs.
+
+- Mutants run only when a surviving one can be posted: the correctness lens
+  runs, and the review can post `should` (reviews 1 and 2).
+- The engine picks the changed files that are not tests, match the check's
+  `paths`, and have a test that the command runs. The tests of a file are
+  the tracked test files in its folder, and the test files whose name starts
+  with the file's name (`a.go`: `a_test.go`; `lib/x.mjs`:
+  `test/x.test.mjs`). A command without `{dirs}` runs every test. With
+  `{dirs}`, the command gets the folder of the file and the folder of each of
+  its tests that the check's `paths` match. A test in a folder that the
+  command does not get does not count.
+- It mutates the added lines of the diff, or of the delta in a later review.
+  On each line it makes one small break, with the first of these that
+  applies: flip `==`/`!=`, move a boundary (`<` and `<=`, `>` and `>=`),
+  flip `&&`/`||`, negate `if (...)`, flip `true`/`false`, add 1 to a
+  number, drop a return value, drop a call statement (not a log or print
+  call).
+- String literals and comments never change. Only files with a known line
+  comment get mutants (`//`: JS, TS, Go, Rust, Java, C and similar; `#`:
+  Python, Ruby, shell). A line with an open string or comment gets none, and
+  neither does a line inside a backtick string, a block comment or a
+  triple-quoted string.
+- The engine runs the test command once with no break. When that fails or
+  times out, it runs no mutant for that command, and the brief says why.
+  Then it runs each mutant alone. A mutant survives only when every run
+  (`repeat`) passes.
+- A surviving mutant becomes a `should` finding of the correctness lens:
+  "No test catches a break in ...", with the mutant and the command. A caught
+  or timed-out mutant is not a finding.
+- `review.mutants` (user level): `max` (default 20) mutants and `total_s`
+  (default 900) for all runs. The results go to `ctx/mutants.json`, and each
+  seat gets a short summary. Each run has a `.done` marker, so a resumed run
+  does not run it again. A resume resets the worktree first. When a reset
+  fails, no mutant runs, and the brief says why.
+
+**Proof.** Run evidence is one of these:
+
+- a round-1 finding with `evidence_run` from a seat with a shell, that the
+  merge put in the cluster (`members`);
+- a keep vote with `evidence_run` that the tally counts (an eligible seat,
+  its first vote);
+- a surviving mutant.
+
+A finding with no run evidence gets the engine line "Unproven: no run in
+this review shows this case." in its comment. It is never dropped. Findings
+with and without run evidence are never put in one comment. An unproven
+`must` stays `must` only when the tally agreed with no drop, or when you
+answered it. Otherwise it is posted as `should`. The summary gets an engine
+line, for example `Proof: 2 proven, 1 unproven.`
+
+**Checked fixes.** Before the post, the engine applies the first
+`suggestion` block of each comment at its line and runs the file's test
+command. Then it runs the caught mutants of that file on the fixed code.
+When the tests fail, or a caught mutant is no longer caught, the comment
+keeps its text but loses its code blocks, and gets a short engine note.
+When the tests already fail at the PR head, the fix is not checked. The
+check is best effort, capped by `review.mutants.total_s`. When the cap stops
+a check, the comment keeps its code and gets the engine note "this fix was
+not checked". A plain code snippet, and a comment outside the diff (only its
+first line is posted), are not checked. An answered question keeps the
+proof status of its finding.
+
 ## CI
 
 The engine reads the checks of the head SHA (`statusCheckRollup`).
@@ -619,7 +812,7 @@ The engine merges 3 levels; a later level wins:
 The file is JSON with `//` comments allowed. Objects merge deep; arrays
 (`seats`, `lenses.*.seats`) replace. The repo level may set only
 `lenses.*.enabled` (only `false` has an effect), `loop.authors_ignore`, `loop.max_prs_per_run`,
-`review.guidance`, `hygiene.enabled`, and additions to
+`review.guidance`, `review.core_paths`, `hygiene.enabled`, and additions to
 `effort_auto.high_paths`. The loader rejects any other repo key. Seats, judge,
 decider and `round1` belong to you.
 
@@ -652,7 +845,7 @@ decider and `round1` belong to you.
     "max_replies_per_thread": 2,
     "effort": "auto"
   },
-  "review": { "guidance": [], "ci": "use", "max_diff_lines": 6000, "chunk_lines": 500, "max_children": 60, "max_parallel": 9, "max_turns": 40, "timeout_minutes": 10 },
+  "review": { "guidance": [], "ci": "use", "max_diff_lines": 6000, "chunk_lines": 500, "max_children": 60, "max_parallel": 9, "max_turns": 40, "timeout_minutes": 10, "depth": "light" },
   "hygiene": { "enabled": true }
 }
 ```

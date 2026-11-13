@@ -9,7 +9,7 @@ import { WHOLE_PR_LENSES, applyEffort, loadUserConfig, lowerEffort, pickEffort, 
 import { frame as realFrame, git, readTree, cleanupWorktree, HeadMoved, DiffTooLarge } from "./frame.mjs";
 import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.mjs";
 import { tally } from "./tally.mjs";
-import { filterNew, fingerprint } from "./convergence.mjs";
+import { allowedSeverities, filterNew, fingerprint } from "./convergence.mjs";
 import { diffLine, parseHunks, place } from "./hunks.mjs";
 import { verdict } from "./verdict.mjs";
 import { redact, scanOutbound } from "./secrets.mjs";
@@ -18,9 +18,11 @@ import { limiter } from "./limit.mjs";
 import { decide as realDecide } from "./decider.mjs";
 import { linkFix } from "./reply.mjs";
 import { appliedAnswer, pendingAnswers, queueQuestion } from "./questions.mjs";
+import { applyProof, checkFix, directionOnly, isProven, mutantFindings, proofLine, runMutants, scopePatch, suggestionOf, uncheckedNote, UNPROVEN } from "./proof.mjs";
+import { cherryPicked, coreCandidates, depthLine, pickDepth, queueCoreQuestion, readCorePaths, runSetup, settleCoreQuestions } from "./setup.mjs";
 import { FINAL_STAGE, VERSION, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, usageByStage, writeAtomic } from "./state.mjs";
 
-export const STAGES = ["frame", "round1", "merge", "round2", "tally", "decide", "compose", "post"];
+export const STAGES = ["frame", "setup", "round1", "merge", "round2", "tally", "decide", "compose", "post"];
 const RANK = { must: 0, should: 1, nit: 2 };
 const sha1 = (s) => createHash("sha1").update(s).digest("hex");
 const readJson = (f) => JSON.parse(readFileSync(f, "utf8"));
@@ -46,7 +48,7 @@ const config0 = (o, maxDiffLines) => {
 
 /**
  * Review one PR. -> { exit: 0|3|4, summary, runDir?, url?, event?, questions?, planned? }
- * Options: repo, n, mode ("interactive"|"loop"), effort, dryRun, until, restart, lenses, maxDiffLines, configPath, repoDir;
+ * Options: repo, n, mode ("interactive"|"loop"), effort, depth, dryRun, until, restart, lenses, maxDiffLines, configPath, repoDir;
  * injectable gh, runChild, decide, frame, hygiene, log(line); lock=false when the caller holds it.
  */
 export async function review(opts) {
@@ -110,10 +112,11 @@ async function child(ctx, stage, key, { seat, prompt, schema, tools = "read", le
   mkdirSync(dir, { recursive: true });
   const promptFile = join(dir, `${key}.prompt`);
   const limited = withLimits(ctx.config, seat, lens, stage);
-  // pi has no sandboxed shell: decide before the prompt, so a pi seat is never told it can run a repro
+  // pi has no sandboxed shell: decide before the prompt, so a pi seat is never told it can run a repro.
+  // The prompt follows the tools the child gets: a read-only child is never told to run anything.
   const pi = (await harnessFor(limited, ctx.routerUp)) === "pi";
   if (pi) tools = "read";
-  writeFileSync(promptFile, prompt(limited, pi ? { ...ctx.frame, shellOk: false } : ctx.frame));
+  writeFileSync(promptFile, prompt(limited, tools !== "shell" ? { ...ctx.frame, shellOk: false } : ctx.frame));
   let v;
   try { v = await ctx.runChild({ trusted: ctx.frame.shellOk, seat: limited, tools, promptFile, outFile, worktree: ctx.frame.worktree, ctxDir: ctx.frame.ctxDir, schema, routerUp: ctx.routerUp, droppable: council }); } catch (e) {
     if (!(e instanceof SeatDropped) || !council) throw e;
@@ -121,8 +124,9 @@ async function child(ctx, stage, key, { seat, prompt, schema, tools = "read", le
     ctx.drop(seat, e.reason, stage);
     return null;
   }
-  // a vote run without a shell carries no run evidence, whatever it claims (tally: evidence beats drops)
+  // a vote or a finding run without a shell carries no run evidence, whatever it claims (tally: evidence beats drops)
   if (stage === "round2" && tools !== "shell" && Array.isArray(v)) v = v.map((x) => ({ ...x, evidence_run: false }));
+  if (stage === "round1" && tools !== "shell" && Array.isArray(v?.findings)) v = { ...v, findings: v.findings.map((x) => ({ ...x, evidence_run: false })) };
   save(outFile, v);
   markDone(ctx.runDir, stage, key);
   return v;
@@ -181,9 +185,8 @@ export function codeMoved(repoDir, q, head) {
 }
 
 function changedLines(f) {
-  const d = join(f.ctxDir, existsSync(join(f.ctxDir, "delta.patch")) ? "delta.patch" : "diff.patch");
   const out = new Map();
-  for (const [file, h] of parseHunks(readFileSync(d, "utf8"))) out.set(file, new Set([...h.right].filter(([, k]) => k === "add").map(([l]) => l)));
+  for (const [file, h] of parseHunks(readFileSync(scopePatch(f), "utf8"))) out.set(file, new Set([...h.right].filter(([, k]) => k === "add").map(([l]) => l)));
   return out;
 }
 
@@ -229,6 +232,26 @@ async function once(o, restart) {
     if (effort === "auto") effort = pickEffort(f.changedPaths, config);
     const lenses = Object.keys(config.lenses).filter((l) => config.lenses[l].enabled && (!o.lenses || o.lenses.includes(l)));
     if (!lenses.length) throw new SetupError("no lens runs: the requested lens is disabled in the config, or every lens is disabled");
+    let depth = o.depth ?? config.review.depth;
+    if (depth === "auto") {
+      const facts = { paths: f.changedPaths, diff: readFileSync(join(f.ctxDir, "diff.patch"), "utf8"), cherryPick: cherryPicked(f) };
+      settleCoreQuestions(repoState); // a drop answered since the last tick counts now
+      // repo config first (merged with no user-level value: loadConfig rejects one), then the saved answer
+      depth = pickDepth(facts, config.review.core_paths ?? readCorePaths(repoState));
+      // Asked only when the answer can change this PR's depth, once per repo.
+      if (depth === "needs-core") {
+        const candidates = coreCandidates(f);
+        if (mode === "interactive") {
+          // nothing ran: close the run, so status shows no open run and the rerun frames again
+          cleanupWorktree(runDir);
+          markDone(runDir, FINAL_STAGE);
+          return { exit: 3, runDir, corePaths: { repo, candidates }, summary: `core paths not set for ${repo}: ask which paths are core, then run: pr-review config core-paths ${repo} [glob...] (no glob = none). Candidates: ${candidates.join(" ") || "none"}` };
+        }
+        queueCoreQuestion(repoState, repo, candidates);
+        depth = pickDepth(facts, []);
+      }
+      log(`depth auto: ${depth}`);
+    }
     // Each diff part multiplies round 1: an effort the user did not pin (config, auto, the loop) steps down
     // until the PR fits max_children.
     const parts = f.chunks?.length ?? 1, cap = config.review.max_children;
@@ -245,7 +268,7 @@ async function once(o, restart) {
     }
     // A lens the user runs but this run skips (--lens, or off in the repo config) counts as failed: no APPROVE.
     // planned: the count for this run's merged config, which status shows.
-    save(runFile, { version: VERSION, effort, lenses, missing: Object.keys(userConfig.lenses).filter((l) => userConfig.lenses[l].enabled && !lenses.includes(l)), planned: count(effort) });
+    save(runFile, { version: VERSION, effort, depth, lenses, missing: Object.keys(userConfig.lenses).filter((l) => userConfig.lenses[l].enabled && !lenses.includes(l)), planned: count(effort) });
   }
   const run = readJson(runFile);
   const gone = run.lenses.filter((l) => !Object.hasOwn(config.lenses, l));
@@ -256,6 +279,23 @@ async function once(o, restart) {
 
   const finish = (stage, extra = {}) => { markDone(runDir, FINAL_STAGE); return { exit: 0, runDir, planned, summary: `stopped after ${stage}`, ...extra }; };
   if (o.until === "frame") return finish("frame");
+
+  // Setup (#38): checks run once, before round 1, only at full depth. A run from before depth existed is light.
+  // Mutants (#37) run here too, after the checks, when a surviving one can be posted.
+  const depth = run.depth ?? "light";
+  let setup = null, mutants = null;
+  f.depth = depth;
+  if (depth === "full") {
+    setup = await runSetup(f, config, runDir, log);
+    const why = setup.reset_failed ? "the worktree reset failed"
+      : !run.lenses.includes("correctness") ? "the correctness lens does not run"
+      : !allowedSeverities(f.reviewNumber).has("should") ? `review ${f.reviewNumber} posts no should finding` : null;
+    mutants = why ? { ran: false, reason: why, mutants: [] } : await runMutants(f, config, runDir, log);
+    f.setup = setup; // prompts.mjs renders it for round 1 and the votes only
+    f.mutants = mutants;
+  } else markDone(runDir, "setup");
+  f.checked = depthLine(depth, setup, safeText); // the "What was checked" line of the summary (#46)
+  if (o.until === "setup") return finish("setup");
 
   // Round 1 (spec 6.2) and the hygiene check (6.3.1) run side by side.
   // Dropped seats (turn limit, timeout) stay dropped for the rest of the run, also on resume.
@@ -304,10 +344,17 @@ async function once(o, restart) {
   ]);
   enoughSeats();
   markDone(runDir, "round1");
-  const bySeat = {}, earlier = new Map();
+  // fid: the id the merge lists in a cluster's `members`, so proof follows the finding, not its file. It comes
+  // from the seat and the finding, so a resume that leaves out a dropped seat keeps every other fid.
+  const bySeat = {}, earlier = new Map(), fids = new Map();
   for (const { seat, lenses, v } of outs) {
     const id = seatId(seat);
-    (bySeat[id] ??= []).push(...v.findings.filter((x) => lenses.includes(x.lens)));
+    for (const x of v.findings.filter((y) => lenses.includes(y.lens))) {
+      const fid = `f${sha1(JSON.stringify([id, x.lens, x.file, x.line, x.title, x.case])).slice(0, 8)}`;
+      if (fids.has(fid)) { fids.get(fid).evidence_run ||= x.evidence_run; continue; }
+      fids.set(fid, { ...x, seat: id });
+      (bySeat[id] ??= []).push({ fid, ...x });
+    }
     for (const e of v.earlier ?? []) {
       const r = earlier.get(e?.thread_id) ?? { fixed: new Set(), open: new Set(), wrong: new Set(), why: "" };
       (e?.status === "fixed" ? r.fixed : e?.status === "wrong" ? r.wrong : r.open).add(id);
@@ -337,7 +384,8 @@ async function once(o, restart) {
     keys.some((key) => key === c.fp || (agreedLens.has(key) && agreedLens.get(key) === c.lens)));
   const all = raw.filter((c) => run.lenses.includes(c.lens)).map((c) => {
     const seats = [...new Set(seatsForLens(config, c.lens).map(seatId))].filter((id) => !isDropped(id));
-    return { ...c, found: [...new Set(c.found)].filter((s) => seats.includes(s)), seats, fp: fingerprint(c) };
+    // proof comes from engine data only: a `proven` the judge copied into a cluster is dropped
+    return { ...c, found: [...new Set(c.found)].filter((s) => seats.includes(s)), seats, fp: fingerprint(c), proven: undefined };
   });
   const reversed = all.filter((c) => c.reverses), linked = all.filter((c) => !c.reverses && resolvedThread(c));
   const { keep: clusters, dropped } = filterNew(all.filter((c) => !c.reverses && !resolvedThread(c)), {
@@ -363,7 +411,7 @@ async function once(o, restart) {
   const votesOf = (c) => ballots.flatMap((b) => b.votes.filter((v) => v.id === c.id).map((v) => ({ ...v, seat: b.id })));
   // The tally runs over the seats that remain: a seat dropped in the vote no longer counts, not even its own find.
   const live = (c) => ({ ...c, seats: c.seats.filter((id) => !isDropped(id)), found: c.found.filter((id) => !isDropped(id)) });
-  const tallied = clusters.map((c) => ({ c, votes: votesOf(c), status: tally({ cluster: live(c), votes: votesOf(c) }) }));
+  const tallied = clusters.map((c) => ({ c, cluster: live(c), votes: votesOf(c), status: tally({ cluster: live(c), votes: votesOf(c) }) }));
   save(join(runDir, "tally.json"), tallied.map(({ c, status }) => ({ id: c.id, fp: c.fp, status })));
   markDone(runDir, "tally");
   if (o.until === "tally") return finish("tally");
@@ -402,8 +450,10 @@ async function once(o, restart) {
       if (o.stopping()) throw new ChildFailed("engine is stopping on a signal");
       const d = { decision: r.decision, raw: r.raw ?? null };
       if (d.decision === "unsure") {
+        // full depth: the record keeps the proof status, so an answered finding posts with its Unproven line
+        const finding = depth === "full" ? { ...view(c), proven: isProven(c, { cluster: live(c), votes }, fids) } : view(c);
         d.question = queueQuestion(repoState, {
-          pr: n, sha: f.headSha, fingerprint: c.fp, file: c.file, line: c.line, snippet, finding: view(c),
+          pr: n, sha: f.headSha, fingerprint: c.fp, file: c.file, line: c.line, snippet, finding,
           sides: { keep: c.evidence || c.case, drop: votes.find((v) => v.vote === "drop" && v.counter_case?.trim())?.counter_case ?? "No seat gave a counter-case." },
           failure: c.case,
         });
@@ -427,11 +477,22 @@ async function once(o, restart) {
   markDone(runDir, "decide");
   if (o.until === "decide") return finish("decide");
 
+  // Proof (#37), full depth: see applyProof. A surviving mutant is a finding of the correctness lens, under the
+  // same delta and severity filters as a council finding.
+  if (depth === "full") {
+    applyProof(agreed, tallied, fids);
+    const mf = filterNew(mutantFindings(mutants), { reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: changedLines(f) }).keep;
+    agreed.push(...mf.map((m, i) => ({ ...m, id: `m${i + 1}`, found: [], seats: [], fp: fingerprint(m) })));
+  }
+
   // Compose (spec 6.8, 5.1): drop findings outside the effort's severities and above its limit, lowest severity first.
   // A finding Marco answered "post" or "ask-author" is posted at any effort: he decided (it is not marked applied unposted).
   const allowed = new Set(config.post.severities);
+  // a must lowered for want of proof meets the severity floor again (review 3+ posts no should); it stays in
+  // agreed, so the verdict and the left-out count still see it
+  const floor = allowedSeverities(f.reviewNumber);
   const forced = agreed.filter((c) => c.answered);
-  const ranked = agreed.filter((c) => !c.answered && allowed.has(c.severity)).sort((a, b) => RANK[a.severity] - RANK[b.severity]);
+  const ranked = agreed.filter((c) => !c.answered && allowed.has(c.severity) && floor.has(c.severity)).sort((a, b) => RANK[a.severity] - RANK[b.severity]);
   const posted = [...forced, ...ranked.slice(0, Math.max(0, (config.post.maxFindings ?? Infinity) - forced.length))];
   const leftOut = agreed.length - posted.length;
   // Hygiene obeys the same severity floor and settled list as council findings (spec 7.5).
@@ -469,14 +530,27 @@ async function once(o, restart) {
     const h = byId.get(x.id);
     for (const id of x.also ?? []) {
       const c = byId.get(id);
-      if (c && !hosts.has(id) && !hostOf.has(id) && c.file === h.file && c.line === h.line) hostOf.set(id, x.id);
+      // a host carries one Unproven line: a finding of another proof status keeps its own comment
+      if (c && !hosts.has(id) && !hostOf.has(id) && c.file === h.file && c.line === h.line && !!c.proven === !!h.proven) hostOf.set(id, x.id);
     }
   }
   const folded = posted.filter((c) => hostOf.has(c.id));
+  // Full depth: an unproven finding says so in its body (engine text).
+  const mark = (c, b) => (depth === "full" && !c.proven ? `${b}\n\n${UNPROVEN}` : b);
   const items = posted.filter((c) => !hostOf.has(c.id)).map((c) => ({
     ...c, fps: [c.fp, ...folded.filter((o) => hostOf.get(o.id) === c.id).map((o) => o.fp)],
-    body: text.get(c.id) ?? `**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}`,
+    body: mark(c, text.get(c.id) ?? `**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}`),
   }));
+  // Checked fixes (#37), full depth: a suggestion that fails the tests, or lets a caught mutant pass, is posted
+  // as text only. Best effort, capped by review.mutants.total_s; a comment unfolded at post time is checked too.
+  const fixDeadline = Date.now() + config.review.mutants.total_s * 1000;
+  // A comment off the diff posts only its first line: its code never shows, so it is not checked.
+  const checked = async (x) => {
+    if (depth !== "full" || offDiff(x)) return x;
+    const r = await checkFix(f, config, runDir, x, mutants?.mutants ?? [], fixDeadline);
+    return r?.ok === false ? { ...x, body: directionOnly(x.body, r.why) } : r?.unchecked ? { ...x, body: uncheckedNote(x.body, r.unchecked) } : x;
+  };
+  for (const [i, x] of items.entries()) items[i] = await checked(x);
   // Misses of this run's final round 1: a resume that finished the part clears it.
   const missedNow = run.missed.filter((m) => !done(runDir, "round1", m.key) && !isDropped(m.seat));
   let ci = ciOf(f);
@@ -517,8 +591,9 @@ async function once(o, restart) {
         ? `${blocking.length} earlier must ${blocking.length === 1 ? "finding is" : "findings are"} still open, so the PR is blocked.`
         : "The must findings block the merge.")
       : one(composed.verdict),
-    // Hook for the setup checks (#38): an engine line that says what was checked. Empty until frame sets f.checked.
+    // The setup stage (#38) sets f.checked: the depth and the checks run.
     f.checked ? `What was checked: ${one(f.checked)}` : "",
+    depth === "full" ? proofLine(posted) : "",
     replies.length ? `Your questions:\n${replies.map(([i, a]) => `${i}. ${a}`).join("\n")}` : "",
     ...indexOf(inline),
     one(composed.praise),
@@ -555,23 +630,26 @@ async function once(o, restart) {
   if (now !== f.headSha) throw new HeadMoved(f.headSha, now);
   const clean = [];
   // A host the scan holds keeps none of its folded findings: they go out on their own, through the same scan.
-  const own = (c) => ({ ...c, fps: [c.fp], body: `**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}` });
+  const own = (c) => ({ ...c, fps: [c.fp], body: mark(c, `**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}`) });
   // One scan per item: each scan spawns gitleaks.
   const scans = new Map();
   const scan1 = (x) => { if (!scans.has(x)) scans.set(x, scanOutbound(x.answered ? redact(x.body) : x.body)); return scans.get(x); };
   const passes = (x) => scan1(x).ok;
   const heldHosts = new Set(items.filter((x) => !passes(x)).map((x) => x.id));
-  for (const c of folded.filter((c) => heldHosts.has(hostOf.get(c.id)))) { hostOf.delete(c.id); items.push(own(c)); }
+  for (const c of folded.filter((c) => heldHosts.has(hostOf.get(c.id)))) { hostOf.delete(c.id); items.push(await checked(own(c))); }
   for (const x of items) {
     // Marco answered "post" on a held comment: post it with the secret redacted. If it still hits, it stays out.
     const text = x.answered ? redact(x.body) : x.body;
     const s = scan1(x);
     if (s.ok) { clean.push({ ...x, body: text }); continue; }
     if (x.answered) continue;
+    // A later "post" answer posts this engine-final body (checked, marked). A held host keeps its own finding
+    // only: its folded findings went out on their own.
+    save(join(runDir, "held", `${x.fp}.json`), { body: redact(x.fps.length > 1 ? (await checked(own(x))).body : x.body) });
     // Held back. The question keeps the fingerprint and the rule ids only: never the text, which holds the secret.
     open.push(queueQuestion(repoState, {
       pr: n, sha: f.headSha, fingerprint: x.fp, file: x.file, line: x.line, snippet: "",
-      finding: { lens: x.lens, severity: x.severity, file: x.file, line: x.line, title: "Comment held by the secret scan", case: `Secret rules: ${ruleIds(s.hits)}`, fix: "", secret: true },
+      finding: { lens: x.lens, severity: x.severity, file: x.file, line: x.line, title: "Comment held by the secret scan", case: `Secret rules: ${ruleIds(s.hits)}`, fix: "", secret: true, ...(depth === "full" && { proven: !!x.proven }) },
       sides: { keep: "post: post the comment with the secret redacted.", drop: "drop: do not post this finding." }, failure: `Secret rules: ${ruleIds(s.hits)}`,
     }));
   }
@@ -667,18 +745,9 @@ async function once(o, restart) {
   };
 }
 
-// The text of a comment that an earlier run composed and the secret scan held back, redacted; null when gone.
+// The engine-final body of a comment that an earlier run held back by the secret scan, redacted; null when gone.
 function heldText(repoState, n, runId, fp) {
-  const dir = join(repoState, "pr", String(n), "runs", runId ?? "");
-  try {
-    const c = readJson(join(dir, "clusters.json")).clusters.find((x) => x.fp === fp);
-    // Rebuild from the cluster when there is no composed comment of its own (a folded finding), or when the
-    // comment merged others (a held host): those were posted on their own, and must not be posted twice.
-    const cmt = readJson(join(dir, "compose", "compose.json")).comments.find((x) => x.id === c?.id);
-    const body = (cmt && !cmt.also?.length ? cmt.body : undefined)
-      ?? (c && `**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}`);
-    return body ? redact(body) : null;
-  } catch { return null; }
+  try { return readJson(join(repoState, "pr", String(n), "runs", runId ?? "", "held", `${fp}.json`)).body; } catch { return null; }
 }
 
 /**
@@ -696,8 +765,10 @@ async function followUp(o, head, pst, answered) {
     if (seen.has(sha1(`inline\0${head}\0${q.fingerprint}`))) { already.push(q.fingerprint); continue; }
     if (codeMoved(o.repoDir ?? process.cwd(), q, head)) { o.log(`question ${q.id}: the code at ${q.finding?.file}:${q.finding?.line} changed since ${q.sha}; its answer is dropped`); continue; }
     const f = q.finding;
+    // full depth (proven is set): a suggestion the follow-up cannot test says so, like one the time cap cut
+    const fix = f.fix && f.proven !== undefined && suggestionOf(f.fix) ? uncheckedNote(f.fix, "a follow-up runs no test") : f.fix;
     const text = f.secret ? heldText(repoState, n, pst.lastRunId, q.fingerprint)
-      : `**${f.severity}:** ${f.title}\n\n${f.case}${f.fix ? `\n\n${f.fix}` : ""}${q.answer === "ask-author" ? "\n\nCan you confirm this case?" : ""}`;
+      : `**${f.severity}:** ${f.title}\n\n${f.case}${fix ? `\n\n${fix}` : ""}${q.answer === "ask-author" ? "\n\nCan you confirm this case?" : ""}${f.proven === false ? `\n\n${UNPROVEN}` : ""}`;
     if (text && scanOutbound(text).ok) items.push({ q, text });
   }
   let url = null;

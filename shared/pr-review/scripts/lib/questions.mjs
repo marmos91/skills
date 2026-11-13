@@ -41,12 +41,12 @@ ${q.sides.drop}
 ${failure}
 
 ## Options
-${OPTIONS.map((o) => `- ${o}`).join("\n")}
+${q.options.map((o) => `- ${o}`).join("\n")}
 `;
 }
 
 /**
- * q: { pr, sha, fingerprint, file, line, snippet, finding, sides: {keep, drop}, failure }. Same id twice keeps the first,
+ * q: { pr, sha, fingerprint, file, line, snippet, finding, sides: {keep, drop}, failure, options? (default OPTIONS) }. Same id twice keeps the first,
  * except a review finding whose earlier question was answered and applied: it comes back as a fresh question.
  */
 export function queueQuestion(repoState, q) {
@@ -61,7 +61,7 @@ export function queueQuestion(repoState, q) {
   q = { ...q, snippet: r(q.snippet), failure: r(q.failure), finding, sides };
   const rec = {
     id, pr: q.pr, sha: q.sha, fingerprint: q.fingerprint, finding: q.finding, sides: q.sides,
-    options: [...OPTIONS], createdAt: new Date().toISOString(), askedAt: null, answer: null, answeredAt: null,
+    options: [...(q.options ?? OPTIONS)], createdAt: new Date().toISOString(), askedAt: null, answer: null, answeredAt: null,
   };
   writeAtomic(join(dir(repoState), `${id}.md`), markdown(rec, q));
   save(repoState, rec);
@@ -86,14 +86,15 @@ const all = (repoState, warnings = []) => {
 };
 export const questionWarnings = (repoState) => { const w = []; all(repoState, w); return w; };
 
-export const openQuestions = (repoState) => all(repoState).filter((q) => q.answer === null);
+export const openQuestions = (repoState) => all(repoState).filter((q) => q.answer === null && !q.appliedAt);
 
 /** Answered and not yet applied by a run. */
 export const pendingAnswers = (repoState) => all(repoState).filter((q) => q.answer !== null && !q.appliedAt);
 
 export function answer(repoState, id, option) {
-  if (!OPTIONS.includes(option)) throw new Error(`option must be one of ${OPTIONS.join("|")}, got ${option}`);
   const q = load(repoState, id);
+  const options = q.options ?? OPTIONS;
+  if (!options.includes(option)) throw new Error(`option must be one of ${options.join("|")}, got ${option}`);
   save(repoState, Object.assign(q, { answer: option, answeredAt: new Date().toISOString() }));
   return q;
 }
@@ -103,6 +104,12 @@ export function markAsked(repoState, ids) {
     const q = load(repoState, id);
     if (!q.askedAt) save(repoState, Object.assign(q, { askedAt: new Date().toISOString() }));
   }
+}
+
+/** Closed with no answer: the matter was settled another way (`config core-paths`). */
+export function closeQuestion(repoState, id) {
+  const q = load(repoState, id);
+  if (!q.appliedAt) save(repoState, Object.assign(q, { appliedAt: new Date().toISOString() }));
 }
 
 export function appliedAnswer(repoState, id) {
