@@ -14,15 +14,17 @@ import { review, SetupError, STAGES } from "./lib/review.mjs";
 import { answer, markAsked, openQuestions, questionWarnings } from "./lib/questions.mjs";
 import { FINAL_STAGE, Locked, VERSION, done, holderAlive, prState, stateRoot, usageByStage } from "./lib/state.mjs";
 import { remoteRepos } from "./lib/github.mjs";
+import { DEPTHS, setCorePaths } from "./lib/setup.mjs";
 
 // The one signal path: stop the children, then exit; the lock is released on exit.
 installSignalHandlers();
 
 const USAGE = `usage: pr-review review [<n|url>] [--repo owner/repo] [--dry-run] [--lens a,b] [--until ${STAGES.join("|")}]
-                 [--config <file>] [--effort low|medium|high|max|auto] [--max-diff-lines N] [--restart] [--loop]
+                 [--config <file>] [--effort low|medium|high|max|auto] [--depth light|full|auto] [--max-diff-lines N] [--restart] [--loop]
        pr-review answer [<question-id> post|drop|ask-author] [--repo owner/repo]
        pr-review status [owner/repo]
        pr-review doctor [--config <file>]
+       pr-review config core-paths <owner/repo> ['glob'...]
        pr-review tick [owner/repo]
        pr-review pause|resume [owner/repo]
        pr-review respond findings|decide <thread>|approve <thread>|decline <thread> <reason>|fixed <thread> <sha>|summary <points.json> [--pr <n|url>]`;
@@ -99,7 +101,8 @@ function status(repo) {
     const latestRun = ls(runsDir).sort((a, b) => Number(a.slice(a.lastIndexOf("-") + 1)) - Number(b.slice(b.lastIndexOf("-") + 1))).at(-1);
     const runs = ls(runsDir).filter((d) => !done(join(runsDir, d), FINAL_STAGE)).map((d) => {
       const dir = join(runsDir, d), run = readJson(join(dir, "run.json"));
-      const childDone = ls(dir).reduce((k, s) => k + ls(join(dir, s)).filter((f) => f.endsWith(".done")).length, 0);
+      // setup/ holds check markers, not children
+      const childDone = ls(dir).filter((s) => s !== "setup").reduce((k, s) => k + ls(join(dir, s)).filter((f) => f.endsWith(".done")).length, 0);
       return { sha: d.slice(0, d.lastIndexOf("-")), stage: STAGES.find((s) => !done(dir, s)), children: { done: childDone, total: run?.planned ?? null }, tokens: usageByStage(dir) };
     });
     const replies = Object.values(st.replies ?? {}).reduce((a, b) => a + (Number(b) || 0), 0);
@@ -218,7 +221,7 @@ export async function main(argv, deps = {}) {
     args: argv, allowPositionals: true,
     options: {
       repo: { type: "string" }, "dry-run": { type: "boolean" }, lens: { type: "string" }, until: { type: "string" },
-      config: { type: "string" }, effort: { type: "string" }, "max-diff-lines": { type: "string" }, restart: { type: "boolean" }, loop: { type: "boolean" }, pr: { type: "string" }, help: { type: "boolean", short: "h" },
+      config: { type: "string" }, effort: { type: "string" }, depth: { type: "string" }, "max-diff-lines": { type: "string" }, restart: { type: "boolean" }, loop: { type: "boolean" }, pr: { type: "string" }, help: { type: "boolean", short: "h" },
     },
   });
   if (v.help || !cmd) { console.log(USAGE); return v.help ? 0 : 1; }
@@ -237,6 +240,19 @@ export async function main(argv, deps = {}) {
     return 0;
   }
   if (cmd === "doctor") return doctor(v, deps);
+  if (cmd === "config") {
+    // The answer to "which paths are core?": saved per repo, also when empty (none), so auto depth never asks again.
+    const [what, repo, ...globs] = rest;
+    if (what !== "core-paths" || !repo) throw new Usage(USAGE);
+    let rs;
+    try { rs = stateRoot(repo); } catch (e) { throw new Usage(e.message); }
+    // an unquoted glob reaches us already expanded by the shell
+    const expanded = globs.filter((g) => !/[*?[{]/.test(g) && existsSync(g));
+    if (expanded.length) console.error(`warning: ${expanded.join(" ")} ${expanded.length > 1 ? "are files" : "is a file"} here, not a glob: quote the globs (for example 'pkg/**').`);
+    setCorePaths(rs, globs);
+    console.log(`core paths of ${repo}: ${globs.join(" ") || "none"}`);
+    return 0;
+  }
   if (cmd === "pause" || cmd === "resume") {
     if (rest.length > 1) throw new Usage(USAGE);
     const repo = repoOf(rest[0] ?? v.repo), dir = stateRoot(repo);
@@ -255,13 +271,14 @@ export async function main(argv, deps = {}) {
   if (cmd === "respond") return respondCmd(rest, v, deps);
   if (cmd !== "review" || rest.length > 1) throw new Usage(USAGE);
   if (v.effort && !["low", "medium", "high", "max", "auto"].includes(v.effort)) throw new Usage(`--effort must be low|medium|high|max|auto`);
+  if (v.depth && !DEPTHS.includes(v.depth)) throw new Usage(`--depth must be ${DEPTHS.join("|")}`);
   if (v.until && !STAGES.includes(v.until)) throw new Usage(`--until must be one of ${STAGES.join("|")}`);
   const maxDiffLines = v["max-diff-lines"] === undefined ? undefined : Number(v["max-diff-lines"]);
   if (maxDiffLines !== undefined && !(/^\d+$/.test(v["max-diff-lines"]) && maxDiffLines > 0)) throw new Usage("--max-diff-lines must be a positive integer");
   const lenses = v.lens?.split(",").map((s) => s.trim()).filter(Boolean);
   if (lenses && !lenses.length) throw new Usage("--lens needs at least one lens name");
-  const r = await review({
-    ...target(rest[0], v.repo), mode: v.loop ? "loop" : "interactive", effort: v.effort, dryRun: v["dry-run"], until: v.until,
+  const r = await (deps.review ?? review)({
+    ...target(rest[0], v.repo), mode: v.loop ? "loop" : "interactive", effort: v.effort, depth: v.depth, dryRun: v["dry-run"], until: v.until,
     restart: v.restart, lenses, maxDiffLines, configPath: v.config, log: (l) => console.error(l),
   });
   console.log(r.summary);

@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { lensFile } from "./config.mjs";
 import { allowedSeverities } from "./convergence.mjs";
+import { setupBrief } from "./setup.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const read = (p) => readFileSync(join(ROOT, p), "utf8").trim();
@@ -98,6 +99,10 @@ function partSection(frame, part) {
   ];
 }
 
+// Setup check results (full depth), for the seats that judge the code: not the judge or hygiene. Engine data from
+// the reviewer's config, so it sits outside the PR-data fence; setupBrief prints no PR text (names, not commands).
+const checks = (frame) => (frame.setup ? ["## Setup checks", setupBrief(frame.setup, frame.ctxDir), ""] : []);
+
 export function round1Prompt(frame, lenses, maxTurns, part) {
   const ctx = context(frame);
   const n = frame.reviewNumber ?? 1;
@@ -110,6 +115,7 @@ export function round1Prompt(frame, lenses, maxTurns, part) {
   return [
     ctx,
     "",
+    ...checks(frame),
     ...partSection(frame, part),
     "## Task",
     "You are one seat of a review council. Review this pull request alone. Other seats review it too, and you do not see their work.",
@@ -141,6 +147,7 @@ export function votePrompt(frame, clusters, maxTurns) {
   return [
     context(frame),
     "",
+    ...checks(frame),
     "## Task",
     "You are one seat of a review council. Other seats found the findings below. Check each one against the code, and vote on it.",
     "",
@@ -152,6 +159,7 @@ export function votePrompt(frame, clusters, maxTurns) {
     "- keep: the case is real. The input or situation leads to the wrong result in the head commit.",
     "- drop: the case is wrong. `counter_case` must show why, with a concrete input or a trace: the guard at file:line, or the caller that never passes the bad value. A drop with no counter-case counts as no vote.",
     "- Do not drop for taste, for severity, or because the fix is hard. For a keep, `counter_case` is \"\".",
+    "- A finding that claims something general (\"X is never nil\", \"every caller does Y\") needs a sweep: grep the whole worktree for each use or caller, not only the diff. One counter-example decides the vote.",
     frame.shellOk
       ? "- `evidence_run`: true only when you ran a command in the worktree that proves your vote. Put the command and its output in `counter_case` for a drop."
       : "- You have no shell. Set `evidence_run` to false.",

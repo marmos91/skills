@@ -49,6 +49,12 @@ the next run.
 4. Do not run a tick for this. The next tick applies the answers. It checks
    each finding against the current head first and drops it if the code
    moved.
+5. A question with `"kind": "core-paths"` asks which paths of the repo are
+   core (for `auto` depth). Ask the user for globs, and offer the candidates
+   from the question. Save them with
+   `sh "$SKILL_DIR/scripts/pr-review-loop" config core-paths <owner/repo> [glob...]`
+   (no glob = none). That closes the question. `answer <id> drop` also
+   saves none; the question offers no other option.
 
 ## Setup (once per machine)
 

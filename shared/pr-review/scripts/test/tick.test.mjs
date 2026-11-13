@@ -642,3 +642,24 @@ test("the default tick config loads the user lens files, as review and doctor do
     assert.equal(out.processed, 0);
   } finally { if (old === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = old; }
 });
+
+test("core-paths question: a drop saves none, but never over a saved value; post is refused", async () => {
+  const { queueCoreQuestion, readCorePaths, saveCorePaths } = await import("../lib/setup.mjs");
+  let rs = fresh();
+  withBaseline(rs);
+  let id = queueCoreQuestion(rs, REPO, []);
+  assert.throws(() => answer(rs, id, "post"), /option must be one of drop, got post/);
+  answer(rs, id, "drop");
+  await go();
+  assert.deepEqual(readCorePaths(rs), []);
+  assert.equal(pendingAnswers(rs).length, 0);
+  // a drop answered before the user saved paths: the tick closes it and keeps the paths
+  rs = fresh();
+  withBaseline(rs);
+  id = queueCoreQuestion(rs, REPO, []);
+  answer(rs, id, "drop");
+  saveCorePaths(rs, ["pkg/**"]);
+  await go();
+  assert.deepEqual(readCorePaths(rs), ["pkg/**"]);
+  assert.equal(pendingAnswers(rs).length, 0);
+});

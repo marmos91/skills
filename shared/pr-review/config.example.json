@@ -34,7 +34,17 @@
   // Limits per child: a seat may set its own "max_turns" and "timeout_minutes", a lens its own "max_turns".
   // max_turns reaches claude seats only (--max-turns); pi has no such flag, so the timeout bounds it.
   // A diff above chunk_lines splits into parts for round 1; max_children caps the children of one PR.
-  "review": { "max_turns": 40, "timeout_minutes": 10, "chunk_lines": 500, "max_children": 60, "max_parallel": 9 },
+  // depth: light (read and vote), full (setup checks first) or auto (full for core_paths or a new exported API).
+  // core_paths: per repo only (not here): "pr-review config core-paths <owner/repo>", or the repo's .pr-review.json.
+  // checks: run once in the worktree at full depth, only for trusted authors. Without it, a Go repo gets
+  // go build, go vet and go test -race (3 runs). {dirs} = the folders of the matching changed paths.
+  "review": { "max_turns": 40, "timeout_minutes": 10, "chunk_lines": 500, "max_children": 60, "max_parallel": 9,
+    "depth": "light",
+    "checks": [
+      { "name": "go vet", "run": "go vet {dirs}", "paths": ["**/*.go"] },
+      { "name": "go test", "run": "go test -race -count=1 {dirs}", "paths": ["**/*.go"], "repeat": 3, "timeout_s": 900 }
+    ]
+  },
   // PR hygiene check (title, body, linked issue, changelog). Repo level may set it too.
   "hygiene": { "enabled": true },
   // pr-respond: review rounds on your own PR before it stops and reports (exit 5).

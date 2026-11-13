@@ -13,6 +13,7 @@ import { answer, openQuestions } from "../lib/questions.mjs";
 import { stateRoot, prState, savePrState } from "../lib/state.mjs";
 import { fingerprint } from "../lib/convergence.mjs";
 import * as github from "../lib/github.mjs";
+import { queueCoreQuestion, saveCorePaths } from "../lib/setup.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ghBin = join(mkdtempSync(join(tmpdir(), "ghbin-")), "gh");
@@ -125,7 +126,7 @@ test("happy path posts one review with inline comments and the marker", async ()
   assert.equal(p.length, 1);
   assert.equal(p[0].commitOID, fx.head);
   assert.equal(p[0].event, "REQUEST_CHANGES");
-  assert.match(p[0].body, /^Changes a\. One must item\.\n\n<!-- pr-review run=\S+ sha=[0-9a-f]{40} key=[0-9a-f]{40} -->$/);
+  assert.match(p[0].body, /^What was checked: light depth, no checks run\.\n\nChanges a\. One must item\.\n\n<!-- pr-review run=\S+ sha=[0-9a-f]{40} key=[0-9a-f]{40} -->$/);
   assert.equal(p[0].threads.length, 1);
   assert.deepEqual([p[0].threads[0].path, p[0].threads[0].line, p[0].threads[0].side], ["a.js", 2, "RIGHT"]);
   assert.match(p[0].threads[0].body, new RegExp(`^\\*\\*must:\\*\\* off by one\n\n<!-- pr-review run=.* key=[0-9a-f]{40} fp=${fingerprint(F())} -->$`));
@@ -1443,7 +1444,7 @@ test("the body index lists only threads that went inline, at their real line, Cr
   const { r } = await go(fx, { all: { findings: [F()] }, merge: [C("c1"), c2, c3], "v~2": [keep("c1"), keep("c2"), keep("c3")], compose });
   assert.equal(r.exit, 0, r.summary);
   const b = posts(fx)[0].body;
-  assert.match(b, /^The off by one blocks\.\n\nCritical:\n- Fix the total\. \(thread on `a\.js` L2\)\n\nTotals:\n- Rename c\. \(thread on `a\.js` L3\)\n\nThe test covers the edge\./);
+  assert.match(b, /^The off by one blocks\.\n\nWhat was checked: light depth, no checks run\.\n\nCritical:\n- Fix the total\. \(thread on `a\.js` L2\)\n\nTotals:\n- Rename c\. \(thread on `a\.js` L3\)\n\nThe test covers the edge\./);
   assert.doesNotMatch(b, /Off-diff item|Made up/);
   assert.match(b, /Outside the diff:/);
 });
@@ -1454,7 +1455,7 @@ test("the author's questions in the PR body reach compose, and the answers come 
   assert.equal(r.exit, 0, r.summary);
   assert.match(run.calls.find((c) => c.k === "compose").prompt, /## The author's questions[\s\S]*1\. Is 2 the right value\?/);
   // c1 is a must of this run: "Nothing blocks." would contradict REQUEST_CHANGES
-  assert.match(posts(fx)[0].body, /^The must findings block the merge\.\n\nYour questions:\n1\. Yes, 2 matches the spec\.\n\n<!-- pr-review/);
+  assert.match(posts(fx)[0].body, /^The must findings block the merge\.\n\nWhat was checked: light depth, no checks run\.\n\nYour questions:\n1\. Yes, 2 matches the spec\.\n\n<!-- pr-review/);
 });
 
 test("a bold or reworded \"nothing blocks\" verdict next to an earlier must still open is replaced", async () => {
@@ -1512,7 +1513,7 @@ test("pass 2: an earlier must still open reaches compose, and \"Nothing blocks.\
   assert.match(prompt, /Never write "Nothing blocks\."/);
   const p = posts(fx)[0];
   assert.equal(p.event, "REQUEST_CHANGES");
-  assert.match(p.body, /^Second pass, on `[0-9a-f]{7}`\.\n\n1 earlier must finding is still open, so the PR is blocked\.\n\nStill open\./);
+  assert.match(p.body, /^Second pass, on `[0-9a-f]{7}`\.\n\n1 earlier must finding is still open, so the PR is blocked\.\n\nWhat was checked: light depth, no checks run\.\n\nStill open\./);
 });
 
 test("an empty answer keeps the next answers on their own question numbers", async () => {
@@ -1581,4 +1582,109 @@ test("a resumed run whose user lens file was removed is a setup error, not a cra
   await assert.rejects(go(fx, { ...happy(), all: new Error("boom") }), /boom/);
   rmSync(join(lenses, "perf.md"));
   await assert.rejects(go(fx, happy()), (e) => e.name === "SetupError" && /lens perf of this run is gone/.test(e.message));
+});
+
+// Depth and setup checks (#38).
+const userConfig = (obj) => {
+  mkdirSync(join(process.env.XDG_CONFIG_HOME, "pr-review"), { recursive: true });
+  writeFileSync(join(process.env.XDG_CONFIG_HOME, "pr-review", "config.json"), JSON.stringify(obj));
+};
+const trusted = (fx) => { const r0 = R(fx); r0["api repos/o/r/pulls/5"] = { stdout: { author_association: "OWNER" } }; W(fx, r0); };
+
+test("light depth (the default): no check runs, and the summary names the depth", async () => {
+  const fx = fixture(); routes(fx); trusted(fx);
+  userConfig({ review: { checks: [{ name: "x", run: "touch ../ran" }] } });
+  const { r } = await go(fx, happy());
+  assert.equal(r.exit, 0, r.summary);
+  assert.match(posts(fx)[0].body, /(?:^|\n\n)What was checked: light depth, no checks run\.\n\n/);
+  assert.equal(existsSync(join(r.runDir, "ran")), false);
+  assert.equal(existsSync(join(r.runDir, "setup.done")), true);
+});
+
+test("full depth: checks run once before round 1, a failure is data, every seat brief and the summary name them", async () => {
+  const fx = fixture(); routes(fx); trusted(fx);
+  userConfig({ review: { checks: [{ name: "hello", run: "echo hi", paths: ["**/*.js"] }, { name: "bad", run: "exit 2" }, { name: "docs", run: "true", paths: ["docs/**"] }] } });
+  const { r, run } = await go(fx, happy(), { depth: "full" });
+  assert.equal(r.exit, 0, r.summary);
+  const s = JSON.parse(readFileSync(join(r.runDir, "ctx", "setup.json"), "utf8"));
+  assert.deepEqual(s.checks.map((c) => [c.name, c.exit]), [["hello", 0], ["bad", 2]]);
+  // the seats that judge code get the checks; the judge (merge, compose) does not
+  for (const c of run.calls) {
+    if (c.k.startsWith("all~") || c.k.startsWith("v~")) {
+      assert.match(c.prompt, /## Setup checks\nSetup checks: .*\n- hello: ok\n- bad: failed \(exit 2\)/, c.k);
+      // engine data: inside no PR-data fence
+      const brief = c.prompt.indexOf("## Setup checks");
+      const fences = [...c.prompt.matchAll(/<<<(PR-DATA-[0-9a-f]+)\n[\s\S]*?\n\1>>>/g)];
+      assert.ok(fences.length > 0 && fences.every((m) => brief < m.index || brief > m.index + m[0].length), `${c.k}: the brief is inside a PR-data fence`);
+    }
+    else assert.doesNotMatch(c.prompt, /Setup checks/, c.k);
+  }
+  assert.doesNotMatch(readFileSync(join(r.runDir, "hygiene-prompt.txt"), "utf8"), /Setup checks/);
+  assert.match(posts(fx)[0].body, /(?:^|\n\n)What was checked: full depth; hello ok, bad failed \(exit 2\)\.\n\n/);
+  assert.equal(JSON.parse(readFileSync(join(r.runDir, "run.json"), "utf8")).depth, "full");
+});
+
+test("auto depth with no core paths: an interactive run asks first; the saved answer is used next time", async () => {
+  const fx = fixture(); routes(fx); trusted(fx);
+  userConfig({ review: { depth: "auto", checks: [{ name: "hello", run: "echo hi" }] } });
+  const first = await go(fx, happy());
+  assert.equal(first.r.exit, 3);
+  assert.match(first.r.summary, /^core paths not set for o\/r/);
+  assert.equal(first.run.calls.length, 0);
+  assert.equal(posts(fx).length, 0);
+  // nothing ran: the run is closed, so status lists no open run
+  assert.equal(existsSync(join(first.r.runDir, "post.done")), true);
+  assert.equal(existsSync(join(first.r.runDir, "wt")), false);
+  saveCorePaths(fx.state, ["*.js"]);
+  const { r } = await go(fx, happy());
+  assert.equal(r.exit, 0, r.summary);
+  assert.match(posts(fx)[0].body, /What was checked: full depth; hello ok\./);
+});
+
+test("auto depth with no core paths in the loop: one question for the repo, never repeated, and no block", async () => {
+  const fx = fixture(); routes(fx); trusted(fx);
+  userConfig({ review: { depth: "auto" } });
+  const { r } = await go(fx, happy(), { mode: "loop" });
+  assert.equal(r.exit, 0, r.summary);
+  assert.match(posts(fx)[0].body, /What was checked: light depth, no checks run\./);
+  await go(fx, happy(), { mode: "loop", restart: true });
+  const qs = openQuestions(fx.state).filter((q) => q.finding?.kind === "core-paths");
+  assert.equal(qs.length, 1);
+});
+
+test("auto depth with no core paths: a PR whose depth the answer cannot change is not held for it", async () => {
+  const fx = fixture(); routes(fx); trusted(fx);
+  userConfig({ review: { depth: "auto" } });
+  // a new exported name decides full on its own
+  git(fx.seed, "checkout", "-q", "feat");
+  const head = commit(fx.seed, { "a.js": "export const a = 2;\n" }, "feat: export a");
+  git(fx.seed, "push", "-qf", fx.origin, "HEAD:refs/pull/5/head");
+  routes(fx, { head }); trusted(fx);
+  const { r } = await go(fx, happy({ all: { findings: [F({ line: 1 })] }, merge: [C("c1", { line: 1 })] }));
+  assert.equal(r.exit, 0, r.summary);
+  assert.match(posts(fx)[0].body, /What was checked: full depth;/);
+  assert.equal(openQuestions(fx.state).length, 0);
+});
+
+test("auto depth with no core paths: a docs-only PR is light, with no question", async () => {
+  const fx = fixture();
+  git(fx.seed, "checkout", "-q", fx.base); // a PR with one commit on main: docs/a.md only
+  mkdirSync(join(fx.seed, "docs"), { recursive: true });
+  const head = commit(fx.seed, { "docs/a.md": "# A\n" }, "docs: add a");
+  git(fx.seed, "push", "-qf", fx.origin, "HEAD:refs/pull/5/head");
+  routes(fx, { head }); trusted(fx);
+  userConfig({ review: { depth: "auto" } });
+  const { r } = await go(fx, happy({ all: { findings: [F({ file: "docs/a.md", line: 1 })] }, merge: [C("c1", { file: "docs/a.md", line: 1 })] }));
+  assert.equal(r.exit, 0, r.summary);
+  assert.match(posts(fx)[0].body, /What was checked: light depth, no checks run\./);
+  assert.equal(openQuestions(fx.state).length, 0);
+});
+
+test("auto depth: a core-paths drop answered before any tick counts in an interactive review", async () => {
+  const fx = fixture(); routes(fx); trusted(fx);
+  userConfig({ review: { depth: "auto" } });
+  answer(fx.state, queueCoreQuestion(fx.state, REPO, []), "drop");
+  const { r } = await go(fx, happy());
+  assert.equal(r.exit, 0, r.summary);
+  assert.match(posts(fx)[0].body, /What was checked: light depth, no checks run\./);
 });
