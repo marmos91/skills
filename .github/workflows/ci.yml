@@ -16,5 +16,5 @@ jobs:
       - run: npm test
       - run: npm run check-pack
       # shellcheck is on the ubuntu runners; notes (style) do not fail the build
-      - run: git ls-files '*.sh' shared/pr-review/scripts/pr-review shared/pr-review-loop/scripts/pr-review-loop install.sh | xargs shellcheck -S warning
+      - run: git ls-files '*.sh' shared/pr-review/scripts/pr-review shared/pr-review-loop/scripts/pr-review-loop shared/pr-respond/scripts/pr-respond install.sh | xargs shellcheck -S warning
       - run: sh tools/smoke.sh

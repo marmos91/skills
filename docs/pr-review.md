@@ -26,6 +26,7 @@ attribution.
 | `pr-review-loop [owner/repo]` | One loop run (a tick) |
 | `pr-review-loop pause` / `resume [owner/repo]` | Stop or restart every tick for the repo |
 | `pr-review-loop answer [<id> <option>]` | Same as `pr-review answer` |
+| `pr-respond <action> [--pr <n\|url>]` | The steps of the pr-respond skill (`pr-review respond`); see [pr-respond](#pr-respond) |
 
 Review flags:
 
@@ -781,3 +782,18 @@ and merge stages (`thinking_by_stage`). mimir-pro reasons even at `off`, and
 at `medium` one round 1 took 21 minutes; the default council therefore caps
 it with `max_turns: 40` and `timeout_minutes: 15`, and a seat that hits a cap
 is dropped (the review then never approves).
+
+## pr-respond
+
+The `pr-respond` skill fixes the review findings on your own PR. The agent
+edits, tests, commits and pushes; these commands do the GitHub and jev steps.
+Each prints JSON. Without `--pr`, they act on the PR of the current branch.
+
+| Command | What it does |
+|---|---|
+| `pr-respond findings` | Lists the unresolved threads that pr-respond did not handle at their newest comment by someone else (a council thread with only its first comment counts; a thread longer than one page always counts). Rounds and handled threads live in `pr/<n>/respond.json`, apart from `state.json`. A head not seen before counts one round; past `respond.max_rounds` (default 5) with findings left, it exits `5` |
+| `pr-respond decide <thread>` | Reads the PR diff of the file and the file at the PR head with `git` (not the working tree). A comment by a person without write or admin access (bots and you aside) gives `ask` at once, unless the thread is approved. Else jev answers "correct on the head?" and "about code this PR adds or changes?": 2 yeses give `fix`, a no or unsure gives `ask` and the agent checks the code. jev never declines: `bench/jev/respond.mjs` replays PR 44's threads |
+| `pr-respond approve <thread>` | Records the user's yes for a thread with a comment by a person without write access (by `gh.permission`, as the loop checks it). Until then `decide` gives `ask` and `fixed` posts nothing |
+| `pr-respond decline <thread> "<reason>"` | Replies with the reason; the thread stays open. Skips when our reply is already the newest comment |
+| `pr-respond fixed <thread> <sha>` | Refuses a sha that is not in the PR head. jev checks the commit first; only on a yes: `Fixed in <commit link>.`, or the link added to our newest reply (never a second reply), then resolve. On a no or unsure it posts nothing |
+| `pr-respond summary <points.json>` | One PR comment that answers the review point by point and opens with the count. Once per head |

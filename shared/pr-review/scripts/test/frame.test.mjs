@@ -58,7 +58,7 @@ function stub(head, { association = "CONTRIBUTOR", checks = [], logs = {}, body 
   const d = mkdtempSync(join(tmpdir(), "ghstub-"));
   const routes = {
     "api user": { stdout: { login: "marmos91" } },
-    "pr view 5 -R o/r --json id,headRefOid,baseRefName,author,isDraft,body,title,closingIssuesReferences,headRefName": {
+    "pr view 5 -R o/r --json id,headRefOid,baseRefName,baseRefOid,author,isDraft,body,title,closingIssuesReferences,headRefName": {
       stdout: { id: "PR_1", headRefOid: head, baseRefName: "main", author: { login: "alice" }, isDraft: false, body, title: "Change a", closingIssuesReferences: [{ number: 7 }] },
     },
     "api repos/o/r/pulls/5": { stdout: { author_association: association } },
@@ -237,7 +237,7 @@ test("issues named in the body or branch are read as wrapped PR data and their a
   for (const b of ["release/2024-01-15", "feat/node-18", "chore/node-20", "deps/python-3", "deps/python-3-12", "deps-2-update", "release-2026", "2026-release", "feature/12-foo", "release/2026-q1", "releases/2026/notes", "hotfix/2024-jan-fix", "2026_release", "fix/2024_q1", "2024_roadmap"]) assert.deepEqual(br(b), [], b);
   assert.deepEqual(linkedIssues({ body: "#1 #2 #3 #4 #5 #6 #7 #8", headRef: "main", closingIssues: [7] }, 5), [1, 2, 3, 4, 6], "self and closing skipped, capped at 5");
   const fx = fixture();
-  const view = "pr view 5 -R o/r --json id,headRefOid,baseRefName,author,isDraft,body,title,closingIssuesReferences,headRefName";
+  const view = "pr view 5 -R o/r --json id,headRefOid,baseRefName,baseRefOid,author,isDraft,body,title,closingIssuesReferences,headRefName";
   const issue = (title, assoc, login = "carol") => ({ stdout: { title, body: "details", user: { login }, author_association: assoc } });
   const body = "fixes #8, see #9 and other/r#10; this is #5; closes #7";
   const routes = (assoc8) => ({

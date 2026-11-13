@@ -15,6 +15,7 @@
     "skills": "bin/skills.mjs",
     "pr-review": "shared/pr-review/scripts/pr-review",
     "pr-review-loop": "shared/pr-review-loop/scripts/pr-review-loop",
+    "pr-respond": "shared/pr-respond/scripts/pr-respond",
     "pr-open": "shared/pr-open/scripts/pr-open",
     "jev": "shared/jev/jev.py",
     "repo-audit": "shared/repo-audit/scripts/audit.sh"

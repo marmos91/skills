@@ -126,3 +126,23 @@ python3 bench/jev/analyze.py   # offline
 
 Delete `results.jsonl` to measure from scratch, for example after the endpoint
 changes.
+
+## pr-respond decide (PR 44)
+
+`node bench/jev/respond.mjs` replays the 14 threads of the first review of
+PR 44 (`respond-pr44.json`) through `decide` with the live jev. All 14
+findings were real, so each expected decision is `fix`.
+
+| decide version | context | fix | wrong decline | ask |
+|---|---|---|---|---|
+| 3 questions (correct, scope, one clear fix) | 31 lines | 1 | 4 | 9 |
+| 2 questions, jev may decline | diff of the file + file, 12 KB | 9 | 5 | 0 |
+| 2 questions, jev never declines (in use) | diff of the file + file, 12 KB | 8 | 0 | 6 |
+
+jev answers the same text the same way every time (4 repeats of 6 threads).
+But a small change to the text flips some answers, and no question wording
+or context size gave more than 12 of 14 yes (4 wordings x 3 caps of the file
+and diff: 6000/4000, 3000/2000 and 1500/3000 characters). So jev can confirm a finding and never decline one. A
+no costs one agent check. Duplicates still split (3 of 6 groups), so the
+agent gives each group of duplicates one decision.
+

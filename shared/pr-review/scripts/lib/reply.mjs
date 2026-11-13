@@ -149,3 +149,25 @@ export async function reply({ repo, n, threadId, mode, frame, config, runDir, gh
     return resolved;
   }
 }
+
+/**
+ * "Fixed in <commit link>." on a review thread. When our reply is the newest comment, it gets the link
+ * (no second reply); else the link is a reply on the first comment, unless `posted`. t may be null.
+ * -> false when the secret scan holds the text, else true.
+ */
+export async function linkFix(gh, repo, n, { t, commentId, sha, me, tail = "", posted = false }) {
+  const link = `Fixed in [\`${sha.slice(0, 7)}\`](https://github.com/${repo}/commit/${sha}).`;
+  const msg = tail ? `${link}\n\n${tail}` : link;
+  if (!scanOutbound(msg).ok) return false;
+  // a thread longer than the fetched page: its newest comment is unknown, so reply
+  const whole = t && t.comments.length === (t.commentCount ?? t.comments.length);
+  const last = whole && t.comments.length > 1 && t.comments.at(-1).author === me ? t.comments.at(-1) : null;
+  // the amend keeps the marker (tail), so a later call finds it even when the thread grows past one page
+  if (last) {
+    const body = String(last.body).trimEnd();
+    const add = [body.includes(`/commit/${sha}`) ? null : link, tail && !body.includes(tail) ? tail : null].filter(Boolean);
+    if (add.length) await gh.editComment(repo, last.id, [body, ...add].join("\n\n"));
+  }
+  else if (!posted) await gh.reply(repo, n, commentId, msg);
+  return true;
+}

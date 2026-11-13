@@ -36,5 +36,7 @@
   // A diff above chunk_lines splits into parts for round 1; max_children caps the children of one PR.
   "review": { "max_turns": 40, "timeout_minutes": 10, "chunk_lines": 500, "max_children": 60, "max_parallel": 9 },
   // PR hygiene check (title, body, linked issue, changelog). Repo level may set it too.
-  "hygiene": { "enabled": true }
+  "hygiene": { "enabled": true },
+  // pr-respond: review rounds on your own PR before it stops and reports (exit 5).
+  "respond": { "max_rounds": 5 }
 }

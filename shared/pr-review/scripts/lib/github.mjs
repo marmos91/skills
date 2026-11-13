@@ -49,10 +49,10 @@ export async function viewer() {
 }
 
 export async function pr(repo, n) {
-  const v = await json(["pr", "view", String(n), "-R", repo, "--json", "id,headRefOid,baseRefName,author,isDraft,body,title,closingIssuesReferences,headRefName"]);
+  const v = await json(["pr", "view", String(n), "-R", repo, "--json", "id,headRefOid,baseRefName,baseRefOid,author,isDraft,body,title,closingIssuesReferences,headRefName"]);
   const rest = await json(["api", `repos/${repo}/pulls/${n}`]);
   return {
-    id: v.id, headSha: v.headRefOid, baseRef: v.baseRefName, author: v.author?.login,
+    id: v.id, headSha: v.headRefOid, baseRef: v.baseRefName, baseSha: v.baseRefOid, author: v.author?.login,
     authorAssociation: rest.author_association, isDraft: v.isDraft, body: v.body, title: v.title,
     closingIssues: (v.closingIssuesReferences ?? []).map((i) => i.number), headRef: v.headRefName,
   };
@@ -127,6 +127,11 @@ export async function postReview(repo, n, { commitOID, event, body, threads: ths
 // GitHub has no replies to replies: pass the id of the thread's first comment.
 export async function reply(repo, n, commentId, body) {
   return json(["api", "-X", "POST", `repos/${repo}/pulls/${n}/comments/${commentId}/replies`, "--input", "-"], { input: JSON.stringify({ body }) });
+}
+
+/** A plain PR comment (not on a line). */
+export async function comment(repo, n, body) {
+  return json(["api", "-X", "POST", `repos/${repo}/issues/${n}/comments`, "--input", "-"], { input: JSON.stringify({ body }) });
 }
 
 /** Replaces the body of a review comment. */

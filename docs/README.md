@@ -16,6 +16,7 @@ The skills:
 - `jev` answers yes/no questions. `repo-audit-fix` uses it as a second check on plans.
 - `pr-review` reviews one GitHub PR with a council of different models and posts only the findings they agree on. It uses `jev` to settle splits.
 - `pr-review-loop` runs `pr-review` and thread replies for a whole repo on an interval.
+- `pr-respond` fixes the review findings on your own PR, round by round, until a round adds nothing new. It uses `jev` to confirm each finding.
 - `pr-open` takes a finished branch to an open PR, with signed commits, real test counts and a secret scan.
 - `refute-root-cause` tries to disprove a claimed root cause. It stands alone.
 
@@ -213,6 +214,15 @@ See [pr-review.md](pr-review.md) for the pipeline, effort levels and config.
 5. `pr-review-loop pause` and `pr-review-loop resume` stop and restart it.
 
 See [pr-review.md](pr-review.md#the-loop) for one tick and the thread rules.
+
+### pr-respond
+
+1. Open a PR and get a review (`pr-review review <n>`, Copilot or a person).
+2. In Claude Code or pi, on the PR branch, ask "pr-respond" or "fix the review findings".
+3. The agent runs rounds: `pr-respond findings`, `decide`, fix with a test, push, `fixed`, `summary`, then the next review.
+   It stops when a round has no new findings, or at `respond.max_rounds` (exit `5`).
+
+See [pr-review.md](pr-review.md#pr-respond) for the commands.
 
 ### pr-open
 

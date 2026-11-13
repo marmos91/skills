@@ -29,7 +29,7 @@ test("viewer and pr", async () => {
   stubDir();
   assert.equal(await gh.viewer(), "marmos91");
   const p = await gh.pr("o/r", 5);
-  assert.deepEqual(p, { id: "PR_node1", headSha: "abc123", baseRef: "main", author: "alice", authorAssociation: "MEMBER", isDraft: false, body: "Fixes #7", title: "Add thing", closingIssues: [7], headRef: "feat/thing" });
+  assert.deepEqual(p, { id: "PR_node1", headSha: "abc123", baseRef: "main", baseSha: "base000", author: "alice", authorAssociation: "MEMBER", isDraft: false, body: "Fixes #7", title: "Add thing", closingIssues: [7], headRef: "feat/thing" });
 });
 
 test("threads maps comments and author type", async () => {

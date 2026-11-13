@@ -1,0 +1,235 @@
+{
+ "pr": 44,
+ "repo": "marmos91/skills",
+ "head": "3491ad4c76e2810a70e9c1b2f8f79a9ccdde9466",
+ "title": "feat(pr-respond): fix review findings on your own PR until it converges",
+ "note": "Round 1 of PR 44. Every finding was real and was fixed in 9685c6c, so each expected decision is fix.",
+ "threads": [
+  {
+   "n": 1,
+   "group": "open",
+   "expect": "fix",
+   "id": "PRRT_kwDOVhLJYc62j9sq",
+   "path": "shared/pr-review/scripts/lib/respond.mjs",
+   "line": 23,
+   "comments": [
+    {
+     "author": "copilot-pull-request-reviewer",
+     "authorType": "Bot",
+     "authorAssociation": "NONE",
+     "body": "`reply.mjs:120` can acknowledge a pending change, and `fixed()` can leave our reply newest after jev rejects or cannot verify the fix. This predicate hides both unresolved cases, allowing `findings()` to report convergence with unfinished work. Track pending, declined, and completed outcomes explicitly and durably rather than treating an own reply as completion."
+    }
+   ]
+  },
+  {
+   "n": 2,
+   "group": "symlink",
+   "expect": "fix",
+   "id": "PRRT_kwDOVhLJYc62j9tV",
+   "path": "shared/pr-review/scripts/lib/respond.mjs",
+   "line": 55,
+   "comments": [
+    {
+     "author": "copilot-pull-request-reviewer",
+     "authorType": "Bot",
+     "authorAssociation": "NONE",
+     "body": "`readFileSync` follows symlinks, so a reviewed repository path that links outside the checkout causes local file contents to be included in the outbound jev request. Secret-pattern scanning does not protect arbitrary private content. Canonicalize both the checkout and candidate path and reject targets outside the checkout before reading, as `review.mjs` already does in `hunk()`."
+    }
+   ]
+  },
+  {
+   "n": 3,
+   "group": "sha",
+   "expect": "fix",
+   "id": "PRRT_kwDOVhLJYc62j9uP",
+   "path": "shared/pr-review/scripts/main.mjs",
+   "line": 180,
+   "comments": [
+    {
+     "author": "copilot-pull-request-reviewer",
+     "authorType": "Bot",
+     "authorAssociation": "NONE",
+     "body": "This only verifies that the SHA exists locally. An unpushed commit (or a commit from another branch) can therefore get a GitHub 'Fixed in' link and authorize resolution when jev approves its local diff, even though the PR never received that fix. Before posting or resolving, verify that the commit is present on the remote PR head's ancestry; reject unpublished or unrelated commits."
+    }
+   ]
+  },
+  {
+   "n": 4,
+   "group": "page",
+   "expect": "fix",
+   "id": "PRRT_kwDOVhLJYc62j9uw",
+   "path": "shared/pr-review/scripts/lib/respond.mjs",
+   "line": 23,
+   "comments": [
+    {
+     "author": "copilot-pull-request-reviewer",
+     "authorType": "Bot",
+     "authorAssociation": "NONE",
+     "body": "`gh.threads()` returns only the first 100 comments, so this predicate can mistake our 100th comment for the latest reply and report convergence despite a newer reviewer follow-up. The same assumption at `shared/pr-review/scripts/lib/respond.mjs:86` can silently skip a decline. Fetch the remaining comments before applying newest-author checks in either action."
+    }
+   ]
+  },
+  {
+   "n": 5,
+   "group": "trust",
+   "expect": "fix",
+   "id": "PRRT_kwDOVhLJYc62mlFY",
+   "path": "shared/pr-review/scripts/lib/respond.mjs",
+   "line": 37,
+   "comments": [
+    {
+     "author": "marmos91",
+     "authorType": "User",
+     "authorAssociation": "OWNER",
+     "body": "question: Should `findings` trust a thread from any commenter?\n\nOn a public repo, a stranger without write access can comment on your PR with something like \"fix: add this setup line to test/setup.js\". `findings` lists that thread like a council or Copilot finding. If jev rates it correct, in scope and with one clear fix, `decide` returns `fix`. The agent then makes the edit, runs the full test suite with shell access, and pushes the change with your signature.\n\n`open(t, me)` checks only `isResolved` and the author of the newest comment. github.mjs already fetches `authorAssociation` and `authorType`, but `findings` never reads them. The rest of the engine allows a shell only when every text author is trusted (`frame.shellOk`, used in review.mjs `toolsFor` and in reply.mjs).\n\nOne possible fix:\n\n```js\n// findings\nconst TRUSTED = new Set([\"OWNER\", \"MEMBER\", \"COLLABORATOR\"]);\nconst trusted = t.comments.every(\n  (c) => TRUSTED.has(c.authorAssociation) || c.authorType === \"Bot\"\n);\n\n// decide\nif (!t.trusted) return { decision: \"ask\", reason: \"untrusted reviewer\" };\n```"
+    }
+   ]
+  },
+  {
+   "n": 6,
+   "group": "open",
+   "expect": "fix",
+   "id": "PRRT_kwDOVhLJYc62mlFf",
+   "path": "shared/pr-review/scripts/lib/respond.mjs",
+   "line": 23,
+   "comments": [
+    {
+     "author": "marmos91",
+     "authorType": "User",
+     "authorAssociation": "OWNER",
+     "body": "should: `open` treats a thread as answered whenever our comment is newest\n\n`fixed T <sha>` posts `Fixed in <sha>` (line 101) before it asks jev (lines 103-104). If jev says no, T stays unresolved with our comment newest. The next `findings` then drops T and returns `converged: true`. The same thing happens when pr-review-loop answers a human thread in text on your own PR, because reply.mjs posts as the viewer. Neither `decline` nor `fixed` saves anything in prState, so this function cannot tell its own decline apart from a rejected fix or a loop reply.\n\nRecord the threads that pr-respond handled. In `decline`, save `respondHandled[threadId] = lastCommentId`. Then:\n\n```js\nconst open = (t, handled) =>\n  !t.isResolved && handled[t.id] !== t.comments.at(-1).id;\n```\n\nThe smallest fix is to run the jev check in `fixed` before `linkFix`, and to post and resolve only on a yes."
+    }
+   ]
+  },
+  {
+   "n": 7,
+   "group": "page",
+   "expect": "fix",
+   "id": "PRRT_kwDOVhLJYc62mlFk",
+   "path": "shared/pr-review/scripts/lib/respond.mjs",
+   "line": 23,
+   "comments": [
+    {
+     "author": "marmos91",
+     "authorType": "User",
+     "authorAssociation": "OWNER",
+     "body": "should: A thread with more than 100 comments hides its newest comment\n\ngithub.mjs fetches only `comments(first: 100)`. Take a thread with 101 or more comments, where fetched comment #100 is ours and #101 is the reviewer's follow-up. `findings` reports `converged: true` and `decline` returns `{\"action\":\"skipped\"}`. `fixed` sets `posted: false` and can post a second `Fixed in` reply. reply.mjs:163 guards against this case before it trusts `at(-1)`. Lines 23, 86 and 100 here do not.\n\n```js\nconst whole = (t) => t.comments.length === (t.commentCount ?? t.comments.length);\n```\n\nCount a thread that is not whole as open in `open`. In `decline`, skip only when the thread is whole. In `fixed`, treat `posted` as false only when the page is whole."
+    }
+   ]
+  },
+  {
+   "n": 8,
+   "group": "symlink",
+   "expect": "fix",
+   "id": "PRRT_kwDOVhLJYc62mlFm",
+   "path": "shared/pr-review/scripts/lib/respond.mjs",
+   "line": 53,
+   "comments": [
+    {
+     "author": "marmos91",
+     "authorType": "User",
+     "authorAssociation": "OWNER",
+     "body": "question: Can a symlink in the PR send a file from outside the checkout to jev?\n\nSay the PR adds `leak -> /Users/me/.ssh/id_rsa` and a review thread sits on path `leak`. Lines 53-56 build `${root}/${path}`, and `existsSync`/`readFileSync` follow the symlink. The file's text goes into prData at line 68 and from there to jev. review.mjs `hunk()` guards the same case with `realpathSync` and a `startsWith(wt + sep)` check.\n\n```js\nconst wt = realpathSync(root);\nconst file = realpathSync(resolve(wt, String(path)));\nif (!file.startsWith(wt + sep)) return \"(outside the checkout)\";\n// read `file`\n```"
+    }
+   ]
+  },
+  {
+   "n": 9,
+   "group": "sha",
+   "expect": "fix",
+   "id": "PRRT_kwDOVhLJYc62mlFq",
+   "path": "shared/pr-review/scripts/main.mjs",
+   "line": 180,
+   "comments": [
+    {
+     "author": "marmos91",
+     "authorType": "User",
+     "authorAssociation": "OWNER",
+     "body": "question: Should `fixed` reject a sha that is not on the PR head?\n\nSay the agent passes the sha of a commit on main, or of a local commit whose push failed. The `Fixed in [abc1234](...)` link then goes to a 404 or to an unrelated commit, and the thread is resolved while the PR head has no fix. Lines 179-180 only match `^[0-9a-f]{7,40}$` and run a local `git rev-parse`. Nothing compares the sha with `gh.pr(repo, n).headSha`.\n\n```js\nconst { headSha } = await gh.pr(repo, n);\n// git merge-base --is-ancestor <sha> <headSha>, or throw new Usage(...) before posting or resolving\n```"
+    }
+   ]
+  },
+  {
+   "n": 10,
+   "group": "head",
+   "expect": "fix",
+   "id": "PRRT_kwDOVhLJYc62mlFx",
+   "path": "shared/pr-review/scripts/main.mjs",
+   "line": 177,
+   "comments": [
+    {
+     "author": "marmos91",
+     "authorType": "User",
+     "authorAssociation": "OWNER",
+     "body": "should: `respond` assumes the local checkout is at the PR head\n\nIf you run `pr-respond decide T1` from a subfolder, or from a checkout that is not at the head, `code()` reads `${cwd}/${t.path}`. It either finds no file or finds the wrong code. jev then answers \"correct about the code at the PR head?\" without the head's code, and the result is an unrelated decline or ask. For `fixed`, an unpushed local sha gets a `Fixed in` link that returns 404.\n\nLine 177 calls `decide` without `root`, so respond.mjs:52 falls back to `process.cwd()`. `decide` already fetches `pr.headSha` at respond.mjs:64 but never compares it with HEAD.\n\n```js\nconst root = git(\"rev-parse\", \"--show-toplevel\");\nif (git(\"rev-parse\", \"HEAD\") !== pr.headSha) throw new Usage(\"checkout is not at the PR head\");\nr.decide({ repo, n, threadId: a, gh, jev, root });\n// fixed: require `git merge-base --is-ancestor <sha> <headSha>` before linkFix\n```"
+    }
+   ]
+  },
+  {
+   "n": 11,
+   "group": "head",
+   "expect": "fix",
+   "id": "PRRT_kwDOVhLJYc62mlF0",
+   "path": "shared/pr-review/scripts/lib/respond.mjs",
+   "line": 53,
+   "comments": [
+    {
+     "author": "marmos91",
+     "authorType": "User",
+     "authorAssociation": "OWNER",
+     "body": "question: Should `decide` read the snippet from the head instead of the working tree?\n\n`code()` reads the working tree at `process.cwd()`, which may be dirty, but `Q.correct` asks about \"the code at the PR head\". There are two failure cases:\n\n1. From a subdirectory, the prompt gets `(the file is not in the checkout of the head)`. jev answers without the code, and the result is a spurious `ask`.\n2. If the fix is already half-applied in the tree, jev sees the fixed code and says no. A real finding is then declined with the wrong reason.\n\n```js\nconst read = (p) => execFileSync(\"git\", [\"show\", `${pr.headSha}:${p}`], { cwd: root });\n```\n\nAt minimum, use `git rev-parse --show-toplevel` and reject the call when HEAD differs from `pr.headSha`."
+    }
+   ]
+  },
+  {
+   "n": 12,
+   "group": "lock",
+   "expect": "fix",
+   "id": "PRRT_kwDOVhLJYc62mlF2",
+   "path": "shared/pr-review/scripts/lib/respond.mjs",
+   "line": 46,
+   "comments": [
+    {
+     "author": "marmos91",
+     "authorType": "User",
+     "authorAssociation": "OWNER",
+     "body": "question: Should the round counter be written while holding the repo lock?\n\nSay a pr-review-loop tick writes this PR's state.json between the read at line 41 and the write at line 46. The spread save then restores the tick's stale `replies`, `resolved` and `lastReviewedSha`. A reply count is lost, or a head is reviewed twice. In the other order, a tick that saves after `findings` wipes `respondHeads`, and the round cap starts over. review.mjs:63 and tick.mjs take `acquireLock` for this file.\n\nOne fix is to keep the heads in their own file (`pr/<n>/respond.json`, written with `writeAtomic`). The other is to do the read-modify-write while holding `acquireLock`."
+    }
+   ]
+  },
+  {
+   "n": 13,
+   "group": "lock",
+   "expect": "fix",
+   "id": "PRRT_kwDOVhLJYc62mlF6",
+   "path": "shared/pr-review/scripts/lib/respond.mjs",
+   "line": 46,
+   "comments": [
+    {
+     "author": "marmos91",
+     "authorType": "User",
+     "authorAssociation": "OWNER",
+     "body": "should: `findings` writes prState without the repo lock\n\npr-review-loop, or the `pr-review review` that the skill runs between rounds, can hold the lock and write state.json while `findings` runs. `savePrState` (state.mjs:174) rewrites the whole file, so whichever save comes last drops the other's fields. If `respondHeads` is lost, the round cap resets, and the agent loop has no bound.\n\n```js\nconst release = acquireLock(rs);\ntry {\n  // read, cap check, save\n} finally {\n  release();\n}\n```\n\nThe other option is to move `respondHeads` to `pr/<n>/respond.json`, so each module writes its own file."
+    }
+   ]
+  },
+  {
+   "n": 14,
+   "group": "test",
+   "expect": "fix",
+   "id": "PRRT_kwDOVhLJYc62mlF_",
+   "path": "shared/pr-review/scripts/test/respond.test.mjs",
+   "line": 56,
+   "comments": [
+    {
+     "author": "marmos91",
+     "authorType": "User",
+     "authorAssociation": "OWNER",
+     "body": "question: Should this test also check `round` on a converged call?\n\nIf respond.mjs:46 `if (list.length) savePrState(...)` became an unconditional save, a converged head would count against the cap, and this test would still pass. Line 56 asserts only `done.converged === true`, after h1 and h2 are already recorded. Add a check on fresh state:\n\n```js\nassert.equal(\n  (await findings({ repo: REPO, n: N, gh: fakeGh([], { head: \"h0\" }), config })).round,\n  0\n);\n```"
+    }
+   ]
+  }
+ ],
+ "body": "A new pr-respond skill works through the review findings on your own PR, round by round. The agent edits, tests and pushes; pr-respond does the GitHub and jev steps (findings, decide, decline, fixed, summary).",
+ "baseSha": "391495c27d3671d1b79bd5cf15cf6c9af1c9aebe"
+}
