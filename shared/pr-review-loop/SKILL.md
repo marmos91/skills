@@ -2,7 +2,7 @@
 name: pr-review-loop
 description: "Keep the PR queue of one GitHub repo moving: on an interval, review PRs that ask for your review (council review from pr-review), reply to reviewers on your own PRs, and answer mentions. Posts agreed findings, queues disagreements as questions for you, never blocks, never changes code or merges. Use on 'pr-review-loop', 'watch my PRs', 'keep my reviews moving', 'answer the pr-review questions'."
 metadata:
-  version: "0.1.0" # x-release-please-version
+  version: "0.2.0" # x-release-please-version
 ---
 
 # pr-review-loop: keep the PR queue moving
