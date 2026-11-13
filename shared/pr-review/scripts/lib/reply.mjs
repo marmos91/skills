@@ -9,13 +9,11 @@ import { budgetLeft } from "./convergence.mjs";
 import { withLimits } from "./config.mjs";
 import { prData, replyPrompt, seatData } from "./prompts.mjs";
 import { scanOutbound } from "./secrets.mjs";
+import { canDrive } from "./trust.mjs";
 import { prState, savePrState, stateRoot } from "./state.mjs";
 
 const CORRECT = "The last comment in this thread, by the other party, is correct about this code.";
 const NEW_ARG = "This reply adds a new argument or new evidence.";
-// Permissions that count as a collaborator. On public repos every user has "read".
-export const COLLABORATOR = new Set(["write", "admin"]);
-
 const family = (s) => `${s.harness}|${s.model.split("/")[0]}`;
 const threadData = (t) => prData(JSON.stringify(t.comments.map((c) => ({ author: c.author, body: c.body })), null, 2), "the PR and its commenters");
 const isSkip = (b) => b.replace(/[`\p{P}\s]/gu, "").toUpperCase() === "SKIP";
@@ -68,7 +66,7 @@ export async function reply({ repo, n, threadId, mode, frame, config, runDir, gh
   // A resolved thread reopens for us only when someone answers our reply.
   const mine = t.comments.findLast((x) => x.author === me);
   if (t.isResolved && !mine) return result("skipped");
-  if (!COLLABORATOR.has(await gh.permission(repo, last.author))) return enqueue("not-collaborator");
+  if (!(await canDrive(gh, repo, me)(last.author))) return enqueue("not-collaborator");
   if (!budgetLeft(prState(repoState, n), config).replies(threadId)) {
     return enqueue("budget", { positions: [
       { side: "ours", commentId: mine?.id ?? null, body: mine?.body ?? null },

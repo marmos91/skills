@@ -179,7 +179,7 @@ async function respondCmd([action, ...args], v, deps) {
   if (!(action in RESPOND_ARGS) || args.length !== RESPOND_ARGS[action]) throw new Usage(USAGE);
   const { repo, n } = target(v.pr, v.repo);
   let config;
-  try { config = loadConfig({ userPath: userConfigPath(), cliPath: v.config }); } catch (e) { throw new Usage(e.message); }
+  try { config = loadUserConfig({ cliPath: v.config }); } catch (e) { throw new Usage(e.message); }
   const r = await import("./lib/respond.mjs");
   const gh = deps.gh ?? (await import("./lib/github.mjs"));
   const ask = deps.askJev ?? realAskJev;
