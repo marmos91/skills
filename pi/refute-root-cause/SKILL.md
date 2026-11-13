@@ -2,7 +2,7 @@
 name: refute-root-cause
 description: Use when a claimed root cause rests on reading code rather than on a reproduction, or before any fix built on a hypothesis — an adversarial multi-lens panel tries to KILL the claim; only refutations with a concrete counterexample kill it. Triggers on "refute this root cause", "put the root cause on trial", "adversarial panel on this cause", "test this hypothesis before the fix".
 metadata:
-  version: "0.1.0" # x-release-please-version
+  version: "0.2.0" # x-release-please-version
 ---
 
 # Refute the root cause before fixing

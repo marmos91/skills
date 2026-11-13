@@ -2,7 +2,7 @@
 name: pr-open
 description: "Take a finished branch to an open, review-ready GitHub PR: format and lint with the project's own commands, clean the history (signed commits, no AI mentions, after the user approves the plan), run the tests and put the real counts in the body, scan for secrets, link the issue, and stack on a parent branch when asked. Then offer a pr-review round or pr-respond. Use on 'pr-open', 'open a PR', 'ship this branch', 'prepare a PR', 'make this review-ready'."
 metadata:
-  version: "0.1.0" # x-release-please-version
+  version: "0.2.0" # x-release-please-version
 ---
 
 # pr-open: take a branch to a review-ready PR

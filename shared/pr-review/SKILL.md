@@ -2,7 +2,7 @@
 name: pr-review
 description: "Deep review of one GitHub PR by a council of different models (Opus, Mimir, any model you set per seat or per lens). Five lenses: adversarial, correctness, simplification, architecture, security. Seats vote on each other's findings; only agreed findings are posted, split ones are settled by jev or asked to you. Works in Claude Code and pi. Resumable. Use on 'review PR 42', 'review this PR', 'pr-review', 'council review'."
 metadata:
-  version: "0.1.0" # x-release-please-version
+  version: "0.2.0" # x-release-please-version
 ---
 
 # pr-review: council review of one PR
