@@ -282,3 +282,21 @@ test("runCheck: passing runs cut short by the time cap are a time-out, not a pas
     assert.deepEqual([r.exit, r.runs, r.timedOut], [0, 1, true]);
   } finally { Date.now = real; }
 });
+
+test("a resume after setup resets the worktree: a fix check stopped by a signal left its edit", async () => {
+  const { f, runDir } = wt();
+  await runSetup(f, cfg([{ name: "ok", run: "true" }]), runDir);
+  writeFileSync(join(f.worktree, "a.txt"), "fix left behind\n");
+  writeFileSync(join(f.worktree, "stray.txt"), "x");
+  const s = await runSetup(f, cfg([{ name: "ok", run: "true" }]), runDir);
+  assert.equal(s.ran, true);
+  assert.equal(readFileSync(join(f.worktree, "a.txt"), "utf8"), "a\n");
+  assert.equal(existsSync(join(f.worktree, "stray.txt")), false);
+});
+
+test("the reset between checks removes a nested repo that a check made", async () => {
+  const { f, runDir } = wt();
+  const s = await runSetup(f, cfg([{ name: "nest", run: "mkdir sub && git -C sub init -q && echo x > sub/f" }, { name: "see", run: "test ! -e sub" }]), runDir);
+  assert.deepEqual(s.checks.map((c) => c.ok), [true, true]);
+  assert.equal(existsSync(join(f.worktree, "sub")), false);
+});

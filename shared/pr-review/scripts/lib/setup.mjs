@@ -107,7 +107,7 @@ export function queueCoreQuestion(repoState, repo, candidates) {
     pr: 0, sha: "", fingerprint: createHash("sha1").update(`core-paths\0${repo.toLowerCase()}`).digest("hex"), file: "(repo config)", line: 0, snippet: "",
     options: ["drop"], // globs cannot be an option: they are saved with `pr-review config core-paths`
     finding: { kind: "core-paths", title: "Which paths are core?", case: `review.depth is auto and ${repo} has no core paths. A PR that changes a core path gets a full review (setup checks). Until you answer, only a new exported API makes a review full. Candidates: ${candidates.join(", ") || "none"}.` },
-    sides: { keep: `Run: pr-review config core-paths ${repo} <glob>...`, drop: "drop: no core paths (saved, never asked again)." },
+    sides: { keep: `Run: pr-review config core-paths ${repo} '<glob>'... (quote each glob)`, drop: "drop: no core paths (saved, never asked again)." },
     failure: "Code PRs get a light review.",
   });
 }
@@ -181,7 +181,7 @@ export async function runCheck(c, wt, timeoutMs) {
 /** Back to the PR head: tracked edits, commits and new files go. Throws when git fails. */
 export function resetWorktree(wt, sha) {
   git(wt, ["reset", "-q", "--hard", sha]);
-  git(wt, ["clean", "-fdxq"]); // -x: ignored build output from one check must not reach the next
+  git(wt, ["clean", "-ffdxq"]); // -x: ignored build output from one check must not reach the next; -ff: nor a nested repo it made
 }
 
 /**
@@ -190,35 +190,39 @@ export function resetWorktree(wt, sha) {
  */
 export async function runSetup(f, config, runDir, log = () => {}) {
   const file = join(f.ctxDir, "setup.json");
-  if (done(runDir, "setup")) return JSON.parse(readFileSync(file, "utf8"));
-  let result;
-  if (!f.shellOk) result = { ran: false, reason: "an author is not trusted", checks: [] };
-  else {
-    const checks = [];
-    let resetFailed = null;
-    // Each check, and then the seats, start from the PR head: a check may write or commit in the worktree.
-    const reset = () => {
-      try { resetWorktree(f.worktree, f.headSha); } catch (e) {
-        log(`setup: worktree reset failed: ${e.message}`);
-        resetFailed = String(e.stderr || e.message).trim().slice(0, 200);
-      }
-    };
-    reset(); // a resumed run may find a dirty worktree: {dirs} is read from it
-    for (const c of checksFor(config, f)) {
-      // keyed by the check itself: a config edited before a resume never reuses another check's result
-      const key = createHash("sha1").update(`${c.name}\0${c.run}\0${c.repeat}\0${c.timeout_s}`).digest("hex").slice(0, 16);
-      const one = join(runDir, "setup", `${key}.json`);
-      if (done(runDir, "setup", key)) { checks.push(JSON.parse(readFileSync(one, "utf8"))); continue; }
-      log(`setup: ${c.name}: ${c.run}`);
-      const r = await runCheck(c, f.worktree, c.timeout_s * 1000);
-      const v = { name: c.name, command: c.run, exit: r.exit, timed_out: r.timedOut, runs: r.runs, repeat: c.repeat, ok: r.exit === 0 && !r.timedOut, output: redact(r.output.slice(-OUT_MAX)) };
-      writeAtomic(one, JSON.stringify(v, null, 2) + "\n");
-      markDone(runDir, "setup", key);
-      checks.push(v);
-      reset();
+  if (!f.shellOk) return finishSetup(runDir, file, { ran: false, reason: "an author is not trusted", checks: [] });
+  let resetFailed = null;
+  // Each check, and then the seats, start from the PR head: a check may write or commit in the worktree.
+  const reset = () => {
+    try { resetWorktree(f.worktree, f.headSha); } catch (e) {
+      log(`setup: worktree reset failed: ${e.message}`);
+      resetFailed = String(e.stderr || e.message).trim().slice(0, 200);
     }
-    result = { ran: true, checks, ...(resetFailed && { reset_failed: resetFailed }) };
+  };
+  // A resumed run may find a dirty worktree, also after setup: a fix check (checkFix) stopped by a signal leaves
+  // its fix in place, and the seats and {dirs} read the worktree.
+  reset();
+  if (done(runDir, "setup")) {
+    const s = JSON.parse(readFileSync(file, "utf8"));
+    return resetFailed ? { ...s, reset_failed: resetFailed } : s;
   }
+  const checks = [];
+  for (const c of checksFor(config, f)) {
+    // keyed by the check itself: a config edited before a resume never reuses another check's result
+    const key = createHash("sha1").update(`${c.name}\0${c.run}\0${c.repeat}\0${c.timeout_s}`).digest("hex").slice(0, 16);
+    const one = join(runDir, "setup", `${key}.json`);
+    if (done(runDir, "setup", key)) { checks.push(JSON.parse(readFileSync(one, "utf8"))); continue; }
+    log(`setup: ${c.name}: ${c.run}`);
+    const r = await runCheck(c, f.worktree, c.timeout_s * 1000);
+    const v = { name: c.name, command: c.run, exit: r.exit, timed_out: r.timedOut, runs: r.runs, repeat: c.repeat, ok: r.exit === 0 && !r.timedOut, output: redact(r.output.slice(-OUT_MAX)) };
+    writeAtomic(one, JSON.stringify(v, null, 2) + "\n");
+    markDone(runDir, "setup", key);
+    checks.push(v);
+    reset();
+  }
+  return finishSetup(runDir, file, { ran: true, checks, ...(resetFailed && { reset_failed: resetFailed }) });
+}
+function finishSetup(runDir, file, result) {
   writeAtomic(file, JSON.stringify(result, null, 2) + "\n");
   markDone(runDir, "setup");
   return result;

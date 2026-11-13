@@ -248,7 +248,7 @@ export async function main(argv, deps = {}) {
     try { rs = stateRoot(repo); } catch (e) { throw new Usage(e.message); }
     // an unquoted glob reaches us already expanded by the shell
     const expanded = globs.filter((g) => !/[*?[{]/.test(g) && existsSync(g));
-    if (expanded.length) console.error(`warning: ${expanded.join(" ")} ${expanded.length > 1 ? "are files" : "is a file"} here, not a glob: quote the globs (for example 'pkg/**').`);
+    if (expanded.length) throw new Usage(`${expanded.join(" ")} ${expanded.length > 1 ? "are files" : "is a file"} here, not a glob: the shell expanded a glob. Quote each glob (for example 'pkg/**'). Nothing saved.`);
     setCorePaths(rs, globs);
     console.log(`core paths of ${repo}: ${globs.join(" ") || "none"}`);
     return 0;

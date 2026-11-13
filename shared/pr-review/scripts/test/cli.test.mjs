@@ -295,6 +295,11 @@ test("config core-paths saves the globs (none too) and closes the core-paths que
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(readCorePaths(fx.state), ["pkg/**", "cmd/**"]);
   assert.equal(openQuestions(fx.state).some((q) => q.id === id), false);
+  writeFileSync(join(fx.dir, "main.go"), "package main\n");
+  r = cli(fx, "config", "core-paths", "o/r", "main.go");
+  assert.equal(r.status, 1, "a glob the shell expanded is refused");
+  assert.match(r.stderr, /Quote each glob.*Nothing saved/);
+  assert.deepEqual(readCorePaths(fx.state), ["pkg/**", "cmd/**"]);
   r = cli(fx, "config", "core-paths", "o/r");
   assert.deepEqual(readCorePaths(fx.state), []);
   assert.equal(cli(fx, "config", "nope").status, 1);

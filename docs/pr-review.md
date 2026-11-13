@@ -22,7 +22,7 @@ attribution.
 | `pr-review answer <id> <post\|drop\|ask-author>` | Record your answer to one question |
 | `pr-review status [owner/repo]` | Questions, to-do items, review and reply counts per PR, lock holder, unfinished runs, tokens per stage, paused flag |
 | `pr-review doctor` | Merged config, the loaded lenses, a 1-token probe per seat, `gh auth status`, jev, gitleaks, claude login mode, planned child count per effort level |
-| `pr-review config core-paths <owner/repo> [glob...]` | Save the core paths of a repo for `auto` depth. No glob saves "none" |
+| `pr-review config core-paths <owner/repo> ['glob'...]` | Save the core paths of a repo for `auto` depth. No glob saves "none". Quote each glob: a glob the shell expanded to a file is refused |
 | `pr-review tick [owner/repo]` | One loop run (a tick); `pr-review-loop` calls it |
 | `pr-review-loop [owner/repo]` | One loop run (a tick) |
 | `pr-review-loop pause` / `resume [owner/repo]` | Stop or restart every tick for the repo |
@@ -434,7 +434,7 @@ change the depth of this PR (rules 1, 2 and 4 do not decide it):
   run (nothing ran). The summary
   starts with `core paths not set` and lists candidates: the top folders that
   changed most often on the base branch. Save the answer with
-  `pr-review config core-paths <owner/repo> [glob...]`, then run the review
+  `pr-review config core-paths <owner/repo> ['glob'...]`, then run the review
   again. No glob saves "none", so the engine never asks again.
 - The loop does not stop. It queues one question for the repo (once), and
   reviews with no core paths until you answer. Answer with
@@ -499,12 +499,21 @@ Checks run code from the PR. So:
   SIGTERM to the group, then SIGKILL after 3 s. When the command exits, the
   rest of its group is killed too.
 - Before each check, and after the last one, the engine resets the worktree
-  to the PR head (`git reset --hard <head>`, `git clean -fd`), also when a
-  check made a commit. So a check never sees what an earlier check wrote, and
-  the seats read the PR head as it is. If the reset fails, the engine logs it and the seats' brief says
-  so. The worktree is removed with the run.
-- A check runs as you, with no file sandbox: it can read files in your
-  home folder. That is why it needs trusted authors.
+  to the PR head (`git reset --hard <head>`, `git clean -ffdx`), also when a
+  check made a commit or a nested repo. So a check never sees what an earlier
+  check wrote, and the seats read the PR head as it is. A resumed run resets
+  the worktree again before the seats read it, also when its setup finished
+  (a fix check stopped by a signal leaves its edit). If the reset fails, the
+  engine logs it and the seats' brief says so. The worktree is removed with
+  the run.
+- The reset keeps the review correct. It is not a sandbox. A check runs as
+  you, with no file sandbox: it can read files in your home folder and write
+  outside the worktree, for example to `.git/config` or `.git/hooks` of
+  your clone. No reset undoes that. That is why checks need trusted authors
+  (write access to the repo).
+- The seats' brief holds only engine text: the check names from your config,
+  the results and fixed reasons. Commands, output and git errors stay in
+  `ctx/setup.json`, `ctx/mutants.json` and the engine log.
 
 ### Proven findings
 
@@ -512,7 +521,7 @@ At `full` depth the engine also tries to prove the findings. It uses the
 setup runner, so the same rules apply: trusted authors only, the short
 environment, the process-group kill, and the `repeat` and `timeout_s` of
 the check. Before and after each run the engine resets the worktree to the
-PR head (`git reset --hard`, `git clean -fd`). At `light` depth none of this
+PR head (`git reset --hard`, `git clean -ffdx`). At `light` depth none of this
 runs.
 
 **Mutants.** A check with `"mutate": true` is the test command. The Go
