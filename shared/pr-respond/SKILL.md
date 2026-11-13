@@ -1,6 +1,8 @@
 ---
 name: pr-respond
 description: "Work through the review findings on your own GitHub PR until a round adds nothing new: jev confirms a finding (fix) or sends it to you (ask); you check it, fix with a test or decline with a reason, push, reply 'Fixed in <commit>', and resolve only when jev confirms the commit fixes it; then start the next review round (council or Copilot). Capped rounds. Use on 'pr-respond', 'fix the review findings', 'address the review on my PR', 'answer Copilot on my PR', 'loop until the review is clean'."
+metadata:
+  version: "0.1.0" # x-release-please-version
 ---
 
 # pr-respond: fix the review findings on your own PR
