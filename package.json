@@ -1,0 +1,39 @@
+{
+  "name": "@marmos91/skills",
+  "version": "0.1.0",
+  "description": "AI-agent skills for Claude Code and pi: council PR review, review loop, repo audit, jev.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/marmos91/skills.git"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "skills": "bin/skills.mjs",
+    "pr-review": "shared/pr-review/scripts/pr-review",
+    "pr-review-loop": "shared/pr-review-loop/scripts/pr-review-loop",
+    "jev": "shared/jev/jev.py",
+    "repo-audit": "shared/repo-audit/scripts/audit.sh"
+  },
+  "files": [
+    "bin/skills.mjs",
+    "shared/",
+    "pi/",
+    "docs/",
+    "!docs/superpowers/",
+    "!**/test/",
+    "!**/test_*.py",
+    "!**/__pycache__/"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs shared/pr-review/scripts/test/*.test.mjs && python3 -m unittest discover shared/jev && sh shared/repo-audit-fix/scripts/test/jev-gate.test.sh",
+    "check-pack": "node tools/check-pack.mjs",
+    "smoke": "sh tools/smoke.sh"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

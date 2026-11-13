@@ -1,6 +1,8 @@
 ---
 name: jev
 description: "Ask Mimir SystemOne (Jev) typed yes/no questions and get calibrated probabilities and clean exit codes from any workflow — usable identically from bash in pi.dev and Claude Code. Use for verifying claims against text, gating CI or agent workflows on a judgment, deciding between branches of a playbook, or any fast classification where prose would be noise. Triggers on 'jev', 'ask jev', 'ask systemone', 'is this true', 'verify this claim', 'gate on'."
+metadata:
+  version: "0.1.0" # x-release-please-version
 ---
 
 # jev — typed yes/no questions with calibrated probabilities
@@ -9,9 +11,9 @@ description: "Ask Mimir SystemOne (Jev) typed yes/no questions and get calibrate
 returns a probability and a confidence, not prose. The exit code is the
 decision, so scripts and playbooks branch without parsing output.
 
-`install.sh` links `bin/jev` into `~/.local/bin`. Those links point at the
-working tree, so a fix is live at once. A nix-managed copy under
-`~/.agents/skills` is pinned to the flake revision and changes only after
+`npx @marmos91/skills install` links `jev` into `~/.local/bin`. In a dev
+clone, `install.sh` links `bin/jev` to the working tree, so a fix is live at
+once. A nix-managed install is pinned to a release tag and changes only after
 `nix flake update` and a rebuild. Credentials come from the
 sops-provisioned `~/.config/mimir/api-key` and `~/.config/mimir/base-url`
 (ends in `/v1`).

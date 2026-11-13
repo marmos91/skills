@@ -177,6 +177,21 @@ test("lock held by another run -> exits 0 with a message", async () => {
   } finally { release(); }
 });
 
+test("a PR whose lock a manual review holds is skipped this tick; the others run", async () => {
+  const rs = fresh();
+  withBaseline(rs);
+  const release = acquireLock(join(rs, "pr", "1"), " of PR #1");
+  const lines = [];
+  try {
+    const { out, f } = await go({ gh: fakeGh({ rows: [row(1, ["review-requested"]), row(2, ["review-requested"])] }), log: (m) => lines.push(m) });
+    assert.deepEqual(f.reviews.map((r) => r.n), [2]);
+    assert.equal(out.processed, 1);
+    assert.ok(lines.some((l) => /^#1: .*lock of PR #1.*skipped this tick/.test(l)), lines.join("\n"));
+    assert.equal(prState(rs, 1).cache.updatedAt, undefined, "not cached: the next tick tries it again");
+  } finally { release(); }
+  assert.equal(existsSync(join(rs, "pr", "2", "lock")), false, "the tick released its PR lock");
+});
+
 test("no question is asked during a tick", async () => {
   const rs = fresh();
   withBaseline(rs);
@@ -612,4 +627,18 @@ test("a throw outside handle() in a parallel tick waits for the other PRs before
   f.review = async (o) => { const r = await f1(o); if (o.n === 1) { mkdirSync(join(rs, "pr", "1"), { recursive: true }); writeFileSync(join(rs, "pr", "1", "state.json"), "{"); } return r; };
   await assert.rejects(go({ gh: fakeGh({ rows: [1, 2].map((n) => row(n, ["review-requested"])) }), f, loop: { max_parallel_prs: 2 } }));
   assert.equal(done2, true, "PR 2 finished before the tick ended");
+});
+
+test("the default tick config loads the user lens files, as review and doctor do", async () => {
+  const rs = fresh(); withBaseline(rs);
+  const old = process.env.XDG_CONFIG_HOME;
+  process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "tick-cfg-"));
+  try {
+    mkdirSync(join(process.env.XDG_CONFIG_HOME, "pr-review", "lenses"), { recursive: true });
+    writeFileSync(join(process.env.XDG_CONFIG_HOME, "pr-review", "lenses", "perf.md"), "Look for slow loops.\n");
+    writeFileSync(join(process.env.XDG_CONFIG_HOME, "pr-review", "config.json"), JSON.stringify({ lenses: { perf: { enabled: false } } }));
+    const f = fakes();
+    const out = await tick({ repo: REPO, repoDir: mkdtempSync(join(tmpdir(), "tick-repo-")), gh: fakeGh(), review: f.review, reply: f.reply, frame: f.frame, log: () => {}, now: () => NOW });
+    assert.equal(out.processed, 0);
+  } finally { if (old === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = old; }
 });

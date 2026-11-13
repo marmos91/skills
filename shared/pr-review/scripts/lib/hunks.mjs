@@ -41,10 +41,13 @@ export function parseHunks(patch) {
 // A fence of 3 or more backticks: a suggestion that itself holds ``` needs a longer one.
 const FENCE = /^(\s*`{3,})suggestion\b/gm;
 
+/** The diff-line kind of a finding's RIGHT-side line (add or ctx); undefined off the diff. */
+export const diffLine = (hunks, file, line) => (line == null ? undefined : hunks.get(file)?.right.get(line));
+
 export function place(findings, hunks, permalinkBase) {
   const inline = [], body = [];
   for (const f of findings) {
-    const kind = f.line == null ? undefined : hunks.get(f.file)?.right.get(f.line);
+    const kind = diffLine(hunks, f.file, f.line);
     if (kind) {
       inline.push({ path: f.file, line: f.line, side: "RIGHT", body: f.body }); // right holds only add/ctx lines
     } else {

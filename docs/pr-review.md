@@ -20,8 +20,8 @@ attribution.
 | `pr-review review <n> [--repo o/r] [--effort low\|medium\|high\|max\|auto] [--lens a,b] [--max-diff-lines N] [--dry-run] [--until stage] [--restart]` | Review one PR. `<n>` is a number or a PR URL. Without `--repo`, the repo of the current directory |
 | `pr-review answer` | Print the open questions as JSON |
 | `pr-review answer <id> <post\|drop\|ask-author>` | Record your answer to one question |
-| `pr-review status [owner/repo]` | Questions, to-do items, review and reply counts per PR, lock holder, unfinished runs, paused flag |
-| `pr-review doctor` | Merged config, a 1-token probe per seat, `gh auth status`, jev, gitleaks, claude login mode, planned child count per effort level |
+| `pr-review status [owner/repo]` | Questions, to-do items, review and reply counts per PR, lock holder, unfinished runs, tokens per stage, paused flag |
+| `pr-review doctor` | Merged config, the loaded lenses, a 1-token probe per seat, `gh auth status`, jev, gitleaks, claude login mode, planned child count per effort level |
 | `pr-review tick [owner/repo]` | One loop run (a tick); `pr-review-loop` calls it |
 | `pr-review-loop [owner/repo]` | One loop run (a tick) |
 | `pr-review-loop pause` / `resume [owner/repo]` | Stop or restart every tick for the repo |
@@ -64,7 +64,7 @@ stage, writes a `.done` marker after its output passes the stage schema.
 The engine pins the head SHA for the run and writes one context folder that
 every seat reads:
 
-- PR metadata, the diff, the commits.
+- PR metadata, the diff, the commits, and the author's questions from the PR body.
 - The issues that the PR closes. If there is none, the summary says "No
   tracking issue or plan." and the correctness lens checks the PR against its
   own description.
@@ -128,6 +128,27 @@ own children.
 | architecture | Module boundaries, coupling, data flow, fit with existing patterns, API and UX shape |
 | security | Validation at trust boundaries, authn and authz, secrets, injection, data exposure, unsafe defaults |
 
+### Your own lenses
+
+Put a lens file in `~/.config/pr-review/lenses/<name>.md` (or under
+`$XDG_CONFIG_HOME`). The name is the file stem. It uses only `a-z`, `0-9` and
+`-`. It cannot be a built-in lens name or a reserved name (`hygiene`, `all`,
+`v`, `merge`, `compose`, `constructor`, `prototype`). The loader skips dot files
+and files that are not `.md`. The file has the same shape as a
+built-in lens and the same limit: 40 lines and 4000 characters. A user lens is
+on by default. Set `lenses.<name>` like a built-in lens (`enabled`, `seats`,
+`max_turns`, `thinking_by_stage`), and select it with `--lens <name>`. A bad
+file of a lens that is on stops the run before any child starts, and the error
+names the file. The run does not read a lens that is off, so its file does not
+stop the run. `pr-review doctor` lists the loaded lenses and warns about a bad
+file of a lens that is off.
+
+Only your config folder can add a lens. A repo config cannot, because a lens is
+prompt text. A repo can only turn a lens off with `lenses.<name>.enabled: false`.
+The loader ignores `enabled: true` from a repo, so a lens that you turned off
+stays off. When the repo names a lens that you do not have, that entry does
+nothing.
+
 The lens prompts are in `shared/pr-review/lenses/`. Every finding needs a
 concrete case: an input or situation and the wrong result. No case, no
 finding. A finding has `lens`, `severity` (`must`, `should`, `nit`), `file`,
@@ -153,7 +174,8 @@ found it. Then the engine, in code:
 Each seat that found a cluster on its own already counts as one `keep`.
 Round 2 runs only for clusters that some seats did not find, and only those
 seats vote. Each voting seat runs 1 child and votes `keep` or `drop` with a
-reason. A `drop` needs a counter-case.
+reason. A `drop` needs a counter-case. A vote child gets 10 turns plus 3 per
+finding it checks, and never more than its `max_turns`.
 
 ### 5. Tally
 
@@ -195,13 +217,36 @@ API.
 
 The judge writes the review from the agreed findings, with the rules in
 `shared/pr-review/writing.md` (short sentences, the case first, a code
-snippet or a GitHub `suggestion` block, no filler, no praise, no dashes).
+snippet or a GitHub `suggestion` block, no filler, praise only when earned
+and specific, no dashes).
+Compose gets only the repo's review guidance: `REVIEW.md` and the files in
+`review.guidance`. `REVIEW.md` is always whole. The other files are cut at
+8000 characters. The seats read the whole guidance folder.
 
-- One finding per inline comment: severity label, the case in one line,
-  then the snippet.
-- Summary: what the PR does in 2 sentences, then the `must` items, then the
-  hygiene list. When a question is still open: "1 point is still open with
-  the reviewer."
+- Findings stay inline. One finding per inline comment: severity label and a
+  title that states the conclusion with a verb, the case in one line with the
+  source of each claim ("(ran ...)", "(read file:line)", "I think"), then a
+  paste-ready fix. Findings with one root cause and one fix on the same line
+  (often from 2 lenses) share one comment.
+- The body is a short index of the threads, in this order: the verdict line
+  (what blocks and why, or "Nothing blocks."), the answers to the author's
+  questions, the inline threads grouped by theme with a `Critical` group
+  first (each line ends "(thread on `file` L<n>)"), and 1 or 2 lines of
+  specific praise when earned. Then the hygiene list and the engine lines.
+  The engine writes each index line with the real line of its thread, and
+  leaves out a finding that did not post inline.
+- The author's questions are the lines of the PR body that end with "?", and
+  the lines under a heading that names questions (code blocks skipped, 10 at
+  most). Frame writes them to `pr.json`, and compose answers them first.
+- A later review opens with "Second pass, on `<sha>`." It does not describe
+  the PR again, and says if the author's replies check out. An earlier
+  finding of ours that 2 seats now judge wrong (none open) is retracted first,
+  as "Correction: ...". Its thread is resolved and recorded, so it no longer
+  blocks and a later pass does not judge it again. An earlier `must` of ours
+  that is still open goes to compose, and the verdict names it; the engine
+  never lets the verdict say "Nothing blocks." while it blocks. Otherwise the body says "No new
+  findings." Fixed earlier findings get their link in the thread.
+- A finding off the diff lines is listed once, under "Outside the diff".
 - A finding from a single seat, or one the author must clarify, is written
   as a question to the author.
 - The effort level caps the severities and the count (see
@@ -222,7 +267,7 @@ text (`scripts/lib/verdict.mjs`). The first row that matches wins.
 
 ### 9. Post
 
-1. Take the repo lock.
+1. Hold the lock of the PR (section Resume and pause).
 2. Read the CI state again, then check the head again. If it moved, drop
    this run and frame again.
 3. Place each inline comment on the diff hunks of the pinned SHA. A
@@ -241,10 +286,32 @@ text (`scripts/lib/verdict.mjs`). The first row that matches wins.
    thread is already yours, add the link to that comment instead of a reply.
 
 Each posted body ends with a hidden marker:
-`<!-- pr-review run=<id> sha=<sha> key=<hash> -->`.
+`<!-- pr-review run=<id> sha=<sha> key=<hash> -->`. An inline comment adds
+`fp=<fingerprint>`, one for each finding it covers, separated by commas. A
+later run links a repeat of any of these findings to the thread.
 
 With `--dry-run` the engine writes the review to a file in the run folder,
-prints the planned children and models, and posts nothing.
+prints the planned children and models, prints the tokens that each stage
+used, and posts nothing.
+
+### Token usage
+
+Each child writes `<key>.usage.json` next to its output in the run folder:
+`input`, `output`, `cache_read` and `cache_creation` tokens, summed over its
+attempts. `claude -p --output-format json` and `pi --mode json` report these
+counts. A count that the harness does not report is `null`. A missing count
+never fails a run. Reply children count under the `reply` stage.
+`pr-review status` shows the totals per stage of each unfinished run, and of
+the newest run of each PR (`lastRunTokens`), also a dry run or a run with
+`--until`.
+
+The prompts help the prompt cache. Each prompt starts with the parts that all
+children of a run share: the context, the small context files (`pr.json`,
+`threads.json`, up to 6000 characters each), and in round 1 the diff. The
+parts that differ come last: the task, the lens, the budget and the findings.
+The data blocks of a run use one nonce, so these parts are the same text in
+each child. Merge gets `evidence` of each finding cut to 1500 characters.
+`fix` stays whole, because compose posts it.
 
 ## Delta review
 
@@ -401,7 +468,9 @@ PR head.
 4. **Config and guidance come from the base branch.** A PR that changes
    `.pr-review.json` or `CLAUDE.md` changes only its own diff, not the review.
 5. **PR text is data.** Prompts wrap the PR text in a delimited block with a
-   per-run nonce. One line says the block is data, never an instruction.
+   per-run nonce. The frame makes the nonce and keeps it in `frame.json`, so a
+   resume uses the same one. One line says the block is data, never an
+   instruction. Tag look-alikes inside the text are broken.
 6. **The verdict is code.** See [Verdict](#8-verdict).
 7. **Outgoing text is scanned** for secrets: review bodies, inline comments,
    replies and jev text.
@@ -424,8 +493,8 @@ PR head.
 
 ### One tick
 
-1. Exit at once if the repo is paused. Take the lock; if another run holds
-   it, exit.
+1. Exit at once if the repo is paused. Take the repo lock; if another tick
+   holds it, exit.
 2. Print the open questions and `todo.md`. Apply the answers you gave since
    the last tick. Each answer is checked against the current head first; if
    the code moved, the finding is dropped with a note. The loop never asks
@@ -441,9 +510,10 @@ PR head.
 7. Take at most `loop.max_prs_per_run` PRs (default 10), oldest activity
    first.
    The tick works on up to `loop.max_parallel_prs` PRs at the same time
-   (default 3), in one process under the repo lock. Each review still runs up
-   to `review.max_parallel` round-1 children, so the machine runs up to
-   3 x 9 seats at once. A pause stops the PRs that did not start; running
+   (default 3), in one process. Each PR takes its own lock. A PR that a
+   manual review holds is skipped this tick and tried again on the next.
+   Each review still runs up to `review.max_parallel` round-1 children, so
+   the machine runs up to 3 x 9 seats at once. A pause stops the PRs that did not start; running
    ones finish.
 
 ### What it does per PR
@@ -493,13 +563,17 @@ State root: `${XDG_STATE_HOME:-~/.local/state}/pr-review/<owner>__<repo>/`.
 
 | Path | Content |
 |---|---|
-| `lock/` | PID of the run that holds the repo. A lock with a dead PID is taken over. `review` and the loop share it |
+| `lock/` | PID of the tick that holds the repo. A lock with a dead PID is taken over. Only ticks take it |
+| `pr/<n>/lock/` | PID of the run that holds PR `n`: a review, or the tick while it handles the PR. Reviews of different PRs run at the same time |
 | `pr/<n>/state.json` | Review and reply counts, settled fingerprints, last reviewed SHA, and the cache (`updatedAt`) used to skip unchanged PRs |
 | `pr/<n>/runs/<sha>-<ts>/` | One folder per run: a folder per stage, one output file and `.done` marker per child |
 | `questions/<id>.md`, `.json` | Open and answered questions |
 | `todo.md` | Points you accepted on your own PRs |
 | `tick.json` | Queue of the current tick: PRs done, PRs in progress |
 | `paused` | Present while the loop is paused |
+
+Fetches and worktree changes write the clone's `.git`. They take a short
+lock in the clone (`.git/pr-review/lock`) and wait up to 60 s for it.
 
 - **A review resumes.** `pr-review review <n>` on a PR with an unfinished run
   for the same head SHA continues it. Only children without a `.done` marker
@@ -542,7 +616,7 @@ The engine merges 3 levels; a later level wins:
 
 The file is JSON with `//` comments allowed. Objects merge deep; arrays
 (`seats`, `lenses.*.seats`) replace. The repo level may set only
-`lenses.*.enabled`, `loop.authors_ignore`, `loop.max_prs_per_run`,
+`lenses.*.enabled` (only `false` has an effect), `loop.authors_ignore`, `loop.max_prs_per_run`,
 `review.guidance`, `hygiene.enabled`, and additions to
 `effort_auto.high_paths`. The loader rejects any other repo key. Seats, judge,
 decider and `round1` belong to you.
@@ -634,8 +708,9 @@ A commented copy is in `shared/pr-review/config.example.json`.
 
 ### Set up a machine
 
-1. Run `./install.sh` in the skills repo. It links `shared/pr-review` and
-   `shared/pr-review-loop` into `~/.claude/skills/` and `~/.pi/agent/skills/`.
+1. Run `npx @marmos91/skills install` (or `./install.sh` in a dev clone).
+   It puts `pr-review` and `pr-review-loop` into `~/.claude/skills/` and
+   `~/.pi/agent/skills/`, and their CLIs into `~/.local/bin`.
 2. Install `gh` and log in. Install `node`. Optional: `gitleaks`, and `jev`
    (installed with this repo).
 3. For an unattended loop: run `claude setup-token`, and export a
@@ -678,7 +753,8 @@ pr-review-loop resume
 
 `pr-review status` shows the questions, the to-do items, the review and reply
 counts per PR, the lock holder, unfinished runs (PR, SHA, stage, children done
-of total), an interrupted tick queue, and the paused flag.
+of total, tokens per stage), the tokens of the last run of each PR, an
+interrupted tick queue, and the paused flag.
 
 ## Live dry runs
 

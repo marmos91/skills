@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # Sourced by fix.sh (needs log, epic_dir, STATE, JEV, JEV_CONFIDENCE).
 # Tested by test/jev-gate.test.sh.
 

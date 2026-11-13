@@ -2,11 +2,11 @@ import test from "node:test";
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync, existsSync, readdirSync, rmSync } from "node:fs";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import { review } from "../lib/review.mjs";
+import { composeGuidance, review } from "../lib/review.mjs";
 import { ChildFailed } from "../lib/child.mjs";
 import { decide as realDecide } from "../lib/decider.mjs";
 import { answer, openQuestions } from "../lib/questions.mjs";
@@ -346,6 +346,13 @@ test("a fixed thread longer than one page gets a reply: its newest comment is un
   assert.ok(m.some((x) => x.key.includes("comments/11/replies")));
 });
 
+test("\"No new findings.\" is dropped when a finding posts", async () => {
+  const fx = fixture(); routes(fx);
+  const { r } = await go(fx, happy({ compose: { body: "No new findings.", comments: [{ id: "c1", body: "**must:** off by one" }] } }));
+  assert.equal(r.exit, 0, r.summary);
+  assert.doesNotMatch(posts(fx)[0].body, /No new findings/);
+});
+
 test("an earlier must still open blocks approve", async () => {
   const fx = fixture();
   routes(fx, { threads: [{ id: "T1", isResolved: false, isOutdated: false, viewerCanResolve: true, path: "a.js", line: 1, originalLine: 1,
@@ -482,11 +489,37 @@ test("SIGTERM during round 1, then rerun: finished children are not started agai
   assert.deepEqual(starts().sort(), ["all~0.json", "all~1.json"]);
   p.kill("SIGTERM");
   assert.equal(await closed, 143);
-  assert.equal(existsSync(join(fx.state, "lock")), false, "lock released");
+  assert.equal(existsSync(join(fx.state, "pr", "5", "lock")), false, "lock released");
   rmSync(join(fake, "all~1.json.hang"));
   const q = cli(["--until", "round1"]);
   assert.equal(await new Promise((res) => q.on("close", res)), 0);
   assert.deepEqual(starts().sort(), ["all~0.json", "all~1.json", "all~1.json"], "all~0 ran once");
+});
+
+test("reviews of two PRs run at the same time in two processes; a second run of the same PR gets Locked", async () => {
+  const fx = fixture(); routes(fx);
+  // Another process reviews PR 6 and is stuck in its frame: it holds PR 6's lock.
+  const other = spawn(process.execPath, ["--input-type=module", "-e", `const { review } = await import(${JSON.stringify(join(here, "..", "lib", "review.mjs"))});
+    setInterval(() => {}, 1000);
+    await review({ repo: "o/r", n: 6, gh: { pr: async () => ({ headSha: "f".repeat(40) }) }, frame: async () => { console.log("HELD"); await new Promise(() => {}); } });`],
+  { cwd: fx.repoDir, env: process.env, stdio: ["ignore", "pipe", "inherit"] });
+  try {
+    await new Promise((res) => other.stdout.once("data", res));
+    const { r } = await go(fx, happy());
+    assert.equal(r.exit, 0, r.summary);
+    assert.equal(posts(fx).length, 1);
+    await assert.rejects(go(fx, happy(), { n: 6 }), { name: "Locked", message: `another pr-review run holds the lock of PR #6 (pid ${other.pid})` });
+  } finally { other.kill(); }
+});
+
+test("a stale PR lock (dead pid) is taken over and released", async () => {
+  const fx = fixture(); routes(fx);
+  const lock = join(fx.state, "pr", "5", "lock");
+  mkdirSync(lock, { recursive: true });
+  writeFileSync(join(lock, "pid"), String(spawnSync("true").pid));
+  const { r } = await go(fx, happy());
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(existsSync(lock), false);
 });
 
 const R = (fx) => JSON.parse(readFileSync(join(fx.stubDir, "routes.json"), "utf8"));
@@ -889,6 +922,7 @@ test("hygiene warnings are in the run summary; run.json keeps the planned child 
   assert.equal(r.exit, 0, r.summary);
   assert.match(r.summary, /warning: hygiene child failed/);
   assert.equal(JSON.parse(readFileSync(join(r.runDir, "run.json"), "utf8")).planned, r.planned);
+  assert.match(JSON.parse(readFileSync(join(r.runDir, "run.json"), "utf8")).version, /^\d+\.\d+\.\d+$/);
   assert.ok(r.planned > 0);
 });
 
@@ -906,6 +940,48 @@ test("round-1 children carry the lens max_turns; other children the global one",
   assert.match(prompt("security~"), /Budget: at most 7 tool calls\./);
   assert.match(prompt("correctness~"), /Budget: at most 20 tool calls\./);
   assert.ok(run.calls.every((c) => c.seat.timeout_minutes === 10));
+});
+
+test("a vote child gets 10 turns plus 3 per finding, never above its limit", async () => {
+  const fx = fixture(); routes(fx);
+  const { r, run } = await go(fx, happy());
+  assert.equal(r.exit, 0, r.summary);
+  const votes = run.calls.filter((c) => c.k.startsWith("v~"));
+  assert.ok(votes.length > 0);
+  for (const c of votes) {
+    const n = (c.prompt.match(/"id": "c\d+"/g) ?? []).length;
+    assert.equal(c.seat.max_turns, Math.min(40, 10 + 3 * n), c.k);
+    assert.match(c.prompt, new RegExp(`Budget: at most ${c.seat.max_turns - 5} tool calls\\.`));
+  }
+});
+
+test("compose gets the repo's review guidance only; round 1 still sees the whole guidance folder", async () => {
+  const fx = fixture(); routes(fx);
+  git(fx.seed, "checkout", "-q", "main");
+  commit(fx.seed, { "REVIEW.md": "REVIEW-RULE\n", "CONTRIBUTING.md": "CONTRIB-RULE\n" }, "docs: guidance");
+  git(fx.seed, "push", "-q", fx.origin, "main");
+  const { r, run } = await go(fx, happy());
+  assert.equal(r.exit, 0, r.summary);
+  const compose = run.calls.find((c) => c.k === "compose").prompt;
+  assert.ok(compose.includes("REVIEW-RULE") && !compose.includes("CONTRIB-RULE"));
+  assert.ok(existsSync(join(r.runDir, "ctx", "guidance", "CONTRIBUTING.md")));
+});
+
+test("each inline comment goes through the secret scanner once", async () => {
+  const fx = fixture(); routes(fx);
+  const bin = join(fx.root, "gl-bin"), log = join(fx.root, "gl.log");
+  mkdirSync(bin);
+  // stub gitleaks: log each scanned text, report no finding
+  writeFileSync(join(bin, "gitleaks"), `#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = --report-path ] && r=$2; shift; done\ncat >>"${log}"; echo "@@END" >>"${log}"; echo '[]' >"$r"\n`);
+  chmodSync(join(bin, "gitleaks"), 0o755);
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path}`;
+  try {
+    const { r } = await go(fx, happy());
+    assert.equal(r.exit, 0, r.summary);
+  } finally { process.env.PATH = path; }
+  const scans = readFileSync(log, "utf8").split("@@END\n").filter((t) => t.startsWith("**must:** off by one"));
+  assert.equal(scans.length, 1);
 });
 
 test("every child gets the ctx folder next to the worktree", async () => {
@@ -1040,7 +1116,7 @@ test("compose output with a fenced suggestion reaches the post with the fence in
   const { runChild } = await import("../lib/child.mjs");
   const body = "**must:** off by one\n\n```suggestion\nconst a = 1;\n```";
   const raw = join(fx.root, "compose.out");
-  writeFileSync(raw, "```json\n" + JSON.stringify({ body: "Changes a.", comments: [{ id: "c1", body }] }) + "\n```\n");
+  writeFileSync(raw, "```json\n" + JSON.stringify({ verdict: "The off by one blocks.", body: "Changes a.", comments: [{ id: "c1", body }] }) + "\n```\n");
   const compose = async (o) => {
     const old = process.env.PR_REVIEW_FAKE;
     process.env.PR_REVIEW_FAKE = raw;
@@ -1233,4 +1309,276 @@ test("sweep: a run at an old head loses its worktree; a folder that cannot go ne
     const { r: r3 } = await go(fx, happy(), { restart: true });
     assert.equal(r3.exit, 0, r3.summary);
   } finally { execFileSync("chmod", ["755", stuck]); }
+});
+
+test("one root cause found by 2 lenses: one comment with both fps; the next run links either lens to it", async () => {
+  const sec = { lens: "security", title: "Total leaks the secret" };
+  const fx0 = fixture(); routes(fx0);
+  const fold = happy({
+    merge: [C("c1"), C("c2", sec)], "v~2": [keep("c1"), keep("c2")],
+    compose: { body: "Changes a.", comments: [{ id: "c1", also: ["c2"], body: "**must:** off by one, and it leaks" }] },
+  });
+  await go(fx0, fold);
+  const t = posts(fx0)[0].threads;
+  assert.equal(t.length, 1);
+  assert.ok(t[0].body.endsWith(` fp=${fingerprint(F())},${fingerprint(F(sec))} -->`), t[0].body);
+  const st = prState(fx0.state, N);
+  assert.ok(st.settled.includes(fingerprint(F(sec))));
+  assert.deepEqual(st.agreed.map((a) => a.lens).sort(), ["correctness", "security"]);
+  // A later review: our thread holds both fps, so a reworded security repeat on that line links to it.
+  const fx = fixture(); routes(fx, { threads: [thread("T1", ME, t[0].body)] });
+  savePrState(fx.state, N, { ...prState(fx.state, N), agreed: st.agreed });
+  const { r } = await go(fx, happy({ merge: [C("c2", { ...sec, title: "Other words" })] }));
+  const rec = JSON.parse(readFileSync(join(r.runDir, "clusters.json"), "utf8"));
+  assert.deepEqual([rec.clusters.length, rec.linked.length], [0, 1]);
+});
+
+test("compose `also` never folds a finding of another file", async () => {
+  const fx = fixture(); routes(fx);
+  await go(fx, happy({
+    merge: [C("c1"), C("c2", { file: "b.js", lens: "security" })], "v~2": [keep("c1"), keep("c2")],
+    compose: { body: "Changes a.", comments: [{ id: "c1", also: ["c2"], body: "**must:** x" }, { id: "c2", body: "**must:** y" }] },
+  }));
+  const all = JSON.stringify(posts(fx)[0]);
+  assert.match(all, /\*\*must:\*\* x/);
+  assert.match(all, /\*\*must:\*\* y/, "c2 keeps its own comment");
+});
+
+test("compose `also`: a chain loses no finding; another line of the same file is not folded", async () => {
+  const fx = fixture(); routes(fx);
+  await go(fx, happy({
+    merge: [C("c1"), C("c2", { lens: "security", title: "Leak" }), C("c3", { lens: "simplification", title: "Dead" }), C("c4", { lens: "adversarial", title: "Other line", line: 3 })],
+    "v~2": ["c1", "c2", "c3", "c4"].map(keep),
+    compose: { body: "Changes a.", comments: [
+      { id: "c1", also: ["c2"], body: "**must:** one" },
+      { id: "c3", also: ["c1", "c4"], body: "**must:** three" },
+    ] },
+  }));
+  const t = posts(fx)[0].threads;
+  const fp = (o) => fingerprint(F(o));
+  const by = (re) => t.find((x) => re.test(x.body));
+  assert.ok(by(/one/).body.endsWith(`fp=${fp({})},${fp({ lens: "security", title: "Leak" })} -->`), "c2 folds into c1");
+  assert.ok(by(/three/), "c1 keeps its own comment: a host is never folded");
+  assert.ok(by(/three/).body.endsWith(`fp=${fp({ lens: "simplification", title: "Dead" })} -->`), "c3 carries only its own fp");
+  const c4 = t.find((x) => x.line === 3);
+  assert.ok(c4, "c4, on another line, is not folded");
+  assert.match(c4.body, /Other line[\s\S]*use 2/, "a refused fold still posts its fix");
+  const st = prState(fx.state, N);
+  for (const o of [{}, { lens: "security", title: "Leak" }, { lens: "simplification", title: "Dead" }, { lens: "adversarial", title: "Other line", line: 3 }]) assert.ok(st.settled.includes(fp(o)));
+});
+
+test("a host held by the secret scan does not swallow its folded findings: they post on their own", async () => {
+  const fx = fixture(); routes(fx);
+  const token = "ghp_" + "A".repeat(36);
+  const sec = { lens: "security", title: "Leak" };
+  const { r } = await go(fx, happy({
+    merge: [C("c1"), C("c2", sec)], "v~2": [keep("c1"), keep("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c1", also: ["c2"], body: `**must:** token ${token} leaks` }] },
+  }), { mode: "loop" });
+  assert.equal(r.exit, 0, r.summary);
+  const t = posts(fx)[0].threads;
+  assert.equal(t.length, 1, "the held host is not posted; c2 is");
+  assert.match(t[0].body, /\*\*must:\*\* Leak[\s\S]*use 2/);
+  assert.ok(t[0].body.endsWith(`fp=${fingerprint(F(sec))} -->`));
+  assert.ok(!JSON.stringify(mutations(fx)).includes(token));
+  assert.equal(openQuestions(fx.state).length, 1, "the host is a question");
+  assert.ok(prState(fx.state, N).settled.includes(fingerprint(F(sec))));
+});
+
+test("a folded finding held on its own: answer post sends it with the secret redacted", async () => {
+  const fx = fixture(); routes(fx);
+  const token = "ghp_" + "B".repeat(36);
+  const sec = { lens: "security", title: "Leak", case: `the token ${token} is logged` };
+  const answers = happy({
+    merge: [C("c1"), C("c2", sec)], "v~2": [keep("c1"), keep("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c1", also: ["c2"], body: `**must:** token ${token} leaks` }] },
+  });
+  await go(fx, answers, { mode: "loop" });
+  const q = openQuestions(fx.state).find((x) => x.fingerprint === fingerprint(F(sec)));
+  assert.ok(q, "the folded finding has its own question");
+  answer(fx.state, q.id, "post");
+  const again = await go(fx, answers, { mode: "loop" });
+  assert.equal(again.r.exit, 0, again.r.summary);
+  const all = JSON.stringify(posts(fx).slice(1));
+  assert.match(all, /\[REDACTED:github-token\] is logged/);
+  assert.ok(!JSON.stringify(mutations(fx)).includes(token));
+});
+
+test("a held host answered post goes out with its own text only, not the folded finding again", async () => {
+  const fx = fixture(); routes(fx);
+  const token = "ghp_" + "C".repeat(36);
+  const sec = { lens: "security", title: "Leak" };
+  const answers = happy({
+    merge: [C("c1"), C("c2", sec)], "v~2": [keep("c1"), keep("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c1", also: ["c2"], body: `**must:** off by one, and Leak via ${token}` }] },
+  });
+  await go(fx, answers, { mode: "loop" });
+  const q = openQuestions(fx.state).find((x) => x.fingerprint === fingerprint(F()));
+  answer(fx.state, q.id, "post");
+  const again = await go(fx, answers, { mode: "loop" });
+  assert.equal(again.r.exit, 0, again.r.summary);
+  const t = posts(fx).slice(1).flatMap((p) => p.threads);
+  assert.equal(t.length, 1);
+  assert.match(t[0].body, /^\*\*must:\*\* Off by one/);
+  assert.doesNotMatch(t[0].body, /Leak/, "the folded finding is not posted twice");
+});
+
+test("compose gets outside: true on a finding off the diff lines, and only there", async () => {
+  const fx = fixture(); routes(fx);
+  const { run } = await go(fx, happy({ merge: [C("c1"), C("c2", { file: "b.js", line: 3, lens: "security", title: "Elsewhere" })], "v~2": [keep("c1"), keep("c2")],
+    compose: { body: "Changes a.", comments: [{ id: "c1", body: "**must:** one" }, { id: "c2", body: "**must:** two" }] } }));
+  const p = run.calls.find((c) => c.k === "compose").prompt;
+  const data = JSON.parse(p.slice(p.indexOf("[", p.indexOf("## Agreed findings")), p.indexOf("\n]", p.indexOf("## Agreed findings")) + 2));
+  assert.deepEqual(data.map((x) => [x.id, x.outside ?? false]), [["c1", false], ["c2", true]]);
+});
+
+test("the body index lists only threads that went inline, at their real line, Critical first", async () => {
+  const fx = fixture(); routes(fx);
+  const c2 = C("c2", { line: 99, severity: "should", title: "Off diff" }), c3 = C("c3", { line: 3, severity: "should", title: "Name" });
+  const compose = {
+    verdict: "The off by one blocks.", body: "", praise: "The test covers the edge.",
+    index: [{ theme: "Totals", items: [{ id: "c3", text: "Rename c." }, { id: "c1", text: "Fix the total." }, { id: "c2", text: "Off-diff item." }, { id: "c9", text: "Made up." }] }],
+    comments: [{ id: "c1", body: "**must:** off by one" }, { id: "c2", body: "**should:** off diff" }, { id: "c3", body: "**should:** name" }],
+  };
+  const { r } = await go(fx, { all: { findings: [F()] }, merge: [C("c1"), c2, c3], "v~2": [keep("c1"), keep("c2"), keep("c3")], compose });
+  assert.equal(r.exit, 0, r.summary);
+  const b = posts(fx)[0].body;
+  assert.match(b, /^The off by one blocks\.\n\nCritical:\n- Fix the total\. \(thread on `a\.js` L2\)\n\nTotals:\n- Rename c\. \(thread on `a\.js` L3\)\n\nThe test covers the edge\./);
+  assert.doesNotMatch(b, /Off-diff item|Made up/);
+  assert.match(b, /Outside the diff:/);
+});
+
+test("the author's questions in the PR body reach compose, and the answers come after the verdict", async () => {
+  const fx = fixture(); routes(fx, { body: "Changes a.\n\nIs 2 the right value?" });
+  const { r, run } = await go(fx, happy({ compose: { verdict: "Nothing blocks.", answers: ["Yes, 2 matches the spec.", "extra"], body: "", comments: [{ id: "c1", body: "**must:** off by one" }] } }));
+  assert.equal(r.exit, 0, r.summary);
+  assert.match(run.calls.find((c) => c.k === "compose").prompt, /## The author's questions[\s\S]*1\. Is 2 the right value\?/);
+  // c1 is a must of this run: "Nothing blocks." would contradict REQUEST_CHANGES
+  assert.match(posts(fx)[0].body, /^The must findings block the merge\.\n\nYour questions:\n1\. Yes, 2 matches the spec\.\n\n<!-- pr-review/);
+});
+
+test("a bold or reworded \"nothing blocks\" verdict next to an earlier must still open is replaced", async () => {
+  const fx = fixture();
+  routes(fx, { threads: [{ id: "T1", isResolved: false, isOutdated: false, viewerCanResolve: true, path: "a.js", line: 1, originalLine: 1,
+    comments: { nodes: [{ databaseId: 11, author: { login: ME, __typename: "User" }, body: "**must:** a is wrong", createdAt: "x" }] } }] });
+  savePrState(fx.state, N, { ...prState(fx.state, N), reviews: 1, lastReviewedSha: fx.base });
+  for (const verdict of ["**Nothing blocks.**", "I find nothing blocking the merge."]) {
+    const { r } = await go(fx, { all: { findings: [], earlier: [{ thread_id: "T1", status: "open", evidence: "x" }] }, compose: { verdict, body: "Still open.", comments: [] } }, { restart: true });
+    assert.equal(r.exit, 0, r.summary);
+    assert.match(posts(fx).at(-1).body, /1 earlier must finding is still open, so the PR is blocked\./, verdict);
+  }
+});
+
+test("pass 2: an earlier finding the seats judge wrong is retracted first, and no longer blocks", async () => {
+  const fx = fixture();
+  routes(fx, { threads: [{ id: "T1", isResolved: false, isOutdated: false, viewerCanResolve: true, path: "a.js", line: 1, originalLine: 1,
+    comments: { nodes: [{ databaseId: 11, author: { login: ME, __typename: "User" }, body: "**must:** a is wrong", createdAt: "x" }] } }] });
+  savePrState(fx.state, N, { ...prState(fx.state, N), reviews: 1, lastReviewedSha: fx.base });
+  const earlier = [{ thread_id: "T1", status: "wrong", evidence: "a.js:1 is the documented default" }];
+  const compose = { verdict: "Nothing blocks.", body: "No new findings.", corrections: [{ thread_id: "T1", text: "Our finding on a was wrong: 2 is the documented default." }], comments: [] };
+  const { r, run } = await go(fx, { all: { findings: [], earlier }, compose });
+  assert.equal(r.exit, 0, r.summary);
+  assert.match(run.calls.find((c) => c.k === "compose").prompt, /a\.js:1 is the documented default/);
+  const p = posts(fx)[0];
+  assert.match(p.body, new RegExp(`^Second pass, on \`${fx.head.slice(0, 7)}\`\\.\n\nCorrection: Our finding on a was wrong: 2 is the documented default\\. \\(thread on \`a\\.js\` L1\\)\n\nNothing blocks\\.`));
+  assert.notEqual(p.event, "REQUEST_CHANGES");
+  assert.ok(!mutations(fx).some((x) => x.key.includes("replies")), "a retracted thread gets no 'Fixed in' reply");
+  assert.ok(mutations(fx).some((x) => x.key === "graphql ResolveThread"), "a retracted thread is resolved");
+  assert.deepEqual(prState(fx.state, N).retracted, ["T1"]);
+});
+
+const T1 = (canResolve = true) => [{ id: "T1", isResolved: false, isOutdated: false, viewerCanResolve: canResolve, path: "a.js", line: 1, originalLine: 1,
+  comments: { nodes: [{ databaseId: 11, author: { login: ME, __typename: "User" }, body: "**must:** a is wrong", createdAt: "x" }] } }];
+
+test("pass 3: a thread we retracted is not judged again and does not block, also when GitHub kept it open", async () => {
+  const fx = fixture(); routes(fx, { threads: T1(false) });
+  savePrState(fx.state, N, { ...prState(fx.state, N), reviews: 2, lastReviewedSha: fx.base, retracted: ["T1"], resolved: ["T1"] });
+  const { r } = await go(fx, { all: { findings: [], earlier: [{ thread_id: "T1", status: "open", evidence: "a.js:1" }] }, compose: { verdict: "Nothing blocks.", body: "No new findings.", comments: [] } });
+  assert.equal(r.exit, 0, r.summary);
+  assert.deepEqual(JSON.parse(readFileSync(join(r.runDir, "ctx", "earlier.json"), "utf8")), []);
+  const p = posts(fx)[0];
+  assert.notEqual(p.event, "REQUEST_CHANGES");
+  assert.match(p.body, /^Pass 3, on `[0-9a-f]{7}`\.\n\nNothing blocks\./);
+  assert.doesNotMatch(p.body, /Correction/);
+});
+
+test("pass 2: an earlier must still open reaches compose, and \"Nothing blocks.\" never contradicts the event", async () => {
+  const fx = fixture(); routes(fx, { threads: T1() });
+  savePrState(fx.state, N, { ...prState(fx.state, N), reviews: 1, lastReviewedSha: fx.base });
+  const { r, run } = await go(fx, { all: { findings: [], earlier: [{ thread_id: "T1", status: "open", evidence: "x" }] }, compose: { verdict: "Nothing blocks.", body: "Still open.", comments: [] } });
+  assert.equal(r.exit, 0, r.summary);
+  const prompt = run.calls.find((c) => c.k === "compose").prompt;
+  assert.match(prompt, /## Earlier must findings of ours that are still open[\s\S]*"thread_id": "T1"/);
+  assert.match(prompt, /Never write "Nothing blocks\."/);
+  const p = posts(fx)[0];
+  assert.equal(p.event, "REQUEST_CHANGES");
+  assert.match(p.body, /^Second pass, on `[0-9a-f]{7}`\.\n\n1 earlier must finding is still open, so the PR is blocked\.\n\nStill open\./);
+});
+
+test("an empty answer keeps the next answers on their own question numbers", async () => {
+  const fx = fixture(); routes(fx, { body: "Is 2 right?\nWhy not 3?" });
+  await go(fx, happy({ compose: { verdict: "The off by one blocks.", answers: ["", "3 overflows the buffer."], body: "", comments: [{ id: "c1", body: "**must:** off by one" }] } }));
+  assert.match(posts(fx)[0].body, /Your questions:\n2\. 3 overflows the buffer\.\n/);
+});
+
+test("compose guidance: REVIEW.md stays whole; only the review.guidance files are capped", () => {
+  const ctx = mkdtempSync(join(tmpdir(), "prr-guide-"));
+  mkdirSync(join(ctx, "guidance", "docs"), { recursive: true });
+  writeFileSync(join(ctx, "guidance", "REVIEW.md"), "R".repeat(9000));
+  writeFileSync(join(ctx, "guidance", "docs", "style.md"), "S".repeat(9000));
+  writeFileSync(join(ctx, "guidance", "CONTRIBUTING.md"), "C");
+  const g = composeGuidance(ctx, { review: { guidance: ["docs/style.md", "REVIEW.md"] } });
+  assert.ok(g.startsWith("R".repeat(9000) + "\n\n"), "REVIEW.md first and whole");
+  assert.ok(g.endsWith("S".repeat(8000) + "\n[cut]") && !g.includes("C"));
+});
+
+test("a user lens file runs in round 1 with its text; off in the config it is skipped; --lens picks it", async () => {
+  const dir = () => join(process.env.XDG_CONFIG_HOME, "pr-review");
+  const setup = (cfg) => {
+    const fx = fixture(); routes(fx);
+    mkdirSync(join(dir(), "lenses"), { recursive: true });
+    writeFileSync(join(dir(), "lenses", "perf.md"), "Look for slow loops. PERF-LENS-TEXT\n");
+    if (cfg) writeFileSync(join(dir(), "config.json"), JSON.stringify(cfg));
+    return fx;
+  };
+  const r1 = (run) => run.calls.filter((c) => c.k.startsWith("all~"));
+  let fx = setup();
+  let { r, run } = await go(fx, happy());
+  assert.equal(r.exit, 0, r.summary);
+  assert.ok(r1(run).length > 0 && r1(run).every((c) => /## Lens: perf\n\nLook for slow loops\. PERF-LENS-TEXT/.test(c.prompt)));
+  assert.match(r1(run)[0].prompt, /Use only these lens names: adversarial, correctness, simplification, architecture, security, perf\./);
+
+  fx = setup({ lenses: { perf: { enabled: false } } });
+  ({ r, run } = await go(fx, happy()));
+  assert.equal(r.exit, 0, r.summary);
+  assert.ok(r1(run).every((c) => !c.prompt.includes("PERF-LENS-TEXT")));
+
+  fx = setup();
+  ({ r, run } = await go(fx, { all: { findings: [] }, compose: { body: "Fine.", comments: [] } }, { lenses: ["perf"] }));
+  assert.equal(r.exit, 0, r.summary);
+  assert.ok(r1(run).every((c) => c.prompt.includes("PERF-LENS-TEXT") && !c.prompt.includes("## Lens: security")));
+  assert.match(posts(fx)[0].body, /Lenses not run: adversarial, correctness, simplification, architecture, security\./);
+});
+
+test("--lens with an unknown name, or a bad user lens file, is a setup error before any child", async () => {
+  const fx = fixture(); routes(fx);
+  await assert.rejects(go(fx, happy(), { lenses: ["nope"] }), (e) => e.name === "SetupError" && /unknown lens nope; lenses: adversarial/.test(e.message));
+  const lenses = join(process.env.XDG_CONFIG_HOME, "pr-review", "lenses");
+  mkdirSync(lenses, { recursive: true });
+  writeFileSync(join(lenses, "big.md"), "x\n".repeat(41));
+  const run = fakeRun(happy());
+  await assert.rejects(review({ repo: REPO, n: N, repoDir: fx.repoDir, runChild: run, routerUp: true }), (e) => e.name === "SetupError" && e.message.includes(join(lenses, "big.md")));
+  assert.equal(run.calls.length, 0);
+  assert.equal(posts(fx).length, 0);
+});
+
+test("a resumed run whose user lens file was removed is a setup error, not a crash in round 1", async () => {
+  const fx = fixture(); routes(fx);
+  const lenses = join(process.env.XDG_CONFIG_HOME, "pr-review", "lenses");
+  mkdirSync(lenses, { recursive: true });
+  writeFileSync(join(lenses, "perf.md"), "Look for slow loops.\n");
+  // a round-1 child crashes: run.json stays and the next run resumes it
+  await assert.rejects(go(fx, { ...happy(), all: new Error("boom") }), /boom/);
+  rmSync(join(lenses, "perf.md"));
+  await assert.rejects(go(fx, happy()), (e) => e.name === "SetupError" && /lens perf of this run is gone/.test(e.message));
 });

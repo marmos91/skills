@@ -669,7 +669,7 @@ step_clean() {
             ( cd "$REPO_DIR" && git worktree remove --force "$_wt" ) 2>/dev/null || true
         done
     fi
-    ( cd "$REPO_DIR" && git branch -D $(git branch --list 'fix/audit-*' | sed 's/^[* ]*//' | tr '\n' ' ') ) 2>/dev/null || true
+    ( cd "$REPO_DIR" && git branch --list 'fix/audit-*' --format='%(refname:short)' | xargs git branch -D ) 2>/dev/null || true
     rm -rf "$FIXROOT"
     log "removed $FIXROOT (worktrees + state) and fix/audit-* branches (kept remote branches)"
     return 0
