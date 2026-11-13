@@ -31,7 +31,8 @@ export function gitReaders(git) {
       return o.status === 0 ? o.stdout : null; // the head has no such file
     },
     diff: (sha) => ok(git("show", "--format=%H %s", sha), `cannot show ${sha.slice(0, 7)}`).slice(0, 40000),
-    fileDiff: (base, head, path) => ok(git("diff", `origin/${base}...${head}`, "--", path), `cannot diff against origin/${base} (run git fetch origin ${base})`),
+    // base is the base sha GitHub reports, not a local ref that may be stale or named differently
+    fileDiff: (base, head, path) => ok(git("diff", `${base}...${head}`, "--", path), `cannot diff against the PR base ${String(base).slice(0, 7)} (run git fetch)`),
     // merge-base exits 1 for "not an ancestor"; any other code is a git failure (an unfetched head), not an answer
     onHead: (sha, head) => {
       const o = git("merge-base", "--is-ancestor", sha, head);
@@ -61,21 +62,21 @@ const markHandled = (repo, n, t, me) => { const s = load(repo, n); s.handled[t.i
 
 // The agent edits and runs code on what a thread says: every author must be a bot (Copilot), us, or have
 // write access, by the same gh.permission rule as reply.mjs and tick.mjs (MEMBER alone is not write access).
-// A thread the user approved (`approve`) counts as trusted.
+// An approval (`approve`) covers the comments up to the newest one when the user said yes, never later ones.
 async function trusted(gh, repo, n, t, me) {
-  if (load(repo, n).approved[t.id]) return true;
-  for (const a of new Set(t.comments.filter((c) => c.authorType !== "Bot" && c.author !== me).map((c) => c.author))) {
+  const upTo = load(repo, n).approved[t.id] ?? -Infinity;
+  for (const a of new Set(t.comments.filter((c) => c.authorType !== "Bot" && c.author !== me && !(c.id <= upTo)).map((c) => c.author))) {
     if (!COLLABORATOR.has(await gh.permission(repo, a))) return false;
   }
   return true;
 }
 const UNTRUSTED = "a comment in the thread is by an author without write access; ask the user, then run approve";
 
-/** The user said yes to work on a thread with an untrusted author. -> { approved: true } */
+/** The user said yes to work on a thread with an untrusted author, as it reads now. -> { approved: true } */
 export async function approve({ repo, n, threadId, gh }) {
-  await thread(gh, repo, n, threadId);
+  const t = await thread(gh, repo, n, threadId);
   const s = load(repo, n);
-  s.approved[threadId] = true;
+  s.approved[threadId] = Math.max(...t.comments.map((c) => c.id));
   save(repo, n, s);
   return { approved: true };
 }
@@ -132,7 +133,7 @@ function code(show, path, line) {
  * show(sha, path) reads a file at a commit; fileDiff(base, head, path) is the PR diff of one file.
  */
 export function decideText(pr, t, { show, fileDiff }) {
-  const d = t.path ? fileDiff(pr.baseRef, pr.headSha, t.path) : "";
+  const d = t.path ? fileDiff(pr.baseSha, pr.headSha, t.path) : "";
   return [
     prData(`Title: ${pr.title}\n\n${pr.body ?? ""}`, "the PR author (the intent of the PR)"),
     threadText(t),
@@ -169,7 +170,9 @@ export async function decline({ repo, n, threadId, reason, gh }) {
   const body = String(reason).trim();
   if (!body) throw new Error("decline needs a reason");
   if (!scanOutbound(body).ok) throw new Error("the secret scan holds the reason; write it again without the secret");
-  await gh.reply(repo, n, t.comments[0].id, body);
+  // a crash after the post and before markHandled must not post twice: the marker is the record on GitHub
+  const key = sha1(`respond-decline\0${threadId}\0${lastOther(t, me)}`);
+  if (!(await gh.findMarker(repo, n, key))) await gh.reply(repo, n, t.comments[0].id, `${body}\n\n<!-- pr-review key=${key} -->`);
   markHandled(repo, n, t, me);
   return { action: "replied" };
 }

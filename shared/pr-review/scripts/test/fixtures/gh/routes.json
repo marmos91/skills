@@ -4,11 +4,12 @@
    "login": "marmos91"
   }
  },
- "pr view 5 -R o/r --json id,headRefOid,baseRefName,author,isDraft,body,title,closingIssuesReferences,headRefName": {
+ "pr view 5 -R o/r --json id,headRefOid,baseRefName,baseRefOid,author,isDraft,body,title,closingIssuesReferences,headRefName": {
   "stdout": {
    "id": "PR_node1",
    "headRefOid": "abc123",
    "baseRefName": "main",
+   "baseRefOid": "base000",
    "author": {
     "login": "alice"
    },

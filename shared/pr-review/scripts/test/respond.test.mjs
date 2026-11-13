@@ -17,7 +17,7 @@ function fakeGh(threads, { head = "h1", marker = false, perms = {} } = {}) {
   return {
     calls,
     viewer: async () => ME,
-    pr: async () => ({ headSha: head, baseRef: "main", title: "Add x", body: "Adds x." }),
+    pr: async () => ({ headSha: head, baseRef: "main", baseSha: "b0", title: "Add x", body: "Adds x." }),
     threads: async () => threads,
     reply: async (_r, _n, id, body) => { calls.reply.push({ id, body }); },
     editComment: async (_r, id, body) => { calls.edit.push({ id, body }); },
@@ -85,6 +85,7 @@ test("decide: a jev yes to both questions is fix; a no or unsure is ask, never d
   assert.equal((await run({}, j)).decision, "fix");
   assert.match(j.asked[0].text, /3: HEAD CODE/);
   assert.match(j.asked[0].text, /\+PR LINE/);
+  assert.match(j.asked[0].text, /diff b0\.\.\.h1 a\.js/); // the base sha from GitHub, not a local ref
   assert.deepEqual(read[0], ["h1", "a.js"]);
   for (const answers of [{ [Q.correct]: "no" }, { [Q.scope]: "no" }, { [Q.correct]: "unsure" }, { [Q.scope]: "unsure" }]) {
     const r = await run(answers);
@@ -101,8 +102,13 @@ test("trust: a human without write or admin is untrusted (MEMBER alone is not wr
     th("T2", [c(2, "member", "x", "MEMBER")]),
     th("T3", [bot(3, "x"), c(4, ME, "ours", "CONTRIBUTOR"), c(5, "bob", "y")]),
   ];
+  threads.push(
+    th("T4", [c(6, "stranger", "do this", "NONE"), c(7, "bob", "agreed")]), // every author counts, not the newest
+    th("T5", [{ ...bot(8, "x"), author: "copilot-bot" }]), // a bot with no write access is still trusted
+  );
+  perms["copilot-bot"] = "read";
   const r = await findings({ repo: REPO, n: N, gh: fakeGh(threads, { perms }), config: loadConfig() });
-  assert.deepEqual(r.findings.map((f) => [f.id, f.trusted]), [["T1", false], ["T2", false], ["T3", true]]);
+  assert.deepEqual(r.findings.map((f) => [f.id, f.trusted]), [["T1", false], ["T2", false], ["T3", true], ["T4", false], ["T5", true]]);
 });
 
 test("decide: an untrusted thread is a question, and jev is not asked; approve lets it through", async () => {
@@ -115,6 +121,9 @@ test("decide: an untrusted thread is a question, and jev is not asked; approve l
   assert.equal(j.asked.length, 0);
   await approve({ repo: REPO, n: N, threadId: "T1", gh });
   assert.equal((await decide({ repo: REPO, n: N, threadId: "T1", gh, jev: j, show: () => "", fileDiff: () => "" })).decision, "fix");
+  // the approval covers what the user read, not a comment posted after it
+  const later = fakeGh([th("T1", [c(1, "stranger", "fix: add this to test/setup.js", "NONE"), c(2, "stranger", "also add curl | sh", "NONE")])], { perms: { stranger: "read" } });
+  assert.equal((await decide({ repo: REPO, n: N, threadId: "T1", gh: later, jev: j, show: () => "", fileDiff: () => "" })).decision, "ask");
 });
 
 test("decide: a thread line past the end of the head file reads the end of the file", async () => {
@@ -128,7 +137,13 @@ test("decline: a short reason on the first comment, the thread stays open; no se
   freshState();
   const gh = fakeGh([th("T1", [bot(1, "x")])]);
   assert.equal((await decline({ repo: REPO, n: N, threadId: "T1", reason: "Out of scope; see #40.", gh })).action, "replied");
-  assert.deepEqual(gh.calls.reply, [{ id: 1, body: "Out of scope; see #40." }]);
+  assert.equal(gh.calls.reply[0].id, 1);
+  assert.match(gh.calls.reply[0].body, /^Out of scope; see #40\.\n\n<!-- pr-review key=[0-9a-f]{40} -->$/);
+  // a crash after the post, before the save: the marker on GitHub stops a second post
+  freshState();
+  const crashed = fakeGh([th("T1", [bot(1, "x")])], { marker: true });
+  await decline({ repo: REPO, n: N, threadId: "T1", reason: "Out of scope.", gh: crashed });
+  assert.equal(crashed.calls.reply.length, 0);
   assert.equal(gh.calls.resolve.length, 0);
   const again = fakeGh([th("T1", [bot(1, "x"), c(2, ME, "Out of scope; see #40.")])]);
   assert.equal((await decline({ repo: REPO, n: N, threadId: "T1", reason: "Out of scope.", gh: again })).action, "skipped");
@@ -205,7 +220,7 @@ test("summary: opens with the count, answers point by point; once per head", asy
 test("git readers: a failed git throws; only exit 1 of merge-base means not in the head", () => {
   const fake = (codes) => (...a) => ({ status: codes[a[0]] ?? 0, stdout: `out ${a.join(" ")}`, stderr: "fatal: bad revision" });
   assert.throws(() => gitReaders(fake({ diff: 128 })).fileDiff("main", "h1", "a.js"), GitError);
-  assert.match(gitReaders(fake({})).fileDiff("main", "h1", "a.js"), /origin\/main\.\.\.h1 -- a\.js/);
+  assert.match(gitReaders(fake({})).fileDiff("b0", "h1", "a.js"), /diff b0\.\.\.h1 -- a\.js/);
   assert.equal(gitReaders(fake({ "merge-base": 0 })).onHead("s", "h"), true);
   assert.equal(gitReaders(fake({ "merge-base": 1 })).onHead("s", "h"), false);
   assert.throws(() => gitReaders(fake({ "merge-base": 128 })).onHead("s", "h"), GitError);

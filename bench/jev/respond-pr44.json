@@ -2,7 +2,6 @@
  "pr": 44,
  "repo": "marmos91/skills",
  "head": "3491ad4c76e2810a70e9c1b2f8f79a9ccdde9466",
- "base": "main",
  "title": "feat(pr-respond): fix review findings on your own PR until it converges",
  "note": "Round 1 of PR 44. Every finding was real and was fixed in 9685c6c, so each expected decision is fix.",
  "threads": [
@@ -231,5 +230,6 @@
    ]
   }
  ],
- "body": "A new pr-respond skill works through the review findings on your own PR, round by round. The agent edits, tests and pushes; pr-respond does the GitHub and jev steps (findings, decide, decline, fixed, summary)."
+ "body": "A new pr-respond skill works through the review findings on your own PR, round by round. The agent edits, tests and pushes; pr-respond does the GitHub and jev steps (findings, decide, decline, fixed, summary).",
+ "baseSha": "391495c27d3671d1b79bd5cf15cf6c9af1c9aebe"
 }

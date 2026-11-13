@@ -17,13 +17,13 @@ const fx = JSON.parse(readFileSync(process.argv[2] ?? join(here, "respond-pr44.j
 const { show, fileDiff } = gitReaders((...a) => spawnSync("git", a, { encoding: "utf8", maxBuffer: 64 << 20 }));
 const config = loadConfig();
 const jev = async (q, text) => (await askJev(q, text, config)).answer;
-const pr = { headSha: fx.head, baseRef: fx.base, title: fx.title, body: fx.body };
+const pr = { headSha: fx.head, baseSha: fx.baseSha, title: fx.title, body: fx.body };
 
 let bad = 0;
 const byGroup = new Map();
 for (const t of fx.threads) {
   const th = { id: t.id, path: t.path, line: t.line, originalLine: t.line, isResolved: false, comments: t.comments.map((c, i) => ({ id: i + 1, ...c })) };
-  const gh = { viewer: async () => "marmos91", pr: async () => pr, threads: async () => [th], permission: async () => "write" };
+  const gh = { viewer: async () => "marmos91", pr: async () => pr, threads: async () => [th], permission: async () => "write", findMarker: async () => false };
   const r = await decide({ repo: fx.repo, n: fx.pr, threadId: t.id, gh, jev, show, fileDiff });
   const size = decideText(pr, th, { show, fileDiff }).length;
   const wrong = r.decision === "decline" && t.expect !== "decline";
