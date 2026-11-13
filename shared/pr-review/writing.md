@@ -7,8 +7,7 @@ is the author of the PR. The author knows the code, so start with the point.
 
 - Write short sentences. Put one idea in each sentence. Use active voice.
 - Use plain words: "use", not "leverage"; "is", not "serves as".
-- Show code instead of prose when code is shorter.
-- Write each claim one time. Do not end with a line that repeats it.
+- Show code when it is shorter. Write each claim one time, with no recap.
 - Name the file, the function and the input. Do not write "this may cause
   issues"; write what breaks and when.
 - Use a qualifier ("may", "probably") only for real doubt.
@@ -24,8 +23,8 @@ is the author of the PR. The author knows the code, so start with the point.
 - These words: crucial, key (as an adjective), robust (unless technical),
   delve, leverage, seamless, enhance, ensure, comprehensive, meticulous,
   pivotal, underscore, showcase, valuable, additionally, actually.
-- Praise or thanks: "Great PR", "Nice work", "Thanks for". Chat residue:
-  "I hope this helps", "Let me know", "Happy to help".
+- Vague praise or thanks ("Great PR", "Thanks for"). Chat residue: "I hope
+  this helps", "Let me know".
 - Em dashes or en dashes. Use a period, a comma, a colon or parentheses.
 - Bold labels on each list item, emojis, title case in headings.
 - A signature, a note that a tool or a model wrote the text, or a marker.
@@ -34,24 +33,26 @@ is the author of the PR. The author knows the code, so start with the point.
 
 One finding per comment, in this order:
 
-1. The severity label, then the title: `must: Port 0 is accepted`. If the
-   repo guidance sets other labels (for example Conventional Comments), use
-   those.
-2. The case in one line: input or situation, then the wrong result.
-3. A code snippet, or a GitHub `suggestion` block with the fixed lines.
+1. The severity label, then a title that states the conclusion with a verb:
+   `must: Reject port 0`. Use the repo's labels if its guidance sets others.
+2. The case in one line. Say where each claim comes from: "(ran `cmd`)",
+   "(read a.js:42)", or "I think" when you did not check.
+3. A paste-ready fix: a `suggestion` block when it replaces only the
+   commented line, else a `diff` block or the exact text to add.
 
-A finding marked `ask_author`, or one that the author must clarify, is a
-question: "question: Can `id` be empty here? If so, line 42 reads past the
-end." State each other agreed finding directly.
+A finding marked `ask_author` is a question; state each other finding directly.
+A question says what each answer changes: "question: Can `id` be empty? If yes,
+line 42 reads past the end; if no, drop the check." Credit what the author got
+right, and link the PR or commit that settles a point.
 
-## Summary body
+## Review body
 
-1. What the PR does, in 2 sentences. Only in the first review of a PR.
-2. The `must` items, one line each, with its `file:line`. Do not add links.
-   Skip a finding with `outside: true`: the engine lists it.
-3. Other items only when they cannot go inline.
-Do not write lines about open points, dropped seats, lenses not run or
-findings left out. The engine adds them from the real state.
+The engine builds the body from parts: `verdict` (what blocks and why, or
+"Nothing blocks."), `answers` to the author's questions, an `index` of the
+inline comments by theme, `praise` (1 or 2 specific lines, if earned) and
+`body` (items that cannot go inline, never what the PR does; on a later pass,
+if the author's replies check out). Retract a wrong earlier finding of ours in
+`corrections`. Never write the pass line, locations, open points or seats.
 
 ## Replies
 

@@ -79,6 +79,8 @@ Anti-goals (the skills fail if these happen, even if they work):
   `run <model> <thinking> <tools> <prompt-file> <out-file>`. A new harness is a
   new file. The adapter sends the prompt through a file or stdin, never as an
   argv argument (macOS `ARG_MAX` and `ps` exposure).
+  The adapter asks the harness for JSON output (`claude --output-format json`,
+  `pi --mode json`). The engine takes the answer and the token usage from it.
 - `thinking` maps to `claude --effort` (`low|medium|high|xhigh|max`) and to
   `pi --thinking`. The config loader rejects a value that the harness does not
   accept.
@@ -297,7 +299,9 @@ No style taste, no "consider".
 
 Each lens is one prompt file in `shared/pr-review/lenses/`. Each file is a
 compact rewrite of the rules of its sources, not a copy of their prose. A
-user can add a lens in `~/.config/pr-review/lenses/<name>.md`.
+user can add a lens in `~/.config/pr-review/lenses/<name>.md` (name: `a-z`,
+`0-9`, `-`, not a built-in name; 40 lines and 4000 characters at most). Only the
+user folder adds lenses: a repo config cannot add prompt text.
 
 | Lens | What it looks for | Sources |
 |---|---|---|
@@ -383,12 +387,21 @@ The judge writes the review from the agreed findings, with the rules in
 
 - Follow the review guidance of the repo, if it has one (format, tone,
   labels such as `nit:` or Conventional Comments).
-- Inline comments: one finding per comment. Layout: severity label, the case
-  in one line, then a code snippet or a GitHub `suggestion` block.
-- Summary body: what the PR does in 2 sentences, then the `must` items. The
-  engine, not the judge, adds the state lines from the real state: "1 point
-  is still open with the reviewer.", dropped seats, lenses not run, findings
-  left out, and "No tracking issue or plan."
+- Inline comments: one finding per comment. Layout: severity label and a
+  title that states the conclusion with a verb, the case in one line with the
+  source of each claim, then a paste-ready fix (`suggestion` block, `diff`, or
+  exact text). A question says what each answer changes.
+- Body: the judge returns parts, and the engine puts them in order: the pass
+  line ("Second pass, on `<sha>`.", engine text), corrections of our earlier
+  findings that the seats now judge wrong (round 1 `earlier` status `wrong`
+  from 2 seats, none `open`), the verdict line, the "What was checked" line
+  (engine text, from the setup checks), answers to the author's questions,
+  the index of inline threads by theme (a `Critical` group first), optional
+  praise, then other items. The engine renders each index line with the real
+  line of its thread, and drops an id that did not post inline.
+- The engine, not the judge, adds the state lines from the real state: "1
+  point is still open with the reviewer.", dropped seats, lenses not run,
+  findings left out, and "No tracking issue or plan."
 - A finding from a single seat, or one that the author must clarify, is
   phrased as a question to the author.
 
@@ -425,7 +438,7 @@ When Marco already reviewed the PR:
 
 ### 6.10 Post
 
-1. Take the lock of the repo (section 8).
+1. Hold the lock of the PR (section 8).
 2. Check the head again. If it moved since the frame, drop the run and frame
    again.
 3. Check each inline comment against the diff hunks of the pinned SHA. A
@@ -452,7 +465,9 @@ Input: `owner/repo`. With no input, the repo of the current directory.
 
 ### 7.1 One run (`tick`)
 
-1. Take the lock. If another run holds it, exit.
+1. Take the repo lock. If another tick holds it, exit. Each PR the tick
+   handles takes the PR lock; a PR that another run holds is skipped this
+   tick.
 2. Print the open questions and the to-do items. Apply the answers that Marco
    gave since the last run. Do not ask during a run.
 3. List open PRs where Marco is the author, a requested reviewer (Marco or one
@@ -553,8 +568,12 @@ The state records the review count and the reply count per thread, and
   holder's start time (Linux: start ticks from `/proc/<pid>/stat`; macOS:
   `ps -o lstart=` under `TZ=UTC`). A lock is stale when its PID is dead, or
   when the PID is alive but its start time differs (the PID was reused by
-  another process); a stale lock is removed. `/pr-review` and the loop use
-  the same lock.
+  another process); a stale lock is removed. Only the loop takes it.
+- `pr/<n>/lock/`: the same kind of lock for one PR. `/pr-review` takes it,
+  and the loop takes it for each PR it handles. Runs on different PRs do not
+  block each other.
+- Git writes in the clone (fetch, worktree add, remove and prune) take a
+  short lock in `.git/pr-review/lock/`. A run waits up to 60 s for it.
 - Per PR: `pr/<n>/cache.json` (head SHA and newest comment ID, used only to
   skip unchanged PRs) and `pr/<n>/runs/<sha>-<ts>/` with a folder per stage
   and a `.done` marker per stage. GitHub is the source of truth for what was

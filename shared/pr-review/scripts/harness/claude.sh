@@ -26,4 +26,5 @@ if [ "$tools" = shell ]; then
 fi
 # A command that times out goes to the background, and claude -p waits for it before it exits (9.5 min seen).
 export CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1
-claude -p "$@" --model "$model" --effort "$thinking" --tools "$list" <"$prompt" >"$out"
+# json: the answer comes with its token usage; child.mjs unwraps it.
+claude -p --output-format json "$@" --model "$model" --effort "$thinking" --tools "$list" <"$prompt" >"$out"

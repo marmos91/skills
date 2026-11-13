@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -87,6 +88,41 @@ export function salvageJson(text, ok) {
   return found.reduce((a, b) => (b.size > a.size ? b : a), { v: null, size: -1 }).v;
 }
 
+const TOKENS = ["input", "output", "cache_read", "cache_creation"];
+/** Sum of two usage records; a count stays null only when both sides lack it. */
+export const addUsage = (a, b) => Object.fromEntries(TOKENS.map((k) => [k, a?.[k] == null && b?.[k] == null ? null : (a?.[k] ?? 0) + (b?.[k] ?? 0)]));
+
+/**
+ * claude --output-format json and pi --mode json wrap the answer with its token usage; the fake harness prints
+ * plain text. -> { text, usage (null when unknown), maxTurns }
+ */
+export function unwrapOutput(raw) {
+  const s = String(raw).trim();
+  if (s.startsWith("{")) {
+    try {
+      const j = JSON.parse(s);
+      if (j?.type === "result") {
+        const u = j.usage;
+        return {
+          text: String(j.result ?? ""), maxTurns: j.subtype === "error_max_turns",
+          usage: u ? { input: u.input_tokens ?? null, output: u.output_tokens ?? null, cache_read: u.cache_read_input_tokens ?? null, cache_creation: u.cache_creation_input_tokens ?? null } : null,
+        };
+      }
+    } catch {}
+    // pi: one event per line; the last agent_end holds every message of the run.
+    let end = null;
+    for (const l of s.split("\n")) { try { const e = JSON.parse(l); if (e?.type === "agent_end") end = e; } catch {} }
+    if (end) {
+      const said = (end.messages ?? []).filter((m) => m?.role === "assistant");
+      const usage = said.reduce((a, m) => addUsage(a, m.usage && { input: m.usage.input, output: m.usage.output, cache_read: m.usage.cacheRead, cache_creation: m.usage.cacheWrite }), null);
+      const last = said.at(-1)?.content;
+      const text = Array.isArray(last) ? last.filter((c) => c?.type === "text").map((c) => c.text).join("\n") : String(last ?? "");
+      return { text, usage: Object.values(usage ?? {}).some((v) => v != null) ? usage : null, maxTurns: false };
+    }
+  }
+  return { text: String(raw), usage: null, maxTurns: false };
+}
+
 let routerProbe;
 /** The harness a seat will really use (auto resolves through the router probe), before its prompt is written. */
 export async function harnessFor(seat, routerUp) {
@@ -169,26 +205,37 @@ export async function runChild({ seat, tools = "read", promptFile, outFile, work
   }
   // claude --effort has no off or minimal: a Mimir seat routed through claude thinks at low.
   const thinking = harness === "claude" && ["off", "minimal"].includes(seat.thinking) ? "low" : seat.thinking;
-  let last;
+  let last, usage = addUsage();
+  // <key>.usage.json beside the output: every attempt counts, also a failed one and one of an earlier run (resume).
+  const usageFile = outFile.replace(/(\.json)?$/, ".usage.json");
+  try { usage = addUsage(usage, JSON.parse(readFileSync(usageFile, "utf8"))); } catch {}
+  const output = async () => {
+    const o = unwrapOutput(await readFile(outFile, "utf8").catch(() => ""));
+    usage = addUsage(usage, o.usage);
+    try { writeFileSync(usageFile, JSON.stringify(usage) + "\n"); } catch {} // usage is a record only: it never fails a child
+    return o;
+  };
   for (let i = 0; i <= retries; i++) {
     if (stopping) throw new ChildFailed("engine is stopping on a signal"); // a killed child is not retried
+    let o = null;
     try {
       await runOnce(script, [model, thinking, tools, promptFile, outFile], env, cwd, timeoutMs);
-      const value = salvageJson(await readFile(outFile, "utf8"), schema && ((v) => validate(schema, v).length === 0));
+      o = await output();
+      const value = salvageJson(o.text, schema && ((v) => validate(schema, v).length === 0));
       if (value === null) throw new Error("no JSON in output");
       const errs = schema ? validate(schema, value) : [];
       if (errs.length) throw new Error(`invalid ${schema}: ${errs.join("; ")}`);
       return value;
     } catch (e) {
       last = e;
+      o ??= await output();
       // A retry hits the same limit: the seat drops at once. claude prints this and exits 1 at --max-turns.
       // only council seats drop; judge, compose and reply children keep their retries
       if (droppable && e.timedOut) throw new SeatDropped(seat, "timeout", e.message);
       // a missing binary never succeeds on retry
       if (e.missing) throw new ChildFailed(`${fake ? "fake" : harness}:${seat.model}: harness binary missing: ${e.message}`);
       // claude -p prints only this line at --max-turns; a seat that merely quotes it in longer output is not matched
-      const out = (await readFile(outFile, "utf8").catch(() => "")).trim();
-      if (harness === "claude" && (/error_max_turns/.test(e.message) || /^Error: Reached max turns \(\d+\)$/.test(out))) {
+      if (harness === "claude" && (o.maxTurns || /error_max_turns/.test(e.message) || /^Error: Reached max turns \(\d+\)$/.test(o.text.trim()))) {
         // a retry hits the same limit: never retried; only council seats drop, other children fail
         if (droppable) throw new SeatDropped(seat, "turn limit", `max_turns (${seat.max_turns})`);
         throw new ChildFailed(`${harness}:${seat.model} hit max_turns (${seat.max_turns})`);

@@ -9,6 +9,7 @@
   // The effort level overrides this: low and medium run per-seat, high and max per-lens.
   "round1": "per-seat",
   // Per-lens override. A lens with "seats" uses only those seats. A lens needs 2 or more seats.
+  // Your own lens: a file ~/.config/pr-review/lenses/<name>.md. Set "<name>" here like a built-in lens.
   // Option, a stronger security panel: "security": { "seats": [{ "harness": "claude", "model": "claude-fable-5-1", "thinking": "max" }, { "harness": "pi", "model": "cubbit/mimir-pro", "thinking": "high" }] }
   "lenses": {
     "security": { "seats": [

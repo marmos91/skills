@@ -78,6 +78,8 @@ test("status shows a stale lock, open questions, an unfinished run and the inter
   writeFileSync(join(run, "frame.done"), "");
   writeFileSync(join(run, "round1", "all~0.done"), "");
   writeFileSync(join(fx.state, "pr", "7", "state.json"), JSON.stringify({ reviews: 2, replies: { t1: 1, t2: 2 } }));
+  mkdirSync(join(fx.state, "pr", "7", "lock"));
+  writeFileSync(join(fx.state, "pr", "7", "lock", "pid"), dead);
   writeFileSync(join(fx.state, "todo.md"), "- [ ] fix x\n- [x] done y\n");
   writeFileSync(join(fx.state, "tick.json"), JSON.stringify({ startedAt: "2026-11-11T10:00:00Z", queue: [{ number: 7 }, { number: 8 }], done: [7], current: 8 }));
   writeFileSync(join(fx.state, "paused"), "");
@@ -91,18 +93,22 @@ test("status shows a stale lock, open questions, an unfinished run and the inter
   assert.equal(s.todos, 1);
   assert.deepEqual(s.tick, { startedAt: "2026-11-11T10:00:00Z", current: 8, left: [8] });
   const pr = s.prs.find((p) => p.pr === 7);
+  assert.deepEqual(pr.lock, { pid: Number(dead), stale: true });
   assert.equal(pr.reviews, 2);
   assert.equal(pr.replies, 3);
   assert.equal(pr.questions, 1);
   // the planned count saved in run.json (the run's own merged config), not one computed from the user config
-  assert.deepEqual(pr.runs, [{ sha: "abc123", stage: "round1", children: { done: 1, total: 9 } }]);
+  assert.deepEqual(pr.runs, [{ sha: "abc123", stage: "round1", children: { done: 1, total: 9 }, tokens: {} }]);
 });
 
 test("doctor: a seat whose probe fails is named and the exit is 1", async (t) => {
   const fx = fixture();
   Object.assign(process.env, { XDG_STATE_HOME: fx.env.XDG_STATE_HOME, XDG_CONFIG_HOME: fx.env.XDG_CONFIG_HOME });
   const cfg = join(fx.root, "c.json");
-  writeFileSync(cfg, JSON.stringify({ apiKey: "zz-unknown-key-value", seats: [{ harness: "claude", model: "opus", thinking: "high" }, { harness: "pi", model: "bad/model", thinking: "high" }, { harness: "claude", model: "opus", thinking: "medium" }] }));
+  mkdirSync(join(fx.env.XDG_CONFIG_HOME, "pr-review", "lenses"), { recursive: true });
+  writeFileSync(join(fx.env.XDG_CONFIG_HOME, "pr-review", "lenses", "perf.md"), "Look for slow loops.\n");
+  writeFileSync(join(fx.env.XDG_CONFIG_HOME, "pr-review", "lenses", "big.md"), "x\n".repeat(41));
+  writeFileSync(cfg, JSON.stringify({ apiKey: "zz-unknown-key-value", lenses: { security: { enabled: false }, big: { enabled: false } }, seats: [{ harness: "claude", model: "opus", thinking: "high" }, { harness: "pi", model: "bad/model", thinking: "high" }, { harness: "claude", model: "opus", thinking: "medium" }] }));
   const gh = join(fx.root, "gh");
   writeFileSync(gh, "#!/bin/sh\nexit 0\n");
   chmodSync(gh, 0o755);
@@ -128,6 +134,9 @@ test("doctor: a seat whose probe fails is named and the exit is 1", async (t) =>
   assert.match(out, /ok\s+seat claude:opus/);
   assert.match(out, /WARN\s+jev: not found/);
   assert.match(out, /claude mode: --restricted/);
+  assert.match(out, /^pr-review \d+\.\d+\.\d+ /m); // the version from SKILL.md
+  assert.match(out, /lenses: adversarial, correctness, simplification, architecture, security \(off\), big \(user\) \(off\), perf \(user\)/);
+  assert.match(out, /WARN\s+lens file \S+big\.md: over 40 lines or 4000 characters \(the lens is off\)/);
   assert.match(out, /effort low: \d+ children per PR/);
   assert.ok(!out.includes("zz-unknown-key-value"), "unknown config keys are not printed");
   assert.ok(!out.includes("ghp_" + "a".repeat(36)), "child errors are redacted");
@@ -145,16 +154,16 @@ test("status: a corrupt state.json and a young pid-less lock", () => {
   assert.match(s.prs.find((p) => p.pr === 9).error, /state.json unreadable/);
 });
 
-test("review exits with Locked while a tick holds the lock", async () => {
+test("review exits with Locked while another run holds that PR", async () => {
   const fx = fixture();
   const holder = spawn(process.execPath, ["--input-type=module", "-e",
-    `const { acquireLock, stateRoot } = await import(${JSON.stringify(join(here, "..", "lib", "state.mjs"))}); acquireLock(stateRoot("o/r")); console.log("held"); setTimeout(() => {}, 30000);`],
+    `const { acquireLock, stateRoot } = await import(${JSON.stringify(join(here, "..", "lib", "state.mjs"))}); acquireLock(stateRoot("o/r") + "/pr/5", " of PR #5"); console.log("held"); setTimeout(() => {}, 30000);`],
   { env: fx.env, stdio: ["ignore", "pipe", "inherit"] });
   try {
     await new Promise((res) => holder.stdout.once("data", res));
     const r = cli(fx, "review", "5", "--repo", "O/R");
     assert.equal(r.status, 1);
-    assert.match(r.stderr, new RegExp(`holds the lock \\(pid ${holder.pid}\\)`));
+    assert.match(r.stderr, new RegExp(`holds the lock of PR #5 \\(pid ${holder.pid}\\)`));
   } finally { holder.kill(); }
 });
 
@@ -244,4 +253,24 @@ test("bin/pr-review runs the engine through a symlink, as install.sh links it", 
   const r = spawnSync(outer, ["status", "o/r"], { env: { ...process.env, XDG_STATE_HOME: join(dir, "s") }, encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
   assert.equal(JSON.parse(r.stdout).repo, "o/r");
+});
+
+test("status: lastRunTokens follows the newest run, also a finished dry run, and counts reply children", async () => {
+  const fx = fixture();
+  process.env.XDG_STATE_HOME = fx.env.XDG_STATE_HOME;
+  const runs = join(fx.state, "pr", "9", "runs"), u = (input) => JSON.stringify({ input, output: 1, cache_read: null, cache_creation: null });
+  const old = join(runs, "aaa-100"), dry = join(runs, "bbb-200");
+  for (const d of [old, dry]) { mkdirSync(join(d, "round1"), { recursive: true }); writeFileSync(join(d, "post.done"), ""); }
+  writeFileSync(join(old, "round1", "all~0.usage.json"), u(1));
+  writeFileSync(join(dry, "round1", "all~0.usage.json"), u(10));
+  mkdirSync(join(dry, "reply", "T1", "11"), { recursive: true });
+  writeFileSync(join(dry, "reply", "T1", "11", "draft.usage.json"), u(5));
+  writeFileSync(join(fx.state, "pr", "9", "state.json"), JSON.stringify({ reviews: 1, lastRunId: "aaa-100" }));
+  const r = cli(fx, "status", "--repo", "o/r");
+  assert.equal(r.status, 0, r.stderr);
+  const pr = JSON.parse(r.stdout).prs.find((p) => p.pr === 9);
+  assert.deepEqual(pr.runs, [], "both runs are finished");
+  assert.equal(pr.lastRunTokens.round1.input, 10);
+  assert.equal(pr.lastRunTokens.reply.input, 5);
+  assert.equal(pr.lastRunTokens.total.input, 15);
 });

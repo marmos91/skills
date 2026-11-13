@@ -1,11 +1,16 @@
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /** The user config file, read from the environment at call time. */
 export const userConfigPath = () => join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "pr-review", "config.json");
 
 export const LENSES = ["adversarial", "correctness", "simplification", "architecture", "security"];
+/** The user lens folder, next to the user config. */
+export const userLensDir = () => join(dirname(userConfigPath()), "lenses");
+/** The file of a lens: built-in, else a user lens. */
+export const lensFile = (name) => join(LENSES.includes(name) ? join(dirname(fileURLToPath(import.meta.url)), "..", "..", "lenses") : userLensDir(), `${name}.md`);
 // Lenses about design across files: on a split PR they review the whole PR once, not part by part.
 export const WHOLE_PR_LENSES = ["architecture"];
 
@@ -131,14 +136,38 @@ function checkSeat(s, where) {
   for (const k of ["max_turns", "timeout_minutes"]) need(s[k] === undefined || posInt(s[k]), `${where}.${k}`, "a positive integer");
 }
 
-function validate(c) {
+// Built-in lenses, and names with a meaning in child keys (all~0, v~0, merge, compose) or on Object.prototype.
+const RESERVED = [...LENSES, "hygiene", "all", "v", "merge", "compose", "constructor", "prototype"];
+// User lenses: <dir>/<name>.md. Only the user folder: a repo cannot add prompt text.
+function userLenses(dir) {
+  if (!existsSync(dir)) return [];
+  const names = readdirSync(dir).filter((f) => f.endsWith(".md") && !f.startsWith(".")).map((f) => f.slice(0, -3)).sort();
+  for (const name of names) {
+    const file = join(dir, `${name}.md`);
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) throw new Error(`lens file ${file}: the name must use only a-z, 0-9 and -`);
+    if (RESERVED.includes(name)) throw new Error(`lens file ${file}: ${name} is a built-in or reserved name; use a different name`);
+  }
+  return names;
+}
+
+/** What is wrong with the content of a user lens file (the size cap of a built-in lens), or null. */
+export function lensFileProblem(dir, name) {
+  const file = join(dir, `${name}.md`);
+  let text;
+  try { text = readFileSync(file, "utf8").trim(); } catch (e) { return `lens file ${file}: ${e.message}`; }
+  if (!text) return `lens file ${file}: the file is empty`;
+  if (text.split("\n").length > 40 || text.length > 4000) return `lens file ${file}: over 40 lines or 4000 characters`;
+  return null;
+}
+
+function validate(c, known) {
   need(["per-seat", "per-lens"].includes(c.round1), "round1", "per-seat or per-lens");
   need(Array.isArray(c.seats) && c.seats.length > 0, "seats", "a non-empty array");
   c.seats.forEach((s, i) => checkSeat(s, `seats[${i}]`));
   checkSeat(c.judge, "judge");
   need(isObj(c.lenses), "lenses", "an object");
   for (const [name, l] of Object.entries(c.lenses)) {
-    need(LENSES.includes(name), `lenses.${name}`, `a known lens (${LENSES.join(", ")})`);
+    need(known.includes(name), `lenses.${name}`, `a known lens (${known.join(", ")})`);
     need(isObj(l), `lenses.${name}`, "an object");
     need(typeof l.enabled === "boolean", `lenses.${name}.enabled`, "a boolean");
     need(l.max_turns === undefined || posInt(l.max_turns), `lenses.${name}.max_turns`, "a positive integer");
@@ -164,8 +193,14 @@ function validate(c) {
   for (const k of ["max_diff_lines", "chunk_lines", "max_children", "max_parallel", "max_turns", "timeout_minutes"]) need(posInt(c.review[k]), `review.${k}`, "a positive integer");
 }
 
-export function loadConfig({ userPath, repoText, cliPath } = {}) {
+/** The config of this user: config file, lens folder, and the optional --config file and repo text. */
+export const loadUserConfig = (o = {}) => loadConfig({ userPath: userConfigPath(), lensDir: userLensDir(), ...o });
+
+export function loadConfig({ userPath, repoText, cliPath, lensDir } = {}) {
   let cfg = structuredClone(DEFAULTS);
+  const mine = lensDir ? userLenses(lensDir) : [];
+  const known = [...LENSES, ...mine];
+  for (const l of known) cfg.lenses[l] ??= { enabled: true };
   const path = cliPath ?? userPath;
   // A missing --config file is an error; a missing user file is not.
   if (cliPath && !existsSync(cliPath)) throw new Error(`config file not found: ${cliPath}`);
@@ -173,6 +208,12 @@ export function loadConfig({ userPath, repoText, cliPath } = {}) {
   if (repoText) {
     const repo = parse(repoText, ".pr-review.json");
     checkRepoKeys(repo);
+    // A repo may name a lens that this reviewer does not have: turning it off is then a no-op.
+    // A repo may only turn a lens off: enabled true is ignored, so a lens the user turned off stays off.
+    if (isObj(repo.lenses)) for (const [k, l] of Object.entries(repo.lenses)) {
+      if (!known.includes(k)) delete repo.lenses[k];
+      else if (isObj(l) && l.enabled === true) delete l.enabled;
+    }
     const extra = repo.effort_auto?.high_paths;
     if (extra !== undefined) need(strList(extra), "effort_auto.high_paths", "an array of strings");
     const userHigh = cfg.effort_auto.high_paths;
@@ -180,7 +221,9 @@ export function loadConfig({ userPath, repoText, cliPath } = {}) {
     // The repo may only add high_paths; arrays normally replace.
     if (extra) cfg.effort_auto.high_paths = [...userHigh, ...extra];
   }
-  validate(cfg);
+  validate(cfg, known);
+  // A lens that is off is never read, so a bad file of its own does not stop the run (doctor warns).
+  for (const n of mine) if (cfg.lenses[n].enabled) { const p = lensFileProblem(lensDir, n); if (p) throw new Error(p); }
   assignIds(cfg.seats, "seats");
   assignIds([cfg.judge], "judge");
   for (const [name, l] of Object.entries(cfg.lenses)) if (l.seats) assignIds(l.seats, `lenses.${name}.seats`);

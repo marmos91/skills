@@ -3,7 +3,12 @@ import { homedir } from "node:os";
 import { randomBytes } from "node:crypto";
 import { join, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
-import { installSignalHandlers } from "./child.mjs";
+import { addUsage, installSignalHandlers } from "./child.mjs";
+
+// The skill's version (metadata.version in SKILL.md, set by each release); a review records it in run.json.
+export const VERSION = (() => {
+  try { return readFileSync(new URL("../../SKILL.md", import.meta.url), "utf8").match(/^\s+version:\s*"?([^"\s#]+)/m)?.[1] ?? "unknown"; } catch { return "unknown"; }
+})();
 
 // A run is finished once its last stage has a marker.
 export const FINAL_STAGE = "post";
@@ -21,8 +26,9 @@ export function writeAtomic(file, text) {
   renameSync(tmp, file);
 }
 
+// what: "" for the repo lock, " of PR #5" for a PR lock.
 export class Locked extends Error {
-  constructor(pid) { super(`another pr-review run holds the lock (pid ${pid})`); this.name = "Locked"; this.pid = pid; }
+  constructor(pid, what = "") { super(`another pr-review run holds the lock${what} (pid ${pid})`); this.name = "Locked"; this.pid = pid; }
 }
 
 export function alive(pid) {
@@ -96,13 +102,13 @@ function moveAside(dir, deadRaw) {
 }
 
 // Best effort: temp and moved-aside dirs whose named pid is dead, and a takeover mutex whose holder died.
-function sweep(repoState) {
-  const mutex = join(repoState, "lock.takeover"), m = rawPid(mutex);
+function sweep(parent) {
+  const mutex = join(parent, "lock.takeover"), m = rawPid(mutex);
   if (m && !holderAlive(mutex, Number(m))) moveAside(mutex, m);
   try {
-    for (const f of readdirSync(repoState)) {
+    for (const f of readdirSync(parent)) {
       const pid = Number(/^lock(?:\.takeover)?\.(?:tmp|stale)\.(\d+)\./.exec(f)?.[1]);
-      if (pid && pid !== process.pid && !alive(pid)) rmSync(join(repoState, f), { recursive: true, force: true });
+      if (pid && pid !== process.pid && !alive(pid)) rmSync(join(parent, f), { recursive: true, force: true });
     }
   } catch {}
 }
@@ -110,8 +116,8 @@ function sweep(repoState) {
 // A takeover holds a mutex (claimed the same way), so only one process at a time moves a stale lock aside.
 // shortcut: if a process crashes inside this short critical section and a racer clears its dead mutex while another
 // racer takes over, two holders are possible; the second guard is that every post first checks GitHub for its marker (spec 6.10 step 6).
-function takeOver(repoState, dir, deadRaw) {
-  const mutex = join(repoState, "lock.takeover");
+function takeOver(parent, dir, deadRaw) {
+  const mutex = join(parent, "lock.takeover");
   if (!claim(mutex)) {
     const m = rawPid(mutex);
     if (!m || holderAlive(mutex, Number(m)) || !moveAside(mutex, m) || !claim(mutex)) return false;
@@ -123,10 +129,11 @@ function takeOver(repoState, dir, deadRaw) {
   }
 }
 
-export function acquireLock(repoState) {
-  const dir = join(repoState, "lock");
-  mkdirSync(repoState, { recursive: true });
-  sweep(repoState);
+// The lock is `<parent>/lock`: the repo state folder (tick), a PR folder pr/<n> (review), or a git clone (git writes).
+export function acquireLock(parent, what = "") {
+  const dir = join(parent, "lock");
+  mkdirSync(parent, { recursive: true });
+  sweep(parent);
   for (let attempt = 0; attempt < 2; attempt++) {
     if (!existsSync(dir) && claim(dir)) return own(dir);
     const raw = rawPid(dir);
@@ -134,11 +141,22 @@ export function acquireLock(repoState) {
     try { age = Date.now() - statSync(dir).mtimeMs; } catch (e) { if (e.code === "ENOENT") continue; throw e; } // released meanwhile: retry once
     // Stale = its holder is dead (pid gone, or reused by another process). A lock dir with no pid file only comes from an older version or a manual mkdir:
     // the one time-based rule treats it as stale after 60 s.
-    if (raw ? holderAlive(dir, Number(raw)) : age < 60000) throw new Locked(raw ? Number(raw) : null);
-    if (takeOver(repoState, dir, raw)) return own(dir);
-    throw new Locked(null);
+    if (raw ? holderAlive(dir, Number(raw)) : age < 60000) throw new Locked(raw ? Number(raw) : null, what);
+    if (takeOver(parent, dir, raw)) return own(dir);
+    throw new Locked(null, what);
   }
-  throw new Locked(null);
+  throw new Locked(null, what);
+}
+
+// acquireLock, retried for up to `ms`. It sleeps synchronously: it guards short synchronous git commands only.
+export function waitLock(parent, what, ms = 60000) {
+  const end = Date.now() + ms;
+  for (;;) {
+    try { return acquireLock(parent, what); } catch (e) {
+      if (!(e instanceof Locked) || Date.now() >= end) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+    }
+  }
 }
 
 function own(dir) {
@@ -173,4 +191,19 @@ export function prState(repoState, n) {
 
 export function savePrState(repoState, n, s) {
   writeAtomic(prFile(repoState, n), JSON.stringify(s, null, 2) + "\n");
+}
+
+/** Token usage of a run, summed per stage folder (hygiene at the top level), plus total; {} when none is recorded. */
+export function usageByStage(dir) {
+  const out = {};
+  const add = (stage, file) => { try { out[stage] = addUsage(out[stage], JSON.parse(readFileSync(file, "utf8"))); } catch {} };
+  let ls = [];
+  try { ls = readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  for (const e of ls) {
+    if (e.isFile() && e.name.endsWith(".usage.json")) add(e.name.slice(0, -".usage.json".length), join(dir, e.name));
+    // recursive: reply children write reply/<thread>/<comment>/<role>.usage.json
+    else if (e.isDirectory() && e.name !== "wt" && e.name !== "ctx") try { for (const f of readdirSync(join(dir, e.name), { recursive: true }).filter((x) => x.endsWith(".usage.json"))) add(e.name, join(dir, e.name, f)); } catch {}
+  }
+  if (Object.keys(out).length) out.total = Object.values(out).reduce((a, b) => addUsage(a, b));
+  return out;
 }
