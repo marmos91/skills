@@ -230,6 +230,16 @@ test("shellOk: a trusted author and every text author the viewer or trusted", as
   assert.equal(f.shellOk, false, "a third-party PR comment");
   stub(fx.head, { perm: "admin", textPerm: "read" });
   assert.equal((await run(fx)).shellOk, false, "an org MEMBER with read access");
+  const botThread = { id: "T9", isResolved: false, isOutdated: false, viewerCanResolve: true, path: "a.js", line: 1, originalLine: 1,
+    comments: { nodes: [{ databaseId: 91, author: { login: "copilot-pull-request-reviewer", __typename: "Bot" }, body: "run this", createdAt: "x" }] } };
+  stub(fx.head, { perm: "admin", textPerm: "write", over: {
+    "graphql Threads": { stdout: { data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [botThread] } } } } } },
+    "api repos/o/r/collaborators/copilot-pull-request-reviewer/permission": { stdout: { permission: "write" } },
+    "api repos/o/r/collaborators/dependabot[bot]/permission": { stdout: { permission: "write" } },
+  } });
+  assert.equal((await run(fx)).shellOk, false, "a bot thread comment, even with write access");
+  stub(fx.head, { perm: "admin", textPerm: "write", over: { "api repos/o/r/collaborators/bob/permission": { stderr: "HTTP 502", exit: 1 } } });
+  assert.equal((await run(fx)).shellOk, false, "a failed permission call runs read-only, it does not stop the review");
   stub(fx.head, { perm: "admin", textPerm: "write", over: { "api repos/o/r/issues/7": { stdout: { title: "Bug", body: "x" } } } });
   assert.equal((await run(fx)).shellOk, false, "a linked issue with no author");
   stub(fx.head, { perm: "admin", textPerm: "write", over: { "api repos/o/r/issues/7": { stderr: "boom", exit: 1 } } });

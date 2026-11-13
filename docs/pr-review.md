@@ -638,7 +638,8 @@ PR head.
 3. **Code runs only when every author is trusted.** A trusted author has
    `write` or `admin` permission on the repo (`lib/trust.mjs`, the same rule
    as the replies, the loop and pr-respond). The org association `MEMBER`
-   alone does not count. Bots do not count either. A shell needs a trusted
+   alone does not count. Bots do not count either, and a failed
+   permission call counts as untrusted. A shell needs a trusted
    PR author, and every author of text in the run's `ctx` folder (review
    threads and their comments, PR comments, reviews and linked issues) must
    be you or trusted. A linked-issue author that is unknown counts as

@@ -14,8 +14,6 @@ import { prState, savePrState, stateRoot } from "./state.mjs";
 
 const CORRECT = "The last comment in this thread, by the other party, is correct about this code.";
 const NEW_ARG = "This reply adds a new argument or new evidence.";
-// Permissions that count as a collaborator. On public repos every user has "read".
-
 const family = (s) => `${s.harness}|${s.model.split("/")[0]}`;
 const threadData = (t) => prData(JSON.stringify(t.comments.map((c) => ({ author: c.author, body: c.body })), null, 2), "the PR and its commenters");
 const isSkip = (b) => b.replace(/[`\p{P}\s]/gu, "").toUpperCase() === "SKIP";

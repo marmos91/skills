@@ -284,7 +284,8 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
   json(ctxDir, "comments.json", comments.map((c) => ({ author: c.user?.login ?? null, created_at: c.created_at, body: mine(c.user?.login, c.body) })));
 
   const threads = await gh.threads(repo, n);
-  for (const t of threads) for (const c of t.comments) authors.push(c.author);
+  // GraphQL bot logins have no [bot] suffix: a null author is never trusted.
+  for (const t of threads) for (const c of t.comments) authors.push(c.authorType === "Bot" ? null : c.author);
   json(ctxDir, "threads.json", threads.map((t) => ({ ...t, comments: t.comments.map((c) => ({ ...c, body: mine(c.author, c.body) })) })));
   // The viewer's open earlier findings.
   // A thread we retracted (prState.retracted) is closed, also when GitHub would not let us resolve it.
