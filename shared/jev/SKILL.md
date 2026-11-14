@@ -2,7 +2,7 @@
 name: jev
 description: "Ask Mimir SystemOne (Jev) typed yes/no questions and get calibrated probabilities and clean exit codes from any workflow — usable identically from bash in pi.dev and Claude Code. Use for verifying claims against text, gating CI or agent workflows on a judgment, deciding between branches of a playbook, or any fast classification where prose would be noise. Triggers on 'jev', 'ask jev', 'ask systemone', 'is this true', 'verify this claim', 'gate on'."
 metadata:
-  version: "0.2.0" # x-release-please-version
+  version: "0.2.1" # x-release-please-version
 ---
 
 # jev — typed yes/no questions with calibrated probabilities
