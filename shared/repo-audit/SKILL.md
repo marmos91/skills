@@ -2,7 +2,7 @@
 name: repo-audit
 description: Whole-repo quality audit — cleanliness/design patterns, structure & folders, over-engineering (ponytail), dead code, duplication, useless tests, docs, UI coherence, security, AI-slop/hallucination, Postgres entities & queries. Produces a severity-ranked audit report plus an epic roadmap (optionally GH issues). Multi-agent over headless read-only `pi -p` children; fully resumable. Use on "audit this repo", "full codebase review", "build an improvement roadmap".
 metadata:
-  version: "0.2.0" # x-release-please-version
+  version: "0.2.1" # x-release-please-version
 ---
 
 # Repo Audit (resumable multi-lens)
