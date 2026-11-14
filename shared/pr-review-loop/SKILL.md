@@ -52,7 +52,7 @@ the next run.
 5. A question with `"kind": "core-paths"` asks which paths of the repo are
    core (for `auto` depth). Ask the user for globs, and offer the candidates
    from the question. Save them with
-   `sh "$SKILL_DIR/scripts/pr-review-loop" config core-paths <owner/repo> [glob...]`
+   `sh "$SKILL_DIR/scripts/pr-review-loop" config core-paths <owner/repo> ['glob'...]` (quote each glob)
    (no glob = none). That closes the question. `answer <id> drop` also
    saves none; the question offers no other option.
 

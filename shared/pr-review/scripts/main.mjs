@@ -246,9 +246,10 @@ export async function main(argv, deps = {}) {
     if (what !== "core-paths" || !repo) throw new Usage(USAGE);
     let rs;
     try { rs = stateRoot(repo); } catch (e) { throw new Usage(e.message); }
-    // an unquoted glob reaches us already expanded by the shell
+    // An unquoted glob reaches us already expanded by the shell, but argv looks the same as a quoted literal
+    // path (go.mod is a valid core path), so warn and save as given; never refuse.
     const expanded = globs.filter((g) => !/[*?[{]/.test(g) && existsSync(g));
-    if (expanded.length) console.error(`warning: ${expanded.join(" ")} ${expanded.length > 1 ? "are files" : "is a file"} here, not a glob: quote the globs (for example 'pkg/**').`);
+    if (expanded.length) console.error(`warning: ${expanded.join(" ")} ${expanded.length > 1 ? "exist" : "exists"} here: if the shell expanded a glob, quote it (for example 'pkg/**') and run again. Saved as given.`);
     setCorePaths(rs, globs);
     console.log(`core paths of ${repo}: ${globs.join(" ") || "none"}`);
     return 0;
