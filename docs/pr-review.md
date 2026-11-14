@@ -22,7 +22,7 @@ attribution.
 | `pr-review answer <id> <post\|drop\|ask-author>` | Record your answer to one question |
 | `pr-review status [owner/repo]` | Questions, to-do items, review and reply counts per PR, lock holder, unfinished runs, tokens per stage, paused flag |
 | `pr-review doctor` | Merged config, the loaded lenses, a 1-token probe per seat, `gh auth status`, jev, gitleaks, claude login mode, planned child count per effort level |
-| `pr-review config core-paths <owner/repo> ['glob'...]` | Save the core paths of a repo for `auto` depth. No glob saves "none". Quote each glob: a glob the shell expanded to a file is refused |
+| `pr-review config core-paths <owner/repo> ['glob'...]` | Save the core paths of a repo for `auto` depth. No glob saves "none". Quote each glob: an argument that is a file here gets a warning (the shell may have expanded a glob), and is saved as given |
 | `pr-review tick [owner/repo]` | One loop run (a tick); `pr-review-loop` calls it |
 | `pr-review-loop [owner/repo]` | One loop run (a tick) |
 | `pr-review-loop pause` / `resume [owner/repo]` | Stop or restart every tick for the repo |
