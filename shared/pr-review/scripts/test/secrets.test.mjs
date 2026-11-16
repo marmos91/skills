@@ -138,3 +138,19 @@ test("real gitleaks flags a random token and passes clean text", { skip: !hasGit
   assert.ok(res.hits.every((h) => !h.includes(rand)));
   assert.deepEqual(scanOutbound("Looks fine, but check GH_TOKEN handling."), { ok: true, hits: [] });
 });
+
+test("the outbound scan applies the local secret-scan config: private names, sops values, allow list", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "ss-"));
+  const old = process.env.SECRET_SCAN_CONFIG;
+  process.env.SECRET_SCAN_CONFIG = dir;
+  t.after(() => { if (old === undefined) delete process.env.SECRET_SCAN_CONFIG; else process.env.SECRET_SCAN_CONFIG = old; });
+  const value = "v4lue" + "x".repeat(12);
+  writeFileSync(join(dir, "private.txt"), "example\\.internal\n");
+  writeFileSync(join(dir, "creds.env"), `export API_KEY="${value}"\n`);
+  writeFileSync(join(dir, "sops-files.txt"), join(dir, "creds.env"));
+  const res = scanOutbound(`ping db.example.internal with ${value}`);
+  assert.deepEqual(res.hits.map((h) => h.split(":")[0]), ["private-infra", "sops-value"]);
+  assert.ok(res.hits.every((h) => !h.includes("example") && !h.includes(value)));
+  writeFileSync(join(dir, "allow.txt"), res.hits.map((h) => `${/fp (\w+)/.exec(h)[1]} test fixture`).join("\n"));
+  assert.deepEqual(scanOutbound(`ping db.example.internal with ${value}`), { ok: true, hits: [] });
+});

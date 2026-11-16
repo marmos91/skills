@@ -93,6 +93,15 @@ test("install of pr-land brings pr-open and pr-review, whose code it imports", (
   assert.equal(d.status, 0, d.stderr);
 });
 
+test("install of secret-scan brings pr-review, whose scan it runs", (t) => {
+  const { env, run } = setup(t);
+  assert.equal(run(REPO, "install", "--claude", "secret-scan").status, 0);
+  assert.deepEqual(readdirSync(env.CLAUDE_DIR).sort(), ["pr-review", "secret-scan"]);
+  const s = spawnSync(join(env.BIN_DIR, "secret-scan"), [], { env, input: "ghp_" + "D".repeat(36), encoding: "utf8" });
+  assert.equal(s.status, 1);
+  assert.match(s.stderr, /^github-token: ghp_…/);
+});
+
 test("a local copy is moved aside once; a link is replaced; --link links to the package", (t) => {
   const { env, run } = setup(t);
   mkdirSync(join(env.CLAUDE_DIR, "jev"), { recursive: true });
