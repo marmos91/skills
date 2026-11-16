@@ -43,14 +43,18 @@ function gh(dir, args) {
 }
 const openPrOf = (dir, branch) => JSON.parse(gh(dir, ["pr", "list", "--head", branch, "--state", "open", "--json", "number,url"]))[0] ?? null;
 
-// secret-scan (#39) when installed, else the pr-review scan. Hits are masked by both.
-// The pushed origin's owner/repo from its configured URL; null when it is not on GitHub.
-function originRepo(dir) {
-  let url = "";
-  try { url = git(dir, "config", "--get", "remote.origin.url"); } catch { return null; }
-  return /github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?\/?$/.exec(url)?.[1] ?? null;
+// owner/repo of a github.com URL (https, ssh:// or scp form); null for any other host.
+const ghSlug = (url) => /^(?:https:\/\/(?:[^@/]+@)?github\.com\/|ssh:\/\/git@github\.com(?::22)?\/|git@github\.com:)([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(url)?.[1] ?? null;
+
+/** The repos a push to origin really reaches (pushurl and insteadOf applied); [null] (strict scan) unless all are on GitHub. */
+export function pushRepos(dir) {
+  let urls = [];
+  try { urls = git(dir, "remote", "get-url", "--push", "--all", "origin").split("\n").filter(Boolean); } catch { return [null]; }
+  const slugs = urls.map(ghSlug);
+  return slugs.length && slugs.every(Boolean) ? [...new Set(slugs)] : [null];
 }
 
+// secret-scan (#39) when installed, else the pr-review scan. Hits are masked by both.
 // repos: the PR target and the pushed origin; the private-repos.txt opt-out needs both listed, so text pushed to a
 // public origin is scanned strict even when the gh target is private.
 function secretHits(dir, text, repos) {
@@ -107,7 +111,7 @@ export async function openPr(dir, { title, bodyFile, base: wanted, draft = false
 
   // The secret scan sees everything that is posted: every commit's patch and message, the title, the final body.
   const final = buildBody({ body, record, parent, parentPr: parentPr?.number });
-  const hits = secretHits(dir, `${rangeText(dir, `${ref}..${sha}`)}\n${title}\n${final}`, [repo, originRepo(dir)]);
+  const hits = secretHits(dir, `${rangeText(dir, `${ref}..${sha}`)}\n${title}\n${final}`, [repo, ...pushRepos(dir)]);
   if (hits.length) throw new Blocked("the secret scan found a hit", { hits });
 
   if (!/#\d+/.test(body)) warnings.push("no linked issue");
