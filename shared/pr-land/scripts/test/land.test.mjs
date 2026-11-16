@@ -183,7 +183,7 @@ test("land() passes the scanner --repo for the PR's repo and what a push to the 
   git(s.dir, "config", "--unset", git(s.dir, "config", "--get-regexp", "^url\\.").split(" ")[0]); // the push URL is on GitHub again
   ghStub(routes(s));
   const bin = join(mkdtempSync(join(tmpdir(), "pr-land-scan-")), "scan");
-  writeFileSync(bin, '#!/bin/sh\necho "args: $*" >&2\nexit 1\n');
+  writeFileSync(bin, '#!/bin/sh\ncat >/dev/null\necho "args: $*" >&2\nexit 1\n');
   chmodSync(bin, 0o755);
   const old = process.env.PR_LAND_SECRET_SCAN;
   process.env.PR_LAND_SECRET_SCAN = bin;

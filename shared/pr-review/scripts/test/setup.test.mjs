@@ -187,8 +187,12 @@ test("timeout kills the whole process group", async () => {
   assert.equal(r.timedOut, true);
   assert.ok(Date.now() - t0 < 5000);
   const pid = Number(readFileSync(pidFile, "utf8"));
-  await new Promise((res) => setTimeout(res, 200));
-  assert.throws(() => process.kill(pid, 0), /ESRCH/, "the background child must be gone");
+  // the killed child is reaped asynchronously: poll for ESRCH instead of a fixed wait
+  let alive = true;
+  for (let i = 0; alive && i < 100; i++) {
+    try { process.kill(pid, 0); await new Promise((res) => setTimeout(res, 20)); } catch (e) { alive = e.code !== "ESRCH"; }
+  }
+  assert.equal(alive, false, "the background child must be gone");
 });
 
 test("summary line names the depth and the checks", () => {
