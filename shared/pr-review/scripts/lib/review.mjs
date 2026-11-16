@@ -653,7 +653,8 @@ async function once(o, restart) {
     const text = x.answered ? redact(x.body) : x.body;
     const s = scan1(x);
     if (s.ok) { clean.push({ ...x, body: text }); continue; }
-    if (x.answered) continue;
+    // redact() knows only the built-in patterns: a private name or a sops value still hits. Say so; never the value.
+    if (x.answered) { log(`${x.file}:${x.line}: answered "post", but the comment still hits after redaction (${ruleIds(s.hits)}): not posted; remove the value from the finding or allow it in secret-scan's allow.txt`); continue; }
     // A later "post" answer posts this engine-final body (checked, marked). A held host keeps its own finding
     // only: its folded findings went out on their own.
     save(join(runDir, "held", `${x.fp}.json`), { body: redact(x.fps.length > 1 ? (await checked(own(x))).body : x.body) });
@@ -784,7 +785,10 @@ async function followUp(o, head, pst, answered) {
     const fix = f.fix && f.proven !== undefined && suggestionOf(f.fix) ? uncheckedNote(f.fix, "a follow-up runs no test") : f.fix;
     const base = `**${f.severity}:** ${f.title}\n\n${f.case}${fix ? `\n\n${fix}` : ""}${q.answer === "ask-author" ? "\n\nCan you confirm this case?" : ""}`;
     const text = f.secret ? heldText(repoState, n, pst.lastRunId, q.fingerprint) : f.proven === false ? markUnproven(base, !diffLine(hunks, f.file, f.line)) : base;
-    if (text && scanOutbound(text, { repo }).ok) items.push({ q, text });
+    if (!text) continue;
+    const s = scanOutbound(text, { repo });
+    if (s.ok) items.push({ q, text });
+    else o.log(`question ${q.id}: answered "post", but the comment still hits after redaction (${ruleIds(s.hits)}): not posted; remove the value or allow it in secret-scan's allow.txt`);
   }
   let url = null;
   if (items.length) {

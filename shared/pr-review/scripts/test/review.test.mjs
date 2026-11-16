@@ -1,3 +1,4 @@
+import "./hermetic.mjs";
 import test from "node:test";
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
@@ -268,6 +269,28 @@ test("secret in a finding -> that post blocked, question queued", async () => {
   assert.equal(t.length, 1);
   assert.match(t[0].body, /\[REDACTED:github-token\] leaks/);
   assert.ok(!JSON.stringify(mutations(fx)).includes(token));
+});
+
+test("a comment held by a private name: answer post cannot redact it, so it stays out and the log says why", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "ss-"));
+  writeFileSync(join(dir, "private.txt"), "example\\.internal\n");
+  const old = process.env.SECRET_SCAN_CONFIG;
+  process.env.SECRET_SCAN_CONFIG = dir;
+  t.after(() => { process.env.SECRET_SCAN_CONFIG = old; });
+  const fx = fixture(); routes(fx);
+  const answers = happy({ compose: { body: "Summary.", comments: [{ id: "c1", body: "**must:** calls db01.example.internal" }] } });
+  await go(fx, answers);
+  const q = openQuestions(fx.state);
+  assert.match(q[0].finding.case, /^Secret rules: private-infra/);
+  answer(fx.state, q[0].id, "post");
+  const lines = [];
+  const again = await go(fx, answers, { log: (l) => lines.push(l) });
+  assert.equal(again.r.exit, 0, again.r.summary);
+  assert.equal(posts(fx).at(-1).threads.length, 0);
+  const why = lines.find((l) => /still hits after redaction \(private-infra\)/.test(l));
+  assert.ok(why, lines.join("\n"));
+  assert.ok(!why.includes("example"));
+  assert.ok(!JSON.stringify(mutations(fx)).includes("example.internal"));
 });
 
 test("own pending review not owned by the run -> skip", async () => {

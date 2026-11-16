@@ -1,3 +1,4 @@
+import "../../../pr-review/scripts/test/hermetic.mjs";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -16,7 +17,7 @@ function setup(files = {}) {
   const dir = mkdtempSync(join(tmpdir(), "secret-scan-"));
   for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text);
   // cwd outside any clone: no repo is detected
-  const scan = (input, ...args) => spawnSync(CLI, args, { input, cwd: dir, encoding: "utf8", env: { ...process.env, SECRET_SCAN_CONFIG: dir } });
+  const scan = (input, ...args) => spawnSync(CLI, args, { input, cwd: dir, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: { ...process.env, SECRET_SCAN_CONFIG: dir } });
   return { dir, scan };
 }
 
@@ -83,4 +84,12 @@ test("file arguments are labelled file:line; usage errors exit 2", () => {
   assert.equal(scan("", "nope.md").status, 2);
   assert.equal(scan("", "--bogus").status, 2);
   assert.equal(scan("", "--help").status, 0);
+});
+
+test("every hit line reaches a pipe before the exit", () => {
+  const { dir, scan } = setup();
+  writeFileSync(join(dir, "big.txt"), `${TOKEN}\n`.repeat(50000));
+  const r = scan("", "big.txt");
+  assert.equal(r.status, 1);
+  assert.equal(r.stderr.trimEnd().split("\n").length, 50000);
 });

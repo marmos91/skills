@@ -1,3 +1,4 @@
+import "../shared/pr-review/scripts/test/hermetic.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -99,7 +100,7 @@ test("install of secret-scan brings pr-review, whose scan it runs", (t) => {
   assert.deepEqual(readdirSync(env.CLAUDE_DIR).sort(), ["pr-review", "secret-scan"]);
   const s = spawnSync(join(env.BIN_DIR, "secret-scan"), [], { env, input: "ghp_" + "D".repeat(36), encoding: "utf8" });
   assert.equal(s.status, 1);
-  assert.match(s.stderr, /^github-token: ghp_…/);
+  assert.match(s.stderr, /^github-token: ghp_…/m);
 });
 
 test("a local copy is moved aside once; a link is replaced; --link links to the package", (t) => {

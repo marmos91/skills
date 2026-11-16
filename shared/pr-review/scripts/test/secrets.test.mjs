@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, chmodSync } from "node:fs";
+import { mkdtempSync, writeFileSync, chmodSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scanOutbound, redact } from "../lib/secrets.mjs";
@@ -186,6 +186,30 @@ test("a config file that is there but unreadable blocks; a missing one is skippe
   assert.deepEqual(scanOutbound("clean text"), { ok: true, hits: [] });
 });
 
+test("CRLF config lines: a trailing comment is still dropped", (t) => {
+  withConfig(t, { "private.txt": "example\\.internal # our domain\r\nother\\.internal\r\n" });
+  assert.equal(scanOutbound("deploy on db01.example.internal").ok, false);
+  assert.equal(scanOutbound("deploy on db01.other.internal").ok, false);
+});
+
+test("allow.txt: the reason is verbatim, a # in it does not cut it", (t) => {
+  const dir = withConfig(t, { "private.txt": "example\\.internal\n" });
+  const fp = /fp (\w+)/.exec(scanOutbound("see db01.example.internal").hits[0])[1];
+  writeFileSync(join(dir, "allow.txt"), `${fp} #123 names it on purpose\n`);
+  assert.deepEqual(scanOutbound("see db01.example.internal"), { ok: true, hits: [] });
+  writeFileSync(join(dir, "allow.txt"), `${fp}\n# ${fp} commented out\n`);
+  assert.equal(scanOutbound("see db01.example.internal").ok, false);
+});
+
+test("a dangling link in sops-files.txt (a secret that did not render) blocks", (t) => {
+  const dir = withConfig(t, {});
+  symlinkSync(join(dir, "gone.env"), join(dir, "creds.env"));
+  writeFileSync(join(dir, "sops-files.txt"), join(dir, "creds.env"));
+  const res = scanOutbound("clean text");
+  assert.equal(res.ok, false);
+  assert.match(res.hits[0], /^secret-scan: config unreadable \(ENOENT\)/);
+});
+
 test("a repo in private-repos.txt skips the private set through the library too; no repo is strict", (t) => {
   withConfig(t, { "private.txt": "example\\.internal\n", "private-repos.txt": "me/infra\n" });
   assert.equal(scanOutbound("db01.example.internal", { repo: "me/infra" }).ok, true);
@@ -197,7 +221,8 @@ test("many hits in a big diff stay fast (line numbers are not recounted per hit)
   const line = `+const k = "${cases["aws-access-key-id"]}";\n`;
   const text = "+x\n".repeat(100000) + line.repeat(3000);
   const t0 = Date.now();
-  const res = scanOutbound(text);
+  // a stub gitleaks: a real one would add its own hits and time
+  const res = withStub(`cat >/dev/null; ${getReport}; echo '[]' > "$p"`, () => scanOutbound(text));
   assert.equal(res.hits.length, 3000);
   assert.match(res.hits.at(-1), /\(line 103000, fp/);
   assert.ok(Date.now() - t0 < 3000, `took ${Date.now() - t0} ms`);

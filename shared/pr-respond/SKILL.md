@@ -54,7 +54,10 @@ the full command each time: zsh does not split a variable into words.
    message, in the repo's commit style. Do not name an AI or a tool. Before
    the push, scan every commit since the PR base (this works on a branch
    with no upstream too):
-   `b=$(gh pr view --json baseRefName --jq .baseRefName) && git fetch -q origin "$b" && d=$(mktemp) && git log -p "origin/$b..HEAD" > "$d" && secret-scan "$d"`.
+   `b=$(gh pr view --json baseRefName --jq .baseRefName) && git fetch -q origin "+refs/heads/${b}:refs/remotes/origin/${b}" && d=$(mktemp) && git log -p --cc --text --no-ext-diff --no-textconv --format=%B "origin/${b}..HEAD" > "$d" && secret-scan "$d"`.
+   The flags are pr-open's: merge commits show their patch, no textconv
+   (which could decrypt sops files), and the explicit refspec works in a
+   single-branch clone.
    Any non-zero exit blocks the push (a git error too). Remove the hit, or
    allow a false one as the `secret-scan` skill says. Push.
 5. For each fixed thread, run `$P fixed <id> <sha>` with the sha of the

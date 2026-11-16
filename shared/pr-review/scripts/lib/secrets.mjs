@@ -1,7 +1,7 @@
 // The one secret scan: pr-review, pr-respond and pr-open use it here; the secret-scan skill is its CLI.
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { lstatSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -57,11 +57,17 @@ function gitleaksHits(text, timeoutMs) {
 // Local, untracked config: the lists never leave the machine and are never printed.
 const configDir = () => process.env.SECRET_SCAN_CONFIG || join(homedir(), ".config", "secret-scan");
 // A missing file is skipped (other machines); a file that is there but unreadable throws, so the scan fails closed.
+// A dangling link (a sops-nix secret that did not render) is there: it throws too.
 function readIfThere(path) {
-  try { return readFileSync(path, "utf8"); } catch (e) { if (e.code === "ENOENT") return null; throw e; }
+  try { return readFileSync(path, "utf8"); } catch (e) {
+    if (e.code !== "ENOENT") throw e;
+    try { lstatSync(path); } catch { return null; }
+    throw e;
+  }
 }
+const rawLines = (name) => (readIfThere(join(configDir(), name)) ?? "").split(/\r?\n/);
 // `#` at the start of a line or after whitespace starts a comment; `\#` is a literal `#` in a pattern.
-const lines = (name) => (readIfThere(join(configDir(), name)) ?? "").split("\n").map((l) => l.replace(/(^|\s)#.*$/, "").trim()).filter(Boolean);
+const lines = (name) => rawLines(name).map((l) => l.replace(/(^|\s)#.*$/, "").trim()).filter(Boolean);
 const fingerprint = (rule, value) => createHash("sha256").update(`${rule}\0${value}`).digest("hex").slice(0, 12);
 
 // private.txt: one regex per line, case-insensitive; a line that is not a valid regex is a literal.
@@ -124,8 +130,8 @@ export function findings(text, { timeoutMs = 30000, repo = null, label = null } 
       for (const re of privatePatterns()) for (const m of text.matchAll(re)) if (m[0]) add("private-infra", m[0], m.index);
     }
     for (const v of new Set(sopsValues())) for (let i = text.indexOf(v); i >= 0; i = text.indexOf(v, i + 1)) add("sops-value", v, i);
-    // allow.txt: `<fp> <reason>`; a line without a reason allows nothing
-    allowed = new Set(lines("allow.txt").filter((l) => /^\S+\s+\S/.test(l)).map((l) => l.split(/\s/)[0]));
+    // allow.txt: `<fp> <reason>`, the reason verbatim (it may hold `#`); a line without a reason allows nothing
+    allowed = new Set(rawLines("allow.txt").map((l) => /^\s*([0-9a-f]{12})\s+\S/.exec(l)?.[1]).filter(Boolean));
   } catch (e) {
     out.push({ rule: "secret-scan", masked: `config unreadable (${e.code ?? "error"})`, where: null, fp: null });
   }
