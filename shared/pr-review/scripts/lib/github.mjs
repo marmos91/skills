@@ -200,3 +200,8 @@ export async function failedLog(repo, runId, lines = 80) {
   const { stdout } = await run(["run", "view", String(runId), "-R", repo, "--log-failed"]);
   return stdout.replace(/\n+$/, "").split("\n").slice(-lines).join("\n");
 }
+
+/** A commit status on `sha` (context `pr-review`), so branch protection can require it. */
+export async function status(repo, sha, { state, description, target_url }) {
+  return json(["api", "-X", "POST", `repos/${repo}/statuses/${sha}`, "--input", "-"], { input: JSON.stringify({ state, description, target_url, context: "pr-review" }) });
+}

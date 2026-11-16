@@ -22,7 +22,7 @@ import { linkFix } from "./reply.mjs";
 import { appliedAnswer, pendingAnswers, queueQuestion, waitingQuestions } from "./questions.mjs";
 import { applyProof, checkFix, directionOnly, isProven, markUnproven, mutantFindings, proofLine, runMutants, scopePatch, suggestionOf, uncheckedNote } from "./proof.mjs";
 import { cherryPicked, coreCandidates, depthLine, pickDepth, queueCoreQuestion, readCorePaths, runSetup, settleCoreQuestions } from "./setup.mjs";
-import { FINAL_STAGE, VERSION, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, summaryMarker, usageByStage, writeAtomic } from "./state.mjs";
+import { FINAL_STAGE, VERSION, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, commitStatus, summaryMarker, usageByStage, writeAtomic } from "./state.mjs";
 
 export const STAGES = ["frame", "setup", "round1", "merge", "round2", "tally", "decide", "compose", "post"];
 const RANK = { must: 0, should: 1, nit: 2 };
@@ -728,6 +728,7 @@ async function once(o, restart) {
       if (withLinks !== body) await gh.editReview(res.id, withLinks).catch((e) => log(`review body links not added: ${e.message}`));
     }
   }
+  await postStatus(gh, repo, n, f.headSha, counts(), url, log);
   // Same fingerprint and record as tick.mjs: a rerun (or the tick after it) finds the question and adds nothing.
   if (queueApprove) {
     queueQuestion(repoState, {
@@ -789,6 +790,11 @@ async function once(o, restart) {
   };
 }
 
+// On the reviewed sha, never the current head. A failed status (a token without the scope) does not undo the posted review.
+async function postStatus(gh, repo, n, sha, counts, url, log) {
+  try { await gh.status(repo, sha, { ...commitStatus(counts), target_url: url ?? `https://github.com/${repo}/pull/${n}` }); } catch (e) { log(`commit status failed: ${e.message}`); }
+}
+
 // The engine-final body of a comment that an earlier run held back by the secret scan, redacted; null when gone.
 function heldText(repoState, n, runId, fp) {
   try { return readJson(join(repoState, "pr", String(n), "runs", runId ?? "", "held", `${fp}.json`)).body; } catch { return null; }
@@ -840,6 +846,7 @@ async function followUp(o, head, pst, answered) {
       if (await gh.pendingReview(repo, n)) return { exit: 0, skipped: true, summary: "skipped: you have a pending review on this PR; submit or delete it, then run again" };
       url = (await gh.postReview(repo, n, { commitOID: head, event: "COMMENT", body, threads: p.inline })).url;
     }
+    await postStatus(gh, repo, n, head, counts, url, o.log);
     const st = prState(repoState, n);
     st.counts = { sha: head, ...counts };
     st.settled = [...new Set([...st.settled, ...fps])];

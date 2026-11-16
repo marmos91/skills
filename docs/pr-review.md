@@ -313,6 +313,16 @@ posts, minus the questions it settles. It is the last line
 of the body; a marker anywhere else is ignored. `pr-land` reads them
 (`summaryMarker` and `readSummaryMarker` in `state.mjs`).
 
+After each review with these fields, the engine sets a commit status with
+the context `pr-review` on the reviewed SHA: `failure` when must, questions
+or gaps is above 0, `success` otherwise. The description holds the counts
+("1 must, 2 questions") and the link goes to the review. A new head gets a
+status only once a review runs on it. To block a merge while a must is
+open, add `pr-review` as a required status check in the branch protection
+rule (or ruleset) of the base branch: Settings, Branches, "Require status
+checks to pass before merging". The token needs write access to commit
+statuses; when the call fails, the review stays posted and the run logs it.
+
 With `--dry-run` the engine writes the review to a file in the run folder,
 prints the planned children and models, prints the tokens that each stage
 used, and posts nothing.

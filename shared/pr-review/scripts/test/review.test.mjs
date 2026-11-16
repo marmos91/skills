@@ -84,6 +84,7 @@ function routes(fx, { head = fx.head, body = "Changes a.", threads = [], pending
     "api -X POST repos/o/r/pulls/5/comments/11/replies --input -": { stdout: {} },
     "api -X PATCH repos/o/r/pulls/comments/12 --input -": { stdout: {} },
     "api -X PATCH repos/o/r/pulls/comments/13 --input -": { stdout: {} },
+    ...Object.fromEntries([fx.head, head].map((sha) => [`api -X POST repos/o/r/statuses/${sha} --input -`, { stdout: {} }])),
     "graphql ResolveThread": { stdout: { data: { resolveReviewThread: { thread: { id: "T1", isResolved: true } } } } },
   };
   writeFileSync(join(fx.stubDir, "routes.json"), JSON.stringify(r));
@@ -91,6 +92,8 @@ function routes(fx, { head = fx.head, body = "Changes a.", threads = [], pending
 
 const mutations = (fx) => (existsSync(join(fx.stubDir, "mutations.jsonl")) ? readFileSync(join(fx.stubDir, "mutations.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l)) : []);
 const posts = (fx) => mutations(fx).filter((m) => m.key === "graphql PostReview").map((m) => m.input.variables.input);
+
+const statuses = (fx) => mutations(fx).filter((m) => m.key.startsWith("api -X POST repos/o/r/statuses/")).map((m) => ({ sha: m.argv[3].split("/").pop(), ...m.input }));
 
 const F = (over = {}) => ({ lens: "correctness", severity: "must", file: "a.js", line: 2, title: "Off by one", case: "b = 3 -> wrong total", evidence: "trace", fix: "use 2", ...over });
 const C = (id, over = {}) => ({ ...F(), id, found: [S0, S1], ...over });
@@ -158,6 +161,25 @@ test("learnings: a fingerprint in .pr-review/learnings.md on the base branch, or
   learn(fx2.state, [learnKey(F())], "PR #3: not a bug");
   const b = await go(fx2, happy());
   assert.ok(!b.run.calls.some((c) => c.k === "v~2"), "local file");
+});
+
+test("commit status: failure with the counts for an open must, success for a clean pass", async () => {
+  let fx = fixture(); routes(fx);
+  await go(fx, happy());
+  assert.deepEqual(statuses(fx), [{ sha: fx.head, state: "failure", description: "1 must", target_url: "https://github.com/o/r/pull/5#pullrequestreview-1", context: "pr-review" }]);
+  fx = fixture(); routes(fx);
+  const { r } = await go(fx, { all: { findings: [] }, merge: [], compose: { body: "Changes a.", comments: [] } });
+  assert.equal(r.exit, 0, r.summary);
+  assert.deepEqual(statuses(fx).map((x) => [x.sha, x.state, x.description]), [[fx.head, "success", "no open must, question or gap"]]);
+});
+
+test("commit status goes on the reviewed head, not the head the PR has now", async () => {
+  const fx = fixture(); routes(fx);
+  const moved = "f".repeat(40);
+  // the author pushes right after the review is posted
+  const gh = { ...github, postReview: async (...a) => { const out = await github.postReview(...a); routes(fx, { head: moved }); return out; } };
+  await go(fx, happy(), { gh });
+  assert.deepEqual(statuses(fx).map((x) => x.sha), [fx.head]);
 });
 
 test("rerun after a crash before markDone(post) does not post again", async () => {
