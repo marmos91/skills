@@ -416,7 +416,11 @@ async function once(o, restart) {
   const all = raw.filter((c) => run.lenses.includes(c.lens)).map((c) => {
     const seats = [...new Set(seatsForLens(config, c.lens).map(seatId))].filter((id) => !isDropped(id));
     // proof comes from engine data only: a `proven` the judge copied into a cluster is dropped
-    return { ...c, found: [...new Set(c.found)].filter((s) => seats.includes(s)), seats, fp: fingerprint(c), proven: undefined };
+    // pre-existing never blocks (#69), so it holds only when most member findings say so; else the highest level raised
+    const sevs = (c.members ?? []).map((m) => fids.get(m)?.severity).filter(Boolean);
+    const severity = c.severity !== "pre-existing" || sevs.filter((s) => s === "pre-existing").length * 2 > sevs.length ? c.severity
+      : sevs.filter((s) => s !== "pre-existing").sort((a, b) => RANK[a] - RANK[b])[0] ?? "should";
+    return { ...c, severity, found: [...new Set(c.found)].filter((s) => seats.includes(s)), seats, fp: fingerprint(c), proven: undefined };
   });
   const reversed = all.filter((c) => c.reverses), linked = all.filter((c) => !c.reverses && resolvedThread(c));
   const { keep: clusters, dropped } = filterNew(all.filter((c) => !c.reverses && !resolvedThread(c)), {

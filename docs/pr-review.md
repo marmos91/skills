@@ -266,6 +266,8 @@ Compose gets only the repo's review guidance: `REVIEW.md` and the files in
   by lines it did not change) is listed once, collapsed at the end of the
   summary, never inline. It never blocks and never counts for the verdict
   or for `pr-land`. A split vote drops it: no jev call and no question.
+  A cluster is pre-existing only when most of its findings say so;
+  otherwise it keeps the highest level a seat raised.
 - A finding from a single seat, or one the author must clarify, is written
   as a question to the author.
 - The effort level caps the severities and the count (see

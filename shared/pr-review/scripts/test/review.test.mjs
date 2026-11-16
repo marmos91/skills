@@ -2359,7 +2359,9 @@ test("2 split clusters with one fingerprint at 2 lines get a question each; an a
 
 // #69: a problem in code the PR touches but did not cause.
 const PRE = { lens: "correctness", severity: "pre-existing", file: "b.js", line: 1, title: "Old leak", case: "b never closes", evidence: "trace", fix: "close b" };
-const preRun = { all: { findings: [PRE] }, merge: [{ ...PRE, id: "c1", found: [S0, S1] }], "v~2": [keep("c1")], compose: { body: "Changes a.", comments: [] } };
+// every round-1 finding of the merge prompt is a member: the level of a cluster follows its members
+const allFids = (o) => [...readFileSync(o.promptFile, "utf8").matchAll(/"fid": "(f\w+)"/g)].map((m) => m[1]);
+const preRun = { all: { findings: [PRE] }, merge: (o) => [{ ...PRE, id: "c1", found: [S0, S1], members: allFids(o) }], "v~2": [keep("c1")], compose: { body: "Changes a.", comments: [] } };
 
 test("pre-existing: posts once, collapsed at the end of the summary, never inline, and does not block", async () => {
   const fx = fixture({ "b.js": "const b = open();\n" }); routes(fx);
@@ -2378,9 +2380,12 @@ test("pre-existing: a later pass does not raise it again", async () => {
   await go(fx, preRun);
   assert.match(posts(fx)[0].body, /1 pre-existing finding/);
   savePrState(fx.state, N, { ...prState(fx.state, N), lastReviewedSha: fx.base });
-  const { r, run } = await go(fx, { ...preRun, all: { findings: [PRE], earlier: [] }, compose: { body: "No new findings.", comments: [] } });
+  // raised again at a level pass 2 allows: only the settled fingerprint can drop it
+  const again = { ...PRE, severity: "should" };
+  const { r, run } = await go(fx, { ...preRun, all: { findings: [again], earlier: [] }, merge: [{ ...again, id: "c1", found: [S0, S1] }], compose: { body: "No new findings.", comments: [] } });
   assert.equal(r.exit, 0, r.summary);
   assert.ok(!run.calls.some((c) => c.k === "v~2"), "dropped before the vote");
+  assert.deepEqual(JSON.parse(readFileSync(join(r.runDir, "clusters.json"), "utf8")).dropped.map((d) => d.reason), ["settled"]);
   assert.doesNotMatch(posts(fx)[1].body, /pre-existing/);
 });
 
@@ -2394,7 +2399,7 @@ test("pre-existing: the only finding keeps the loop's unanimous zero", async () 
 test("pre-existing: a split vote drops it, with no jev call and no question", async () => {
   const fx = fixture({ "b.js": "const b = open();\n" }); routes(fx);
   let asked = 0;
-  const { r } = await go(fx, { ...preRun, merge: [{ ...PRE, id: "c1", found: [S0] }], "v~1": [keep("c1")], "v~2": [drop("c1")] }, { decide: async () => { asked++; return { decision: "unsure" }; } });
+  const { r } = await go(fx, { ...preRun, merge: (o) => [{ ...PRE, id: "c1", found: [S0], members: allFids(o) }], "v~1": [keep("c1")], "v~2": [drop("c1")] }, { decide: async () => { asked++; return { decision: "unsure" }; } });
   assert.equal(r.exit, 0, r.summary);
   assert.equal(asked, 0);
   assert.equal(openQuestions(fx.state).length, 0);
@@ -2406,4 +2411,10 @@ test("pre-existing: \"No new findings.\" is dropped when the body lists one", as
   const fx = fixture({ "b.js": "const b = open();\n" }); routes(fx);
   await go(fx, { ...preRun, compose: { body: "No new findings.", comments: [] } });
   assert.doesNotMatch(posts(fx)[0].body, /No new findings/);
+});
+
+test("pre-existing: one seat or the judge alone cannot turn a must into pre-existing", async () => {
+  const fx = fixture(); routes(fx);
+  await go(fx, happy({ "all~1": { findings: [F({ severity: "pre-existing" })] }, merge: (o) => [C("c1", { severity: "pre-existing", members: allFids(o) })] }));
+  assert.equal(posts(fx)[0].event, "REQUEST_CHANGES");
 });
