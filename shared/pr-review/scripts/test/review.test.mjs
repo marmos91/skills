@@ -16,6 +16,7 @@ import { fingerprint, learnKey, settledKey as keyOf } from "../lib/convergence.m
 import { learn } from "../lib/learnings.mjs";
 import * as github from "../lib/github.mjs";
 import { queueCoreQuestion, saveCorePaths } from "../lib/setup.mjs";
+import { sastClusters } from "../lib/sast.mjs";
 // The verdict counts of a review body, read the way pr-land reads them.
 const counts = (body) => { const { must, questions, gaps } = readSummaryMarker(body) ?? {}; return { must, questions, gaps }; };
 
@@ -2521,4 +2522,57 @@ test("pre-existing: one seat or the judge alone cannot turn a must into pre-exis
   const fx = fixture(); routes(fx);
   await go(fx, happy({ "all~1": { findings: [F({ severity: "pre-existing" })] }, merge: (o) => [C("c1", { severity: "pre-existing", members: allFids(o) })] }));
   assert.equal(posts(fx)[0].event, "REQUEST_CHANGES");
+});
+
+// sast (#70): a stub semgrep prints these results and records its arguments; the env goes back after the test.
+const semgrep = (t, results) => {
+  const d = mkdtempSync(join(tmpdir(), "semgrep-")), was = process.env.PR_REVIEW_SEMGREP;
+  writeFileSync(join(d, "out.json"), JSON.stringify({ results }));
+  writeFileSync(join(d, "semgrep"), `#!/bin/sh\ncat >/dev/null\necho "$@" >"${d}/args"\ncat "${d}/out.json"\n`);
+  chmodSync(join(d, "semgrep"), 0o755);
+  process.env.PR_REVIEW_SEMGREP = join(d, "semgrep");
+  t.after(() => { process.env.PR_REVIEW_SEMGREP = was; });
+  return () => readFileSync(join(d, "args"), "utf8");
+};
+const HIT = (line, rule) => ({ check_id: rule, path: "a.js", start: { line }, extra: { message: `bad at ${line}` } });
+
+test("sast: a hit the seats keep is posted, a hit they drop or off the added lines is not, and the summary names semgrep", async (t) => {
+  semgrep(t, [HIT(2, "r.kept"), HIT(3, "r.dropped"), { ...HIT(1, "r.unchanged-file"), path: "x.js" }]);
+  const fx = fixture(); routes(fx);
+  const [A, B] = sastClusters({ hits: [HIT(2, "r.kept"), HIT(3, "r.dropped")].map((h) => ({ rule: h.check_id, file: h.path, line: h.start.line })) }, []);
+  const votes = [keep(A.id), drop(B.id)];
+  const { r } = await go(fx, happy({ "v~0": votes, "v~1": votes, "v~2": [keep("c1"), ...votes],
+    compose: { body: "Changes a.", comments: [{ id: "c1", body: "**must:** off by one" }, { id: A.id, body: "**should:** kept hit" }] } }));
+  assert.equal(r.exit, 0, r.summary);
+  const p = posts(fx)[0];
+  assert.deepEqual(p.threads.map((x) => [x.line, x.body.split("\n")[0]]), [[2, "**must:** off by one"], [2, "**should:** kept hit"]]);
+  assert.match(p.body, /What was checked: light depth, no checks run\. Static analysis: semgrep \(2 hits on added lines\)\./);
+});
+
+test("sast: no semgrep installed, the review runs and the log says it was skipped", async () => {
+  const fx = fixture(); routes(fx);
+  const logs = [];
+  const { r } = await go(fx, happy(), { log: (m) => logs.push(m) });
+  assert.equal(r.exit, 0, r.summary);
+  assert.ok(logs.includes("static analysis: semgrep is not installed, skipped"), logs.join("\n"));
+  assert.doesNotMatch(posts(fx)[0].body, /Static analysis/);
+});
+
+test("sast: review.sast false runs no semgrep", async (t) => {
+  const args = semgrep(t, []);
+  const fx = fixture(); routes(fx);
+  userConfig({ review: { sast: false } });
+  const { r } = await go(fx, happy());
+  assert.equal(r.exit, 0, r.summary);
+  assert.throws(args);
+});
+
+test("sast: the repo's semgrep rules are used for a trusted author only", async (t) => {
+  for (const trust of [false, true]) {
+    const args = semgrep(t, []);
+    const fx = fixture({ ".semgrep.yml": "rules: []\n" }); routes(fx);
+    if (trust) trusted(fx);
+    await go(fx, happy());
+    assert.match(args(), trust ? /--config \.semgrep\.yml / : /--config p\/default /);
+  }
 });

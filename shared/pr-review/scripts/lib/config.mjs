@@ -51,6 +51,8 @@ export const DEFAULTS = {
   // depth: light|full|auto (setup.mjs). checks: null = the built-in Go checks when go.mod is at the root.
   // core_paths has no default: auto asks for it once per repo.
   review: { guidance: [], ci: "use", max_diff_lines: 6000, chunk_lines: 500, max_children: 60, max_parallel: 9, max_turns: 40, timeout_minutes: 10, depth: "light", checks: null,
+    // sast (sast.mjs): semgrep on the changed files at every depth, its hits are security candidates; a repo may turn it off
+    sast: true,
     // mutants (proof.mjs): at most max mutants, total_s for all of them (and again for the fix checks). Each run
     // keeps the repeat and timeout_s of its check.
     mutants: { max: 20, total_s: 900 } },
@@ -62,7 +64,7 @@ export const DEFAULTS = {
 };
 
 // Repo level may set only these paths; "*" matches one lens name.
-const REPO_ALLOWED = ["lenses.*.enabled", "loop.authors_ignore", "loop.max_prs_per_run", "review.guidance", "review.core_paths", "effort_auto.high_paths", "hygiene.enabled"];
+const REPO_ALLOWED = ["lenses.*.enabled", "loop.authors_ignore", "loop.max_prs_per_run", "review.guidance", "review.core_paths", "effort_auto.high_paths", "hygiene.enabled", "review.sast"];
 
 // Strip // comments outside of strings.
 export function stripComments(text) {
@@ -201,6 +203,7 @@ function validate(c, known) {
   need(isObj(c.hygiene) && typeof c.hygiene.enabled === "boolean", "hygiene.enabled", "a boolean");
   need(isObj(c.respond) && posInt(c.respond.max_rounds), "respond.max_rounds", "a positive integer");
   need(isObj(c.converge) && posInt(c.converge.max_rounds), "converge.max_rounds", "a positive integer");
+  need(typeof c.review.sast === "boolean", "review.sast", "a boolean");
   need(["light", "full", "auto"].includes(c.review.depth), "review.depth", "light, full or auto");
   need(c.review.core_paths === undefined || strList(c.review.core_paths), "review.core_paths", "an array of strings");
   need(c.review.checks === null || Array.isArray(c.review.checks), "review.checks", "an array");
