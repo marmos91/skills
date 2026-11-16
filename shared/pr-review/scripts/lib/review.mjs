@@ -20,6 +20,7 @@ import { limiter } from "./limit.mjs";
 import { decide as realDecide } from "./decider.mjs";
 import { linkFix } from "./reply.mjs";
 import { answer, appliedAnswer, openQuestions, pendingAnswers, queueQuestion, waitingQuestions } from "./questions.mjs";
+import { runSast, sastClusters, sastLine } from "./sast.mjs";
 import { applyProof, checkFix, directionOnly, isProven, markUnproven, mutantFindings, proofLine, runMutants, scopePatch, suggestionOf, uncheckedNote } from "./proof.mjs";
 import { cherryPicked, coreCandidates, depthLine, pickDepth, queueCoreQuestion, readCorePaths, runSetup, settleCoreQuestions } from "./setup.mjs";
 import { FINAL_STAGE, VERSION, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, commitStatus, summaryMarker, usageByStage, writeAtomic } from "./state.mjs";
@@ -322,7 +323,9 @@ async function once(o, restart) {
     f.setup = setup; // prompts.mjs renders it for round 1 and the votes only
     f.mutants = mutants;
   } else markDone(runDir, "setup");
-  f.checked = depthLine(depth, setup, safeText); // the "What was checked" line of the summary (#46)
+  // Static analysis (#70) at every depth: its hits are security candidates for the vote, never posted as they are.
+  const sast = await runSast(f, config, run.lenses, changedLines(f), join(runDir, "sast.json"), log);
+  f.checked = depthLine(depth, setup, safeText) + sastLine(sast); // the "What was checked" line of the summary (#46)
   if (o.until === "setup") return finish("setup");
 
   // Round 1 (spec 6.2) and the hygiene check (6.3.1) run side by side.
@@ -417,7 +420,7 @@ async function once(o, restart) {
   const anchor = anchors(o.repoDir ?? process.cwd(), f.headSha);
   const resolvedThread = (c) => ours.some(({ t, keys }) => t.path === c.file && t.line === c.line &&
     keys.some((key) => key === c.fp || (agreedLens.has(key) && agreedLens.get(key) === c.lens)));
-  const all = raw.filter((c) => run.lenses.includes(c.lens)).map((c) => {
+  const all = [...raw, ...sastClusters(sast, raw)].filter((c) => run.lenses.includes(c.lens)).map((c) => {
     const seats = [...new Set(seatsForLens(config, c.lens).map(seatId))].filter((id) => !isDropped(id));
     // proof comes from engine data only: a `proven` the judge copied into a cluster is dropped
     // pre-existing never blocks (#69), so it holds only when most member findings say so; else the highest level raised

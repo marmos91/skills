@@ -9,3 +9,5 @@ writeFileSync(join(bin, "gitleaks"), `#!/bin/sh\ncat >/dev/null\nwhile [ $# -gt 
 chmodSync(join(bin, "gitleaks"), 0o755);
 process.env.PATH = `${bin}${delimiter}${process.env.PATH}`;
 process.env.SECRET_SCAN_CONFIG = mkdtempSync(join(tmpdir(), "hermetic-ss-"));
+// No semgrep (sast.mjs): a path with no file reads as "not installed". A test sets its own stub.
+process.env.PR_REVIEW_SEMGREP = join(bin, "semgrep");
