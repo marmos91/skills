@@ -22,7 +22,8 @@ sh "$SKILL_DIR/scripts/pr-review" review <n> [--repo owner/repo] \
 
 - `<n>` is the PR number or URL. Without `--repo`, the engine uses the repo
   of the current directory.
-- `--effort auto` picks the level from the changed paths.
+- `--effort auto` picks the level from the changed paths. `low` posts only
+  `must` and `should`: no `nit` and no `pre-existing` finding.
 - `--depth full` runs the setup checks (build, vet, tests) once before the
   seats start. It also runs mutants on the changed lines, marks findings
   with no run evidence as unproven, and runs the tests on each suggested fix. `light` (the default) runs nothing. `auto` picks one from the

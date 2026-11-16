@@ -391,8 +391,11 @@ async function once(o, restart) {
     }
   }
   const noTracking = outs.some((x) => x.v.no_tracking === true);
+  // pre-existing needs a line the PR did not change (#95): on a line the PR adds it takes the level the seats raised
+  const hunks = parseHunks(readFileSync(join(f.ctxDir, "diff.patch"), "utf8"));
+  const prChanged = (x) => diffLine(hunks, x.file, x.line) === "add";
   // a pre-existing finding never blocks (#69), so it does not break a unanimous zero
-  const unanimousZero = outs.every((x) => x.v.findings.every((g) => g.severity === "pre-existing"));
+  const unanimousZero = outs.every((x) => x.v.findings.every((g) => g.severity === "pre-existing" && !prChanged(g)));
   if (o.until === "round1") return finish("round1");
 
   // Merge (spec 6.4, 7.5 rule 4): a cluster that reverses an earlier agreed finding is dropped and recorded.
@@ -418,7 +421,7 @@ async function once(o, restart) {
     // proof comes from engine data only: a `proven` the judge copied into a cluster is dropped
     // pre-existing never blocks (#69), so it holds only when most member findings say so; else the highest level raised
     const sevs = (c.members ?? []).map((m) => fids.get(m)?.severity).filter(Boolean);
-    const severity = c.severity !== "pre-existing" || sevs.filter((s) => s === "pre-existing").length * 2 > sevs.length ? c.severity
+    const severity = c.severity !== "pre-existing" || (!prChanged(c) && sevs.filter((s) => s === "pre-existing").length * 2 > sevs.length) ? c.severity
       : sevs.filter((s) => s !== "pre-existing").sort((a, b) => RANK[a] - RANK[b])[0] ?? "should";
     return { ...c, severity, found: [...new Set(c.found)].filter((s) => seats.includes(s)), seats, fp: fingerprint(c), proven: undefined };
   });
@@ -551,7 +554,6 @@ async function once(o, restart) {
   }
   // The held line is engine text, written at post time, so it also counts comments that the secret scan holds back.
   // A finding off the diff lines goes under "Outside the diff" (engine text), so the judge must not list it too.
-  const hunks = parseHunks(readFileSync(join(f.ctxDir, "diff.patch"), "utf8"));
   const offDiff = (c) => !diffLine(hunks, c.file, c.line);
   const earlierAll = readJson(join(f.ctxDir, "earlier.json"));
   // An earlier finding of ours that 2 seats now judge wrong, and none still open, is retracted first in the body.

@@ -10,7 +10,7 @@ test("review 2 drops nits; review 3 keeps only must", () => {
   assert.deepEqual(sev(1), ["must", "should", "nit"]);
   assert.deepEqual(sev(2), ["must", "should"]);
   assert.deepEqual(sev(3), ["must"]);
-  assert.deepEqual([...allowedSeverities(5)], ["must"]);
+  assert.deepEqual([...allowedSeverities(5)], ["must", "pre-existing"]);
   const r = filterNew(fs, { reviewNumber: 3, settled: new Set(), changedLines: new Map() });
   assert.equal(r.dropped[0].reason, "severity floor");
 });

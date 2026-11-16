@@ -53,8 +53,8 @@ test("round1: adversarial variant follows frame.shellOk", () => {
 
 test("round1: allowed severities follow the review number", () => {
   assert.match(round1Prompt(frame(), ["correctness"]), /Allowed severities: must, should, nit, pre-existing\./);
-  assert.match(round1Prompt(frame({ reviewNumber: 2 }), ["correctness"]), /Allowed severities: must, should\./);
-  assert.match(round1Prompt(frame({ reviewNumber: 3 }), ["correctness"]), /Allowed severities: must\./);
+  assert.match(round1Prompt(frame({ reviewNumber: 2 }), ["correctness"]), /Allowed severities: must, should, pre-existing\./);
+  assert.match(round1Prompt(frame({ reviewNumber: 3 }), ["correctness"]), /Allowed severities: must, pre-existing\./);
 });
 
 test("round1: delta review limits new findings to the delta and asks for earlier status", () => {
@@ -222,7 +222,7 @@ test("reply: the draft block uses the frame nonce", () => {
   assert.ok(r.includes("<<<SEAT-DATA-feedbeef\n") && r.includes("<<<PR-DATA-feedbeef\n"));
 });
 
-test("merge: pre-existing is offered on review 1 only", () => {
+test("merge: pre-existing is offered on every review", () => {
   assert.match(mergePrompt(frame(), {}), /"severity": "must\|should\|nit\|pre-existing"/);
-  assert.doesNotMatch(mergePrompt(frame({ reviewNumber: 2 }), {}), /pre-existing/);
+  assert.match(mergePrompt(frame({ reviewNumber: 3 }), {}), /"severity": "must\|pre-existing"/);
 });

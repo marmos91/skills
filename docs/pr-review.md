@@ -266,8 +266,10 @@ Compose gets only the repo's review guidance: `REVIEW.md` and the files in
   by lines it did not change) is listed once, collapsed at the end of the
   summary, never inline. It never blocks and never counts for the verdict
   or for `pr-land`. A split vote drops it: no jev call and no question.
-  A cluster is pre-existing only when most of its findings say so;
-  otherwise it keeps the highest level a seat raised.
+  A cluster is pre-existing only when most of its findings say so and its
+  line is one the PR did not change; otherwise it keeps the highest level a
+  seat raised (`should` when none did). Any review can raise it. At effort
+  `low` it is not posted, like `nit` (the default; no option changes it).
 - A finding from a single seat, or one the author must clarify, is written
   as a question to the author.
 - The effort level caps the severities and the count (see
@@ -378,9 +380,9 @@ They apply to a manual `review` and to the loop.
 1. **Scope shrinks.** A re-review raises new findings only on the delta.
    Code that the council already reviewed gets no new findings, unless a new
    commit changes its behaviour.
-2. **Severity rises.** Review 1 can raise `must`, `should`, `nit`,
-   `pre-existing`. Review 2
-   only `must` and `should`. Review 3 and later only `must`.
+2. **Severity rises.** Review 1 can raise `must`, `should`, `nit`. Review 2
+   only `must` and `should`. Review 3 and later only `must`. Every review can
+   also raise `pre-existing`, which never blocks.
 3. **Settled stays settled.** Each finding has a fingerprint: lens, file,
    symbol, normalized title (no line number, so a moved line keeps its
    fingerprint). A fingerprint that was dropped by the vote, answered by you,
@@ -418,6 +420,8 @@ council size and depth. It never removes a lens or the vote.
   lower value stays.
 - Lens model overrides stay at every effort. Their thinking is capped too.
 - The hygiene model check does not run at `low`.
+- `low` posts no `nit` and no `pre-existing` finding. This is the default
+  behavior, and no option changes it.
 
 `auto` picks the level from the changed paths. The first match wins:
 
