@@ -1,10 +1,11 @@
 // Static analysis candidates (#70). semgrep reads the changed files and never runs them, so it is safe at any
 // depth and for any author. Its hits on added lines become security clusters that no seat found: the seats vote
 // on them like any other finding, and a hit no seat keeps is not posted.
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { ChildFailed, stopping, track, untrack } from "./child.mjs";
 
 const TIMEOUT_MS = 120_000; // shortcut: a fixed cap, make it a config key when a repo needs longer
 const REPO_RULES = [".semgrep.yml", ".semgrep.yaml", ".semgrep"];
@@ -13,15 +14,16 @@ const REPO_RULES = [".semgrep.yml", ".semgrep.yaml", ".semgrep"];
  * Runs semgrep once per run (cached in file). changed: file -> Set of added lines.
  * -> { tool, ran, note, hits: [{ rule, file, line, message }] }; note says why it did not run or what went wrong.
  */
-export async function runSast(f, config, lenses, changed, file, log = () => {}) {
+export async function runSast(f, config, lenses, changed, file, log = () => {}, timeoutMs = TIMEOUT_MS) {
   if (existsSync(file)) return JSON.parse(readFileSync(file, "utf8"));
-  const r = await scan(f, config, lenses, changed);
+  const r = await scan(f, config, lenses, changed, timeoutMs);
+  if (stopping) throw new ChildFailed("engine is stopping on a signal"); // a killed scan is not a result
   if (r.note) log(`static analysis: ${r.note}`);
   writeFileSync(file, JSON.stringify(r));
   return r;
 }
 
-async function scan(f, config, lenses, changed) {
+async function scan(f, config, lenses, changed, timeoutMs) {
   const out = (ran, note, hits = []) => ({ tool: "semgrep", ran, note, hits });
   if (config.review.sast === false) return out(false, "off in the config");
   if (!lenses.includes("security")) return out(false, "the security lens does not run");
@@ -29,16 +31,23 @@ async function scan(f, config, lenses, changed) {
   if (!files.length) return out(false, "no added lines");
   // An untrusted author could write the repo's rules (and so the text the seats read): use the registry's then.
   const own = f.shellOk && REPO_RULES.find((p) => existsSync(join(f.worktree, p)));
-  // async: the loop reviews other PRs in this process, so a slow scan must not block it
-  const { error, stdout } = await new Promise((resolve) => {
-    const p = execFile(process.env.PR_REVIEW_SEMGREP || "semgrep",
+  // async: the loop reviews other PRs in this process. Own process group, tracked: a timeout or an engine
+  // signal kills semgrep and every child it started.
+  const { error, timedOut, stdout } = await new Promise((resolve) => {
+    const p = spawn(process.env.PR_REVIEW_SEMGREP || "semgrep",
       ["scan", "--json", "--quiet", "--metrics", "off", "--disable-version-check", "--config", own || "p/default", "--", ...files],
-      { cwd: f.worktree, encoding: "utf8", timeout: TIMEOUT_MS, killSignal: "SIGKILL", maxBuffer: 64 * 1024 * 1024 },
-      (e, o) => resolve({ error: e, stdout: o }));
-    p.stdin?.end();
+      { cwd: f.worktree, detached: true, stdio: ["ignore", "pipe", "ignore"] });
+    if (p.pid) track(p.pid);
+    const kill = () => { try { process.kill(-p.pid, "SIGKILL"); } catch { /* gone */ } };
+    let out = "", over = false;
+    p.stdout.setEncoding("utf8").on("data", (d) => { out += d; });
+    const t = setTimeout(() => { over = true; kill(); }, timeoutMs);
+    p.on("exit", kill); // a child left behind would hold stdout open
+    p.on("close", (code) => { clearTimeout(t); untrack(p.pid); resolve({ error: code === 0 ? null : { code }, timedOut: over, stdout: out }); });
+    p.on("error", (e) => { clearTimeout(t); if (p.pid) untrack(p.pid); resolve({ error: e, timedOut: false, stdout: "" }); });
   });
   if (error?.code === "ENOENT") return out(false, "semgrep is not installed, skipped");
-  if (error?.killed) return out(false, `semgrep timed out after ${TIMEOUT_MS / 1000}s`);
+  if (timedOut) return out(false, `semgrep timed out after ${Math.round(timeoutMs / 1000)}s`);
   let results;
   try { results = JSON.parse(stdout).results; } catch { /* below */ }
   if (error || !Array.isArray(results)) return out(false, `semgrep failed (exit ${error?.code ?? "?"})`);
