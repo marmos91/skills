@@ -186,7 +186,7 @@ export async function checks(repo, n, sha) {
   if (head.headRefOid !== sha) return { state: "pending", since: null, items: [], stale: true }; // head moved: CI of the pinned sha is unknown
   const { stdout, stderr, code } = await run(["pr", "checks", String(n), "-R", repo, "--json", "name,state,link,bucket,startedAt"], { okCodes: [0, 1, 8] });
   let rows = [];
-  if (stdout.trim()) rows = JSON.parse(stdout);
+  if (stdout.trim()) rows = JSON.parse(stdout).filter((r) => r.name !== "pr-review"); // our own status is not CI
   else if (code === 1 && !/no checks reported/i.test(stderr)) throw new GhError(`gh pr checks exited 1: ${redact(stderr.trim())}`, { code, stderr: redact(stderr.trim()) });
   const items = rows.map((r) => ({ name: r.name, state: r.bucket, url: r.link, runId: /\/actions\/runs\/(\d+)/.exec(r.link ?? "")?.[1] ?? null }));
   const pend = rows.filter((r) => !RED.has(r.bucket) && !OK.has(r.bucket));

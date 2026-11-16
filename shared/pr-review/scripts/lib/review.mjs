@@ -814,13 +814,17 @@ async function followUp(o, head, pst, answered) {
   const runId = pst.lastRunId ?? "followup";
   const was = pst.counts?.sha === head ? pst.counts : null;
   const must = (q) => q.finding?.severity === "must";
-  // A must the secret scan held is in the full review's count already: posting it adds none, dropping it removes it.
-  const mustNow = (posted) => Math.max(0, (was?.must ?? 0) + posted.filter((q) => must(q) && !q.finding.secret).length
-    - answered.filter((q) => q.answer === "drop" && must(q) && q.finding.secret).length);
+  // A must the secret scan held is in the count of the full run at this head only when that run held it (its held
+  // file): posting it then adds none, dropping it removes it. A must held at an older head was never in this count.
+  const heldHere = (q) => q.finding.secret && heldText(repoState, n, pst.lastRunId, q.fingerprint) != null;
+  // A must already on GitHub but not yet settled was posted by a follow-up that crashed before it saved its counts.
+  const mustNow = (posted) => Math.max(0, (was?.must ?? 0)
+    + [...posted, ...already.filter((q) => !(pst.settled ?? []).includes(q.fingerprint))].filter((q) => must(q) && !heldHere(q)).length
+    - answered.filter((q) => q.answer === "drop" && must(q) && heldHere(q)).length);
   const diff = join(repoState, "pr", String(n), "runs", runId, "ctx", "diff.patch");
   const hunks = parseHunks(existsSync(diff) ? readFileSync(diff, "utf8") : "");
   for (const q of answered.filter((x) => x.answer !== "drop")) {
-    if (seen.has(inlineKeyOf(head, q.fingerprint, q.finding?.file, q.finding?.line))) { already.push(q.fingerprint); continue; }
+    if (seen.has(inlineKeyOf(head, q.fingerprint, q.finding?.file, q.finding?.line))) { already.push(q); continue; }
     if (codeMoved(o.repoDir ?? process.cwd(), q, head)) { o.log(`question ${q.id}: the code at ${q.finding?.file}:${q.finding?.line} changed since ${q.sha}; its answer is dropped`); continue; }
     const f = q.finding;
     // full depth (proven is set): a suggestion the follow-up cannot test says so, like one the time cap cut
@@ -859,7 +863,7 @@ async function followUp(o, head, pst, answered) {
   }
   if (already.length) {
     const st = prState(repoState, n);
-    st.settled = [...new Set([...st.settled, ...already])];
+    st.settled = [...new Set([...st.settled, ...already.map((q) => q.fingerprint)])];
     savePrState(repoState, n, st);
   }
   for (const q of answered) if (!codeMoved(o.repoDir ?? process.cwd(), q, head)) learnDrop(o, q);

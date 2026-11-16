@@ -140,6 +140,16 @@ test("checks: green, red, pending, none", async () => {
   assert.deepEqual(await gh.checks("o/r", 8, "abc123"), { state: "none", since: null, items: [] });
 });
 
+test("checks: the engine's own pr-review status is not CI", async () => {
+  stubDir({ "pr checks 5 -R o/r --json name,state,link,bucket,startedAt": { exit: 1, stdout: [
+    { name: "build", state: "SUCCESS", bucket: "pass", link: "", startedAt: "2026-11-01T10:00:00Z" },
+    { name: "pr-review", state: "FAILURE", bucket: "fail", link: "https://github.com/o/r/pull/5#pullrequestreview-1", startedAt: "2026-11-01T10:00:00Z" },
+  ] } });
+  const c = await gh.checks("o/r", 5, "abc123");
+  assert.equal(c.state, "green");
+  assert.deepEqual(c.items.map((x) => x.name), ["build"]);
+});
+
 test("checks: stale head, queued-only since, real failures throw", async () => {
   stubDir();
   assert.deepEqual(await gh.checks("o/r", 11, "abc123"), { state: "pending", since: null, items: [], stale: true });

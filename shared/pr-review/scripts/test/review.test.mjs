@@ -238,6 +238,46 @@ test("commit status: posting a must the secret scan held counts it once", async 
   assert.deepEqual(lastStatus(fx), [fx.head, "failure", "1 must"]);
 });
 
+test("commit status: dropping a must held at an older head keeps this head's must", async () => {
+  const fx = fixture(); routes(fx);
+  const token = "ghp_" + "F".repeat(36);
+  await go(fx, happy({ compose: { body: "Summary.", comments: [{ id: "c1", body: `**must:** ${token}` }] } }));
+  const [q] = openQuestions(fx.state);
+  // the author pushes B: the held finding is gone, another must is found
+  git(fx.seed, "checkout", "-q", "feat");
+  const b = commit(fx.seed, { "a.js": "const a = 2;\nconst b = 3;\nconst c = 9;\nconst d = 5;\n" }, "fix: c");
+  git(fx.seed, "push", "-qf", fx.origin, "HEAD:refs/pull/5/head");
+  routes(fx, { head: b });
+  const other = F({ line: 3, title: "Wrong c" });
+  await go(fx, { all: { findings: [other] }, merge: [C("c1", { ...other })], "v~2": [keep("c1")], compose: { body: "Summary.", comments: [{ id: "c1", body: "**must:** wrong c" }] } });
+  assert.deepEqual(lastStatus(fx), [b, "failure", "1 must, 1 question"]);
+  answer(fx.state, q.id, "drop");
+  await go(fx, happy());
+  assert.deepEqual(lastStatus(fx), [b, "failure", "1 must"]);
+});
+
+test("commit status: a rerun after a follow-up crashed before its bookkeeping still counts the must it posted", async () => {
+  const fx = fixture(); routes(fx);
+  const answers = split({
+    merge: [C("c1", { found: [S0] }), C("c2", { severity: "must", line: 3, title: "Must one" })], "v~1": [keep("c1")], "v~2": [drop("c1"), keep("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c2", body: "**must:** one" }] },
+  });
+  await go(fx, answers, { mode: "loop", effort: "medium" });
+  const [q] = openQuestions(fx.state);
+  answer(fx.state, q.id, "post");
+  const stFile = join(fx.state, "pr", "5", "state.json"), before = readFileSync(stFile, "utf8");
+  await go(fx, answers);
+  assert.deepEqual(lastStatus(fx), [fx.head, "failure", "2 must"]);
+  // crash right after the post: no state saved, the answer not applied, the follow-up is on GitHub
+  writeFileSync(stFile, before);
+  const qf = join(fx.state, "questions", `${q.id}.json`);
+  const rec = JSON.parse(readFileSync(qf, "utf8")); delete rec.appliedAt; writeFileSync(qf, JSON.stringify(rec));
+  routes(fx, { reviews: [{ body: posts(fx)[1].body, user: { login: ME }, state: "COMMENTED" }], reviewComments: [{ body: posts(fx)[1].threads[0].body, user: { login: ME } }] });
+  await go(fx, answers);
+  assert.equal(posts(fx).length, 2, "not posted twice");
+  assert.deepEqual(lastStatus(fx), [fx.head, "failure", "2 must"]);
+});
+
 test("rerun after a crash before markDone(post) does not post again", async () => {
   const fx = fixture(); routes(fx);
   const { r } = await go(fx, happy());
