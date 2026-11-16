@@ -21,7 +21,7 @@ import { linkFix } from "./reply.mjs";
 import { appliedAnswer, pendingAnswers, queueQuestion } from "./questions.mjs";
 import { applyProof, checkFix, directionOnly, isProven, markUnproven, mutantFindings, proofLine, runMutants, scopePatch, suggestionOf, uncheckedNote } from "./proof.mjs";
 import { cherryPicked, coreCandidates, depthLine, pickDepth, queueCoreQuestion, readCorePaths, runSetup, settleCoreQuestions } from "./setup.mjs";
-import { FINAL_STAGE, VERSION, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, usageByStage, writeAtomic } from "./state.mjs";
+import { FINAL_STAGE, VERSION, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, summaryMarker, usageByStage, writeAtomic } from "./state.mjs";
 
 export const STAGES = ["frame", "setup", "round1", "merge", "round2", "tally", "decide", "compose", "post"];
 const RANK = { must: 0, should: 1, nit: 2 };
@@ -569,6 +569,8 @@ async function once(o, restart) {
     agreed: [...agreed, ...hygItems], earlierMustOpen: blocking.length,
     openQuestions: open.length, failedLenses: run.missing?.length ?? 0, droppedSeats: run.dropped.length + missedNow.length, ci: ci.state, mode, trustedAuthor: f.shellOk, unanimousZero, ownPr: f.ownPr,
   });
+  // The verdict's inputs, for pr-land: open musts (earlier, inline, off-diff), questions waiting, lenses and seats missing.
+  const counts = { must: blocking.length + [...agreed, ...hygItems].filter((x) => x.severity === "must").length, questions: open.length, gaps: (run.missing?.length ?? 0) + run.dropped.length + missedNow.length };
   // "No new findings." over a posted finding contradicts itself: drop it whatever compose wrote
   const said = composed.body.trim(), anyFinding = posted.length + hygItems.length > 0;
   // Engine layout of the body (spec 6.8): pass line, corrections, verdict, checks, answers, thread index, praise.
@@ -616,8 +618,7 @@ async function once(o, restart) {
     belowFloor ? `${belowFloor} unproven ${belowFloor === 1 ? "finding was" : "findings were"} left out: review ${f.reviewNumber} posts only must findings.` : "",
     run.missing?.length ? `Lenses not run: ${run.missing.join(", ")}.` : "",
     // Dropped seats and missed parts stay out of the body: they are in run.json and the run log.
-    // must= and questions= are the verdict's inputs (earlier, inline and off-diff musts; questions waiting), for pr-land.
-    ci.line ?? "", marker(runId, f.headSha, key).replace(/ -->$/, ` must=${blocking.length + [...agreed, ...hygItems].filter((x) => x.severity === "must").length} questions=${open.length} -->`),
+    ci.line ?? "", summaryMarker(runId, f.headSha, key, counts),
   ].filter(Boolean).join("\n\n");
   const permalink = `https://github.com/${repo}/blob/${f.headSha}`;
 

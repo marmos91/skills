@@ -299,8 +299,10 @@ Each posted body ends with a hidden marker:
 `<!-- pr-review run=<id> sha=<sha> key=<hash> -->`. An inline comment adds
 `fp=<fingerprint>`, one for each finding it covers, separated by commas. A
 later run links a repeat of any of these findings to the thread. The summary
-of a full review adds `must=<n> questions=<n>`: the open must findings and the
-questions waiting, which `pr-land` reads.
+of a full review adds `must=<n> questions=<n> gaps=<n>`: the open must
+findings, the questions waiting, and the lenses not run, seats dropped and
+parts missed. `pr-land` reads them (`summaryMarker` and `readSummaryMarker`
+in `state.mjs`).
 
 With `--dry-run` the engine writes the review to a file in the run folder,
 prints the planned children and models, prints the tokens that each stage

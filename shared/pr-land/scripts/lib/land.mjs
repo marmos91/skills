@@ -1,16 +1,18 @@
 // Land one converged PR: check the live state, retarget stacked children, squash-merge through merge-async,
 // delete the branch, rebase the children, clean up locally, tick the tracking issue and close fixed issues.
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scanOutbound } from "../../../pr-review/scripts/lib/secrets.mjs";
 import { threads } from "../../../pr-review/scripts/lib/github.mjs";
+import { openQuestions, pendingAnswers } from "../../../pr-review/scripts/lib/questions.mjs";
+import { readSummaryMarker, stateRoot } from "../../../pr-review/scripts/lib/state.mjs";
 import { aiMentions } from "../../../pr-open/scripts/lib/check.mjs";
 import { Blocked, Usage } from "../../../pr-open/scripts/lib/counts.mjs";
 
 export { Blocked, Usage };
-export const STEPS = ["check", "retarget children", "merge", "delete branch", "rebase children", "local cleanup", "issues"];
+export const STEPS = ["check", "retarget children", "merge", "delete branch", "rebase children", "issues", "local cleanup"];
 const PR_FIELDS = "number,title,body,state,isDraft,headRefName,headRefOid,baseRefName,mergeable,reviewDecision,statusCheckRollup,reviews,closingIssuesReferences,isCrossRepository";
 const POLL_MS = () => Number(process.env.PR_LAND_POLL_MS ?? 2000);
 const POLLS = 150; // about 5 minutes at the default interval
@@ -30,6 +32,16 @@ function gh(dir, args, input) {
 }
 const ghJson = (dir, args) => JSON.parse(gh(dir, args) || "null");
 
+const GH_URL = /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/;
+/** The git remote whose URL is repo on GitHub: fetches and pushes go where gh merges. */
+function remoteOf(dir, repo) {
+  let lines = [];
+  try { lines = git(dir, "config", "--get-regexp", "^remote\\..*\\.url$").split("\n"); } catch { /* no remotes */ }
+  const hit = lines.map((l) => l.split(" ")).find(([, url]) => GH_URL.exec(url ?? "")?.[1]?.toLowerCase() === repo.toLowerCase());
+  if (!hit) throw new Blocked(`no git remote of this clone points at github.com/${repo}`);
+  return hit[0].slice("remote.".length, -".url".length);
+}
+
 // secret-scan (#39) when installed, else the pr-review scan; the same contract as pr-open.
 function secretHits(text) {
   const r = spawnSync(process.env.PR_LAND_SECRET_SCAN || "secret-scan", [], { input: text, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
@@ -39,11 +51,12 @@ function secretHits(text) {
 }
 
 const GREEN = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
-// A full pr-review review: its marker carries the verdict inputs. Follow-ups and older versions have no must= and questions=.
-const REVIEW_MARK = /<!-- pr-review run=\S+ sha=([0-9a-f]+) key=[0-9a-f]+ must=(\d+) questions=(\d+) -->/;
 
-/** Why a PR (gh pr view JSON) is not ready to merge; [] when ready. unresolved: count of unresolved review threads; me: the login pr-review posts as. */
-export function notReady(pr, unresolved, me) {
+/**
+ * Why a PR (gh pr view JSON) is not ready to merge; [] when ready. unresolved: count of unresolved review threads;
+ * me: the login pr-review posts as; localQuestions(runId): unsettled questions in pr-review's local state, or null when that run is not on this machine.
+ */
+export function notReady(pr, unresolved, me, localQuestions = () => null) {
   const why = [];
   if (pr.state !== "OPEN") why.push(`the PR is ${pr.state.toLowerCase()}`);
   if (pr.isDraft) why.push("the PR is a draft");
@@ -54,21 +67,29 @@ export function notReady(pr, unresolved, me) {
     else if (!GREEN.has(c.conclusion ?? c.state)) why.push(`check ${name} is ${String(c.conclusion ?? c.state).toLowerCase()}`);
   }
   if (unresolved) why.push(`${unresolved} review thread${unresolved === 1 ? " is" : "s are"} unresolved`);
-  if (pr.reviewDecision === "CHANGES_REQUESTED") why.push("a reviewer requested changes");
-  else if (pr.reviewDecision !== "APPROVED") why.push(...reviewGaps(pr, me));
+  // Each reviewer's newest approve, request or dismissal is what GitHub counts. pr-review's own request is judged by its marker below.
+  const latest = new Map();
+  for (const r of pr.reviews ?? []) if (["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(r.state)) latest.set(r.author?.login, r.state);
+  const others = [...latest].filter(([who, st]) => st === "CHANGES_REQUESTED" && who !== me).map(([who]) => who);
+  if (others.length || (pr.reviewDecision === "CHANGES_REQUESTED" && latest.get(me) !== "CHANGES_REQUESTED")) why.push(`changes requested by ${others.join(", ") || "a reviewer"}`);
+  else if (pr.reviewDecision !== "APPROVED") why.push(...reviewGaps(pr, me, localQuestions));
   return why;
 }
 
-// The newest full pr-review review, posted by me (anyone can paste a marker), must be on the head with no open must and no question waiting.
-function reviewGaps(pr, me) {
-  const last = (pr.reviews ?? []).filter((r) => r.author?.login === me && REVIEW_MARK.test(r.body ?? "")).at(-1);
+// The newest full pr-review review, posted by me (anyone can paste a marker), must be on the head with no open must,
+// no question waiting and no lens or seat missing. Follow-ups and reviews of older pr-review versions carry no counts.
+function reviewGaps(pr, me, localQuestions) {
+  const last = (pr.reviews ?? []).filter((r) => r.author?.login === me && readSummaryMarker(r.body)).at(-1);
   if (!last) return [`no approval and no full pr-review review by ${me}`];
-  const [, sha, must, questions] = REVIEW_MARK.exec(last.body);
+  const { runId, sha, must, questions, gaps } = readSummaryMarker(last.body);
   if (sha !== pr.headRefOid) return [`the newest pr-review review is on ${sha.slice(0, 7)}, the head is ${pr.headRefOid.slice(0, 7)}`];
-  const gaps = [];
-  if (+must) gaps.push(`the newest pr-review review has ${must} open must`);
-  if (+questions) gaps.push(`the newest pr-review review has ${questions} question${+questions === 1 ? "" : "s"} waiting`);
-  return gaps;
+  // The marker count is frozen at posting; the local queue knows what the maintainer answered since.
+  const q = localQuestions(runId) ?? questions;
+  const out = [];
+  if (must) out.push(`the newest pr-review review has ${must} open must`);
+  if (q) out.push(`${q} pr-review question${q === 1 ? "" : "s"} not settled`);
+  if (gaps) out.push(`the newest pr-review review is incomplete: ${gaps} lens${gaps === 1 ? "" : "es"} or seat${gaps === 1 ? "" : "s"} missing`);
+  return out;
 }
 
 /** Squash title and message: the PR title with (#N), the body without HTML comments. Blocked on a bad title, an AI mention or a secret. */
@@ -106,10 +127,14 @@ export async function land(dir, n, { dryRun = false } = {}) {
     try { const r = await fn(); done.push(name); return r; } catch (e) { e.done = done; e.notes = notes; throw e; }
   };
   const { nameWithOwner: repo, defaultBranchRef: { name: def } } = ghJson(dir, ["repo", "view", "--json", "nameWithOwner,defaultBranchRef"]);
-  let pr, children, msg;
+  let pr, children, msg, remote;
   await step("check", async () => {
     pr = ghJson(dir, ["pr", "view", String(n), "--json", PR_FIELDS]);
-    const why = notReady(pr, (await threads(repo, n)).filter((t) => !t.isResolved).length, ghJson(dir, ["api", "user"]).login);
+    remote = remoteOf(dir, repo);
+    const st = stateRoot(repo);
+    const localQuestions = (runId) => (existsSync(join(st, "pr", String(n), "runs", runId))
+      ? [...openQuestions(st), ...pendingAnswers(st)].filter((q) => Number(q.pr) === n).length : null);
+    const why = notReady(pr, (await threads(repo, n)).filter((t) => !t.isResolved).length, ghJson(dir, ["api", "user"]).login, localQuestions);
     if (why.length) throw new Blocked(`#${n} is not ready`, { why });
     msg = squash(pr);
     // A base is always a branch of this repo, so a fork PR's head is nobody's base.
@@ -122,7 +147,7 @@ export async function land(dir, n, { dryRun = false } = {}) {
   const managed = [];
   await step("retarget children", () => {
     // Keep the merged head locally: the rebase below needs it after the branch is gone.
-    if (children.length) git(dir, "fetch", "-q", "origin", `+refs/heads/${head}:refs/pr-land/${n}`);
+    if (children.length) git(dir, "fetch", "-q", remote, `+refs/heads/${head}:refs/pr-land/${n}`);
     for (const c of children) {
       const r = ghRaw(dir, ["pr", "edit", String(c.number), "--base", base]);
       if (r.status === 0) continue;
@@ -149,19 +174,19 @@ export async function land(dir, n, { dryRun = false } = {}) {
   const rebased = [];
   await step("rebase children", () => {
     if (!children.length) return;
-    git(dir, "fetch", "-q", "origin", `+refs/heads/${base}:refs/remotes/origin/${base}`);
+    git(dir, "fetch", "-q", remote, `+refs/heads/${base}:refs/remotes/${remote}/${base}`);
     for (const c of children) {
       if (c.isCrossRepository) { notes.push(`#${c.number} is on a fork: not rebased`); continue; }
-      git(dir, "fetch", "-q", "origin", `+refs/heads/${c.headRefName}:refs/remotes/origin/${c.headRefName}`);
+      git(dir, "fetch", "-q", remote, `+refs/heads/${c.headRefName}:refs/remotes/${remote}/${c.headRefName}`);
       const wt = mkdtempSync(join(tmpdir(), "pr-land-"));
       try {
-        git(dir, "worktree", "add", "-q", "--detach", wt, `refs/remotes/origin/${c.headRefName}`);
+        git(dir, "worktree", "add", "-q", "--detach", wt, `refs/remotes/${remote}/${c.headRefName}`);
         // Only the child's own commits move: those after the merged head.
-        if (!gitOk(wt, "rebase", "-q", "-S", "--onto", `origin/${base}`, sha)) {
+        if (!gitOk(wt, "rebase", "-q", "-S", "--onto", `refs/remotes/${remote}/${base}`, sha)) {
           gitOk(wt, "rebase", "--abort");
           throw new Blocked(`#${c.number} (${c.headRefName}) conflicts with ${base}: rebase it by hand`);
         }
-        git(wt, "push", "-q", `--force-with-lease=refs/heads/${c.headRefName}:${c.headRefOid}`, "origin", `HEAD:refs/heads/${c.headRefName}`);
+        git(wt, "push", "-q", `--force-with-lease=refs/heads/${c.headRefName}:${c.headRefOid}`, remote, `HEAD:refs/heads/${c.headRefName}`);
         rebased.push(c.number);
       } finally {
         gitOk(dir, "worktree", "remove", "--force", wt);
@@ -171,18 +196,7 @@ export async function land(dir, n, { dryRun = false } = {}) {
     gitOk(dir, "update-ref", "-d", `refs/pr-land/${n}`);
   });
 
-  await step("local cleanup", () => {
-    const top = git(dir, "rev-parse", "--show-toplevel");
-    const trees = git(dir, "worktree", "list", "--porcelain").split("\n\n").map((b) => ({ path: /^worktree (.+)$/m.exec(b)?.[1], branch: /^branch refs\/heads\/(.+)$/m.exec(b)?.[1] }));
-    const wt = trees.find((t) => t.branch === head);
-    if (wt && wt.path === top) return notes.push(`${head} is checked out here: switch away, then delete it`);
-    if (wt) git(dir, "worktree", "remove", wt.path); // no --force: a dirty worktree stops here
-    if (!gitOk(dir, "show-ref", "-q", "--verify", `refs/heads/${head}`)) return;
-    // A local branch with commits the PR never had is kept: deleting it would lose them.
-    if (git(dir, "rev-parse", `refs/heads/${head}`) !== sha) return notes.push(`local ${head} differs from the merged head: kept`);
-    git(dir, "branch", "-q", "-D", head);
-  });
-
+  // Issues first: a worktree that cannot be removed must not keep the tracking issue unticked.
   const ticked = [], closed = [];
   await step("issues", () => {
     // Only issues of this repo: "Fixes other/repo#5" must not close our #5.
@@ -209,6 +223,18 @@ export async function land(dir, n, { dryRun = false } = {}) {
       closed.push(i.number);
     }
   });
+  await step("local cleanup", () => {
+    const top = git(dir, "rev-parse", "--show-toplevel");
+    const trees = git(dir, "worktree", "list", "--porcelain").split("\n\n").map((b) => ({ path: /^worktree (.+)$/m.exec(b)?.[1], branch: /^branch refs\/heads\/(.+)$/m.exec(b)?.[1] }));
+    const wt = trees.find((t) => t.branch === head);
+    if (wt && wt.path === top) return notes.push(`${head} is checked out here: switch away, then delete it`);
+    if (wt) git(dir, "worktree", "remove", wt.path); // no --force: a dirty worktree stops here
+    if (!gitOk(dir, "show-ref", "-q", "--verify", `refs/heads/${head}`)) return;
+    // A local branch with commits the PR never had is kept: deleting it would lose them.
+    if (git(dir, "rev-parse", `refs/heads/${head}`) !== sha) return notes.push(`local ${head} differs from the merged head: kept`);
+    git(dir, "branch", "-q", "-D", head);
+  });
+
   return { pr: n, title: msg.title, base, retargeted: children.map((c) => c.number), githubRetargeted: managed, rebased, ticked, closed, notes };
 }
 

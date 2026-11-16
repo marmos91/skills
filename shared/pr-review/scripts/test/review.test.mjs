@@ -10,10 +10,12 @@ import { composeGuidance, review } from "../lib/review.mjs";
 import { ChildFailed } from "../lib/child.mjs";
 import { decide as realDecide } from "../lib/decider.mjs";
 import { answer, openQuestions } from "../lib/questions.mjs";
-import { stateRoot, prState, savePrState } from "../lib/state.mjs";
+import { stateRoot, prState, readSummaryMarker, savePrState } from "../lib/state.mjs";
 import { fingerprint } from "../lib/convergence.mjs";
 import * as github from "../lib/github.mjs";
 import { queueCoreQuestion, saveCorePaths } from "../lib/setup.mjs";
+// The verdict counts of a review body, read the way pr-land reads them.
+const counts = (body) => { const { must, questions, gaps } = readSummaryMarker(body) ?? {}; return { must, questions, gaps }; };
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ghBin = join(mkdtempSync(join(tmpdir(), "ghbin-")), "gh");
@@ -128,7 +130,8 @@ test("happy path posts one review with inline comments and the marker", async ()
   assert.equal(p.length, 1);
   assert.equal(p[0].commitOID, fx.head);
   assert.equal(p[0].event, "REQUEST_CHANGES");
-  assert.match(p[0].body, /^What was checked: light depth, no checks run\.\n\nChanges a\. One must item\.\n\n<!-- pr-review run=\S+ sha=[0-9a-f]{40} key=[0-9a-f]{40} must=1 questions=0 -->$/);
+  assert.match(p[0].body, /^What was checked: light depth, no checks run\.\n\nChanges a\. One must item\.\n\n<!-- pr-review [^\n]+ -->$/);
+  assert.deepEqual(counts(p[0].body), { must: 1, questions: 0, gaps: 0 });
   assert.equal(p[0].threads.length, 1);
   assert.deepEqual([p[0].threads[0].path, p[0].threads[0].line, p[0].threads[0].side], ["a.js", 2, "RIGHT"]);
   assert.match(p[0].threads[0].body, new RegExp(`^\\*\\*must:\\*\\* off by one\n\n<!-- pr-review run=.* key=[0-9a-f]{40} fp=${fingerprint(F())} -->$`));
@@ -232,7 +235,7 @@ test("split + jev missing + loop -> question queued, review posted without it, e
   assert.equal(p[0].event, "COMMENT");
   assert.deepEqual(p[0].threads.map((t) => t.line), [3]);
   assert.match(p[0].body, /1 point is still open with the reviewer\./);
-  assert.match(p[0].body, /<!-- pr-review run=\S+ sha=\S+ key=[0-9a-f]{40} must=0 questions=1 -->$/);
+  assert.deepEqual(counts(p[0].body), { must: 0, questions: 1, gaps: 0 });
   assert.ok(run.calls.find((c) => c.k === "compose"));
 });
 
@@ -1031,6 +1034,7 @@ test("a dropped seat blocks APPROVE, interactive and loop", async () => {
     assert.equal(p.event, "COMMENT", mode);
     assert.equal(r.queueApprove, false, mode);
     assert.doesNotMatch(p.body, /Seat /);
+    assert.deepEqual(counts(p.body), { must: 0, questions: 0, gaps: 1 }, "the marker still tells pr-land the review is incomplete");
   }
 });
 
@@ -1462,7 +1466,8 @@ test("the body marker counts a must off the diff, for pr-land", async () => {
   const compose = { verdict: "The off-diff bug blocks.", body: "", comments: [{ id: "c1", body: "**must:** off by one" }, { id: "c2", body: "**must:** off diff" }] };
   const { r } = await go(fx, { all: { findings: [F()] }, merge: [C("c1"), C("c2", { line: 99, title: "Off diff" })], "v~2": [keep("c1"), keep("c2")], compose });
   assert.equal(r.exit, 0, r.summary);
-  assert.match(posts(fx)[0].body, /Outside the diff:[\s\S]* must=2 questions=0 -->$/);
+  assert.match(posts(fx)[0].body, /Outside the diff:/);
+  assert.deepEqual(counts(posts(fx)[0].body), { must: 2, questions: 0, gaps: 0 });
 });
 
 test("the author's questions in the PR body reach compose, and the answers come after the verdict", async () => {
@@ -1530,7 +1535,7 @@ test("pass 2: an earlier must still open reaches compose, and \"Nothing blocks.\
   const p = posts(fx)[0];
   assert.equal(p.event, "REQUEST_CHANGES");
   assert.match(p.body, /^Second pass, on `[0-9a-f]{7}`\.\n\n1 earlier must finding is still open, so the PR is blocked\.\n\nWhat was checked: light depth, no checks run\.\n\nStill open\./);
-  assert.match(p.body, / must=1 questions=0 -->$/);
+  assert.deepEqual(counts(p.body), { must: 1, questions: 0, gaps: 0 });
 });
 
 test("an empty answer keeps the next answers on their own question numbers", async () => {

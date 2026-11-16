@@ -1,20 +1,24 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initRepo, commit, git } from "../../../pr-open/scripts/test/repo.mjs";
 import { ghStub } from "../../../pr-open/scripts/test/gh.mjs";
 import { notReady, squash, stackOrder, Blocked } from "../lib/land.mjs";
 import { main } from "../main.mjs";
+import { queueQuestion } from "../../../pr-review/scripts/lib/questions.mjs";
+import { stateRoot, summaryMarker } from "../../../pr-review/scripts/lib/state.mjs";
 
 // Pin the scanner: a secret-scan on the developer's PATH must not replace the fallback under test.
 process.env.PR_LAND_SECRET_SCAN = "pr-land-no-such-scanner";
 process.env.PR_LAND_POLL_MS = "0";
+process.env.XDG_STATE_HOME = mkdtempSync(join(tmpdir(), "pr-land-state-")); // never the user's pr-review state
 const TOKEN = "ghp_" + "A1b2C3d4".repeat(5); // built at runtime: no token literal in the repo
 
 const HEAD = "a".repeat(40), ME = "me";
 const OURS = { repository: { name: "r", owner: { login: "o" } } };
-const mark = (sha, must = 0, questions = 0) => `<!-- pr-review run=r1 sha=${sha} key=0123 must=${must} questions=${questions} -->`;
+const mark = (sha, must = 0, questions = 0, gaps = 0) => summaryMarker("r1", sha, "0123", { must, questions, gaps });
 const ready = (over = {}) => ({
   number: 27, title: "feat(x): a", body: "Adds a.\n\nCloses #40\n", state: "OPEN", isDraft: false,
   headRefName: "feat/a", headRefOid: HEAD, baseRefName: "main", mergeable: "MERGEABLE", reviewDecision: "",
@@ -38,7 +42,8 @@ test("notReady: each gap is named", () => {
     [{ reviews: [] }, 0, /no approval and no full pr-review review by me/],
     [{ reviews: [rv(mark("b".repeat(40)))] }, 0, /review is on bbbbbbb, the head is aaaaaaa/],
     [{ reviews: [rv(mark(HEAD, 1))] }, 0, /1 open must/],
-    [{ reviews: [rv(mark(HEAD, 0, 2))] }, 0, /2 questions waiting/],
+    [{ reviews: [rv(mark(HEAD, 0, 2))] }, 0, /2 pr-review questions not settled/],
+    [{ reviews: [rv(mark(HEAD, 0, 0, 1))] }, 0, /incomplete: 1 lens or seat missing/],
     // a marker pasted by anyone else does not count
     [{ reviews: [rv(mark(HEAD, 1)), rv(mark(HEAD), "mallory")] }, 0, /1 open must/],
     // a follow-up (no must=/questions=) does not hide the full review before it
@@ -46,9 +51,24 @@ test("notReady: each gap is named", () => {
     // a marker from an older pr-review without the fields is not a clean review
     [{ reviews: [rv(`<!-- pr-review run=r1 sha=${HEAD} key=0123 -->`)] }, 0, /no full pr-review review/],
     // a human request for changes blocks, whatever pr-review said
-    [{ reviewDecision: "CHANGES_REQUESTED" }, 0, /a reviewer requested changes/],
+    [{ reviewDecision: "CHANGES_REQUESTED", reviews: [rv(mark(HEAD)), rv("", "alice", "CHANGES_REQUESTED")] }, 0, /changes requested by alice/],
+    [{ reviewDecision: "CHANGES_REQUESTED" }, 0, /changes requested by a reviewer/],
+    // pr-review's own request on the head stands while its newest full review has a must
+    [{ reviewDecision: "CHANGES_REQUESTED", reviews: [rv(mark(HEAD, 1), ME, "CHANGES_REQUESTED")] }, 0, /1 open must/],
   ];
   for (const [over, unresolved, re] of cases) assert.match(notReady(ready(over), unresolved, ME).join("; "), re, JSON.stringify(over));
+});
+
+test("notReady: pr-review's own old request for changes is settled by its newest full review", () => {
+  const old = rv(mark("b".repeat(40), 1), ME, "CHANGES_REQUESTED");
+  assert.deepEqual(notReady(ready({ reviewDecision: "CHANGES_REQUESTED", reviews: [old, rv(mark(HEAD))] }), 0, ME), []);
+});
+
+test("notReady: local question state replaces the frozen marker count when the run is on this machine", () => {
+  const pr = ready({ reviews: [rv(mark(HEAD, 0, 1))] });
+  assert.deepEqual(notReady(pr, 0, ME, (runId) => (runId === "r1" ? 0 : null)), [], "answered since the review");
+  assert.match(notReady(pr, 0, ME, () => null).join(), /1 pr-review question not settled/, "another machine: the marker decides");
+  assert.match(notReady(ready(), 0, ME, () => 2).join(), /2 pr-review questions not settled/, "asked after the review");
 });
 
 test("notReady: an approval stands in for the pr-review review, not for CI or threads", () => {
@@ -86,6 +106,12 @@ function stack({ conflict = false } = {}) {
   commit(dir, "a.txt", "a\n", "feat(x): a (#27)");
   if (conflict) commit(dir, "a.txt", "z\n", "fix: z");
   git(dir, "push", "-q", "origin", "main");
+  // The PR's repo is the remote "upstream"; "origin" is a fork pr-land must not fetch from or push to.
+  const bare = git(dir, "remote", "get-url", "origin");
+  git(dir, "remote", "rename", "origin", "upstream");
+  git(dir, "remote", "set-url", "upstream", "https://github.com/o/r.git");
+  git(dir, "config", `url.${bare}.insteadOf`, "https://github.com/o/r.git");
+  git(dir, "remote", "add", "origin", join(dir, "..", "no-such-fork.git"));
   const wt = join(dir, "..", `wt-${Date.now()}-${Math.random()}`);
   git(dir, "worktree", "add", "-q", wt, "feat/a");
   return { dir, A, B, wt };
@@ -134,10 +160,10 @@ test("a stacked child: retargeted before the merge, kept open, rebased on the ne
   assert.ok(!gh.calls().some((c) => /\bclose\b/.test(c.key) && c.key.includes("29")), "#29 is never closed");
 
   // feat/b now sits on the new main with only its own commit, signed, pushed over the old head
-  const b = git(s.dir, "ls-remote", "origin", "refs/heads/feat/b").split("\t")[0];
+  const b = git(s.dir, "ls-remote", "upstream", "refs/heads/feat/b").split("\t")[0];
   assert.notEqual(b, s.B);
-  git(s.dir, "fetch", "-q", "origin");
-  assert.equal(git(s.dir, "rev-parse", `${b}^`), git(s.dir, "rev-parse", "origin/main"));
+  git(s.dir, "fetch", "-q", "upstream");
+  assert.equal(git(s.dir, "rev-parse", `${b}^`), git(s.dir, "rev-parse", "upstream/main"));
   assert.equal(git(s.dir, "show", `${b}:a.txt`), "b");
   assert.match(git(s.dir, "cat-file", "commit", b), /^gpgsig/m);
 
@@ -183,8 +209,8 @@ test("a child that conflicts: the rebase is aborted, its branch untouched, the r
   const { code, json } = await run(t, s.dir, ["27"]);
   assert.equal(code, 2);
   assert.match(json.blocked, /#29 \(feat\/b\) conflicts with main/);
-  assert.deepEqual(json.notDone, ["rebase children", "local cleanup", "issues"]);
-  assert.equal(git(s.dir, "ls-remote", "origin", "refs/heads/feat/b").split("\t")[0], s.B);
+  assert.deepEqual(json.notDone, ["rebase children", "issues", "local cleanup"]);
+  assert.equal(git(s.dir, "ls-remote", "upstream", "refs/heads/feat/b").split("\t")[0], s.B);
   assert.equal(git(s.dir, "worktree", "list").split("\n").length, 2); // the repo and the user's feat/a worktree: no temp one
 });
 
@@ -213,6 +239,41 @@ test("a PR that is not ready: nothing is merged, nothing is changed", async (t) 
   assert.deepEqual(json.why, ["check test is pending", `the newest pr-review review is on ${HEAD.slice(0, 7)}, the head is ${s.A.slice(0, 7)}`]);
   assert.deepEqual(json.done, []);
   assert.deepEqual(mutations(gh), []);
+  assert.ok(existsSync(s.wt));
+});
+
+test("no git remote points at the PR's repo: nothing is merged", async (t) => {
+  const s = stack();
+  git(s.dir, "remote", "set-url", "upstream", "https://github.com/x/other.git");
+  const gh = ghStub(routes(s));
+  const { code, json } = await run(t, s.dir, ["27"]);
+  assert.equal(code, 2);
+  assert.match(json.blocked, /no git remote of this clone points at github\.com\/o\/r/);
+  assert.deepEqual(mutations(gh), []);
+});
+
+test("a question still open in pr-review's local state blocks, though the marker says none", async (t) => {
+  const s = stack();
+  const st = stateRoot("o/r");
+  mkdirSync(join(st, "pr", "27", "runs", "r1"), { recursive: true });
+  queueQuestion(st, { pr: 27, sha: s.A, fingerprint: "f".repeat(40), file: "a.txt", line: 1, snippet: "a", finding: { title: "t", severity: "should" }, sides: { keep: "k", drop: "d" }, failure: "" });
+  t.after(() => rmSync(st, { recursive: true, force: true }));
+  const gh = ghStub(routes(s));
+  const { code, json } = await run(t, s.dir, ["27"]);
+  assert.equal(code, 2);
+  assert.deepEqual(json.why, ["1 pr-review question not settled"]);
+  assert.deepEqual(mutations(gh), []);
+});
+
+test("a worktree that cannot be removed: the issues are still ticked and closed, the failure is reported", async (t) => {
+  const s = stack();
+  writeFileSync(join(s.wt, "dirty.txt"), "x"); // git worktree remove refuses a dirty tree
+  const gh = ghStub(routes(s));
+  const { code, json } = await run(t, s.dir, ["27"]);
+  assert.equal(code, 4);
+  assert.deepEqual(json.notDone, ["local cleanup"]);
+  assert.ok(mutations(gh).some((m) => m.key.startsWith("api -X PATCH repos/o/r/issues/12")));
+  assert.ok(mutations(gh).some((m) => m.key.startsWith("api -X PATCH repos/o/r/issues/40")));
   assert.ok(existsSync(s.wt));
 });
 
