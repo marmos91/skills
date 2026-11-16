@@ -2,7 +2,7 @@
 name: pr-land
 description: "Merge a converged GitHub PR and clean up after it: check the live state (CI green, the newest pr-review review clean or an approval, no unresolved thread, mergeable), retarget stacked PRs before anything is deleted, squash-merge with a concise title after a secret scan, delete the branch, rebase the stacked PRs on the new base, remove the local worktree and branch, tick the tracking issue and close the fixed issues. Several PRs land in stack order. Use on 'pr-land', 'land this PR', 'merge PR 42 and clean up', 'land the stack'."
 metadata:
-  version: "0.5.0" # x-release-please-version
+  version: "0.6.0" # x-release-please-version
 ---
 
 # pr-land: merge a converged PR and clean up
