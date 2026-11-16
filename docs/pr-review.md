@@ -710,7 +710,8 @@ A cheap check next to the lenses. It is not a council lens.
 - **1 child** (judge model, thinking `low`, skipped at effort `low`): does
   the description match the diff, and are docs missing for a changed public
   interface? A PR in one part (not split, see `review.chunk_lines`) gets no
-  child: compose does this check itself and adds what it finds to the list.
+  child: compose does this check itself and returns what it finds as hygiene
+  findings, which the engine lists and counts like the child's.
 
 Hygiene findings are `should` or `nit`, never `must`. They go into the
 summary as one short list, never as inline comments. A model finding is

@@ -701,6 +701,21 @@ test("a PR in one part: compose does the hygiene model check, no hygiene child r
   assert.ok(!existsSync(join(r.runDir, "hygiene-prompt.txt")));
 });
 
+test("a folded hygiene problem blocks APPROVE, is listed and counted like the child's, and is settled", async () => {
+  const clean = { all: { findings: [] }, compose: { body: "Looks good.", comments: [] } };
+  const fx0 = fixture(); routes(fx0);
+  await go(fx0, clean);
+  assert.equal(posts(fx0)[0].event, "APPROVE", "the control approves");
+  const h = { lens: "hygiene", severity: "should", title: "Docs miss the flag", case: "The diff adds --x. Are the docs still right?", fix: "Document --x" };
+  const fx = fixture(); routes(fx);
+  const { r } = await go(fx, { ...clean, compose: { ...clean.compose, hygiene: [h] } });
+  assert.equal(r.exit, 0, r.summary);
+  const p = posts(fx)[0];
+  assert.notEqual(p.event, "APPROVE");
+  assert.match(p.body, /Hygiene:\n- The diff adds --x\. Are the docs still right\?/);
+  assert.ok(prState(fx.state, N).settled.includes(keyOf(fingerprint({ ...h, file: "", line: null }), null, "")), "settled, so a later review drops it");
+});
+
 test("each voter gets the head lines around its findings inline", async () => {
   const fx = fixture(); routes(fx);
   const { run } = await go(fx, happy());

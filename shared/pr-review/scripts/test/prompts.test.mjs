@@ -90,7 +90,9 @@ test("compose: a folded hygiene check adds its section; nit only when the floor 
   assert.doesNotMatch(composePrompt(frame(), [], ""), /## Hygiene check/);
   const p = composePrompt(frame(), [], "", { hygiene: ["should", "nit"] });
   assert.match(p, /## Hygiene check\n/);
-  assert.match(p, /hygiene list in `body`/);
+  assert.match(p, /Put each problem in `hygiene`/);
+  assert.match(p, /"hygiene": \[\{"lens": "hygiene"/, "the output asks for the structured field");
+  assert.doesNotMatch(composePrompt(frame(), [], ""), /"hygiene": \[/);
   assert.doesNotMatch(p, /only a problem that would mislead/);
   assert.match(composePrompt(frame(), [], "", { hygiene: ["should"] }), /only a problem that would mislead/);
 });

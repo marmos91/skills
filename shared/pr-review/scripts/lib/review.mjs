@@ -569,8 +569,9 @@ async function once(o, restart) {
   const belowFloor = agreed.filter((c) => !c.answered && !floor.has(c.severity)).length;
   const leftOut = agreed.length - chosen.length - belowFloor;
   // Hygiene obeys the same severity floor and settled list as council findings (spec 7.5).
-  const hygNew = filterNew(hyg.findings.map((h) => ({ ...h, file: "", line: null })), { reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: new Map(), learned }).keep;
-  const hygItems = hygNew.filter((h) => allowed.has(h.severity)).map((h, i) => ({ ...h, id: `h${i + 1}`, fp: fingerprint(h) }));
+  const hygOf = (fs, from = 0) => filterNew(fs.map((h) => ({ ...h, file: "", line: null })), { reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: new Map(), learned }).keep
+    .filter((h) => allowed.has(h.severity)).map((h, i) => ({ ...h, id: `h${from + i + 1}`, fp: fingerprint(h) }));
+  const hygItems = hygOf(hyg.findings);
   if (!restart && (pst.summaryBlocked?.[f.headSha] ?? 0) >= 2) {
     return { exit: 4, runDir, planned, summary: `the review summary was blocked by the secret scan twice at ${f.headSha}; see the question, or use --restart` };
   }
@@ -588,9 +589,11 @@ async function once(o, restart) {
       { retracted: retracted.map((e) => ({ thread_id: e.threadId, file: e.path, line: e.line ?? e.originalLine, finding: e.body, evidence: earlier.get(e.threadId).why })),
         blocking: blocking.map((e) => ({ thread_id: e.threadId, file: e.path, line: e.line ?? e.originalLine, finding: e.body })),
         // the folded hygiene check (hygiene.mjs) under the same severity floor and effort severities as its child
-        // shortcut: its findings are free text in the body, so the settled list does not filter them; a child, if that matters
         hygiene: hyg.folded ? ["should", "nit"].filter((s) => allowed.has(s) && floor.has(s)) : [] }),
   });
+  // Its findings join the child's hygiene items: the same settled list, verdict, counts and summary list.
+  const foldedHyg = hyg.folded ? hygOf((composed.hygiene ?? []).map((h) => ({ ...h, ask_author: true })), hygItems.length) : [];
+  hygItems.push(...foldedHyg);
   markDone(runDir, "compose");
   if (o.until === "compose") return finish("compose");
 
@@ -704,6 +707,7 @@ async function once(o, restart) {
     ...indexOf(inline, urls),
     one(composed.praise),
     anyFinding && /^No new findings\.?$/i.test(said) ? "" : said,
+    foldedHyg.length ? `Hygiene:\n${foldedHyg.map((h) => `- ${one(h.case)}`).join("\n")}` : "",
     noTracking ? "No tracking issue or plan." : "",
     outside.length ? `Outside the diff:\n${outside.map((l) => `- ${l}`).join("\n")}` : "",
     open.length ? `${open.length} ${open.length === 1 ? "point is" : "points are"} still open with the reviewer.` : "",

@@ -257,7 +257,7 @@ export function composePrompt(frame, agreed, guidance, { retracted = [], blockin
       "- Description: a claim in the title or body that the diff does not do, a large change that the body never names, or tests named in the body that the diff does not add.",
       "- Docs: a changed public interface (CLI flag, config key, API, exported function) with no change in the README, docs or help text. Grep the docs in the worktree before you report.",
       "- Do not report the title style, an empty body, a linked issue, the changelog or commit subjects: code checks cover them.",
-      `- Add each problem to the hygiene list in \`body\`, as a question to the author: "The body says X. The diff does Y. Is X still true?"${hygiene.includes("nit") ? "" : " Report only a problem that would mislead a reader."}`,
+      `- Put each problem in \`hygiene\`, not in \`body\`: the engine lists them. Write \`case\` as a question to the author: "The body says X. The diff does Y. Is X still true?" \`severity\`: ${hygiene.join(" or ")}${hygiene.includes("nit") ? "" : "; report only a problem that would mislead a reader"}.`,
       "",
     ] : []),
     "## Rules",
@@ -291,7 +291,7 @@ export function composePrompt(frame, agreed, guidance, { retracted = [], blockin
     "",
     "## Output",
     OUT,
-    '{"verdict": "one line", "answers": ["..."], "confirmed": [{"thread_id": "...", "text": "..."}], "index": [{"theme": "", "items": [{"id": "<finding id>", "text": "one line"}]}], "praise": "", "body": "", "corrections": [{"thread_id": "...", "text": "..."}], "comments": [{"id": "<finding id>", "also": [], "body": "comment text"}]}',
+    `{"verdict": "one line", "answers": ["..."], "confirmed": [{"thread_id": "...", "text": "..."}], "index": [{"theme": "", "items": [{"id": "<finding id>", "text": "one line"}]}], "praise": "", "body": "", "corrections": [{"thread_id": "...", "text": "..."}], "comments": [{"id": "<finding id>", "also": [], "body": "comment text"}]${hygiene.length ? ', "hygiene": [{"lens": "hygiene", "severity": "should|nit", "title": "short title", "case": "the question", "fix": "the smallest change"}]' : ""}}`,
   ].join("\n");
 }
 
