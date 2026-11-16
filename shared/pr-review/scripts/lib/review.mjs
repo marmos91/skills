@@ -680,8 +680,8 @@ async function once(o, restart) {
   const bodyOf = (outside, key, inline, urls = new Map()) => [
     firstLine(),
     ...retracted.map((e) => `Correction: ${one(composed.corrections?.find((x) => x.thread_id === e.threadId)?.text) || "our earlier finding here was wrong."} ${at(e.path, e.line ?? e.originalLine, threadUrl(e))}`),
-    // The first line holds the decision: a verdict that says nothing blocks repeats it, or contradicts it.
-    /^nothing blocks\.?$/i.test(plain(composed.verdict)) ? "" : one(composed.verdict),
+    // The first line holds the decision: a bare "Nothing blocks." repeats it; any "nothing ... blocks" contradicts a block.
+    /^nothing blocks\.?$/i.test(plain(composed.verdict)) || (commitStatus(counts()).state !== "success" && /\bnothing\b[^.]*\bblock/i.test(plain(composed.verdict))) ? "" : one(composed.verdict),
     whyNotApproved(v(), { questions: open.length, lenses: run.missing?.length ?? 0, seats: new Set([...run.dropped, ...missedNow].map((x) => x.seat)).size, mode }),
     // The setup stage (#38) sets f.checked: the depth and the checks run.
     f.checked ? `What was checked: ${one(f.checked)}` : "",

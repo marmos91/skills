@@ -1156,7 +1156,7 @@ test("CI pending is the only reason: COMMENT, the approve is queued and the body
     const p = posts(fx)[0];
     assert.equal(p.event, "COMMENT", mode);
     assert.equal(r.queueApprove, true, mode);
-    assert.ok(p.body.startsWith(`Nothing blocks.\n\nNot approved yet: ${why}\n`), `${mode}: ${p.body}`);
+    assert.ok(p.body.startsWith(`**Nothing blocks.**\n\nNot approved yet: ${why}\n`), `${mode}: ${p.body}`);
     assert.equal(openQuestions(fx.state).filter((q) => q.finding.kind === "approve").length, ask ? 1 : 0, mode);
     assert.equal(pendingAnswers(fx.state).filter((q) => q.finding.kind === "approve" && q.answer === "post").length, ask ? 0 : 1, mode);
   }
@@ -2072,10 +2072,10 @@ test("the pass line counts posted comments: a folded finding is not a second new
   assert.match(posts(fx)[0].body, /^\*\*Blocks: 2 must\.\*\* Pass 2, since `[0-9a-f]{7}`: 0 fixed, 1 new, 0 still open\./);
 });
 
-test("a verdict with more to say than \"Nothing blocks.\" is kept", async () => {
+test("with nothing blocking, a verdict with more to say than \"Nothing blocks.\" is kept", async () => {
   const fx = fixture(); routes(fx);
   const verdict = "Nothing in the parser blocks, but the schema change needs a migration first.";
-  const { r } = await go(fx, happy({ compose: { verdict, body: "", comments: [{ id: "c1", body: "**must:** off by one" }] } }));
+  const { r } = await go(fx, happy({ merge: [C("c1", { severity: "should" })], compose: { verdict, body: "", comments: [{ id: "c1", body: "**should:** off by one" }] } }));
   assert.equal(r.exit, 0, r.summary);
   assert.match(posts(fx)[0].body, /\n\nNothing in the parser blocks, but the schema change needs a migration first\.\n\n/);
 });
