@@ -94,11 +94,12 @@ test("CI pending alone -> COMMENT and queueApprove, interactive and loop; with a
 
 test("whyNotApproved: one plain line from the reasons, none when a must blocks (#82)", () => {
   const c = { questions: 2, lenses: 1, seats: 1 };
-  assert.equal(whyNotApproved(v({ ci: "pending" }), c), "Not approved yet: CI is still running. It is approved when CI passes and you answer post to the approve question.");
+  assert.equal(whyNotApproved(v({ ci: "pending" }), c), "Not approved yet: CI is still running. It is approved when CI passes.");
+  assert.equal(whyNotApproved(v({ ci: "pending", mode: "loop", trustedAuthor: false }), c), "Not approved yet: CI is still running and the loop approves only a trusted author. It is approved when CI passes and you answer post to the approve question.");
   assert.equal(whyNotApproved(v({ failedLenses: 1, droppedSeats: 1 }), c), "Not approved: 1 lens did not run and 1 seat did not finish.");
   assert.equal(whyNotApproved(v({ ci: "red", openQuestions: 2 }), c), "Not approved: 2 questions are still open and CI failed.");
   assert.equal(whyNotApproved(v({ mode: "loop", trustedAuthor: false }), c), "Not approved yet: the loop approves only a trusted author. It is approved when you answer post to the approve question.");
   assert.equal(whyNotApproved(v({}), c), "");
   assert.equal(whyNotApproved(v({ agreed: [f("must")] }), c), "");
-  assert.equal(whyNotApproved(v({ ownPr: true, agreed: [f("must")] }), c), "");
+  assert.equal(whyNotApproved(v({ ownPr: true }), c), "", "own PR: COMMENT is the only option");
 });

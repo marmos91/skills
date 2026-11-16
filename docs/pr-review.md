@@ -284,13 +284,13 @@ text (`scripts/lib/verdict.mjs`). The first row that matches wins.
 | Your own PR | `COMMENT` (GitHub does not allow more) |
 | 1 or more agreed `must`, or an earlier `must` of yours still open | `REQUEST_CHANGES` |
 | An open question, a split, a failed lens, a dropped seat, any agreed finding, or red or unknown CI | `COMMENT` |
-| Pending CI and nothing else above | `COMMENT`, and an "approve?" question for you |
+| Pending CI and nothing else above or below | `COMMENT`; the loop approves by itself once CI is green at the same head |
 | Loop run, and the shell rule (Trust and isolation, item 3) does not hold or not every seat found zero | `COMMENT`, and an "approve?" question for you |
 
-When the event is `COMMENT` and no `must` blocks, the body has one engine line
-that says why it is not an approval, for example "Not approved yet: CI is still
-running. It is approved when CI passes and you answer post to the approve
-question." The loop posts the approval only at the same head with green CI.
+When the event is `COMMENT`, no `must` blocks and it is not your own PR, the
+body has one engine line that says why it is not an approval, for example "Not
+approved yet: CI is still running. It is approved when CI passes." The loop
+posts the approval only at the same head with green CI.
 | None of the above | `APPROVE` |
 
 ### 9. Post
@@ -650,7 +650,7 @@ The engine reads the checks of the head SHA (`statusCheckRollup`).
   failed check it adds the last 80 lines of the failed job log, with secrets
   redacted. The correctness and adversarial lenses use it as evidence.
 - **Verdict**: red or pending CI never gives `APPROVE`. Pending CI alone
-  queues an "approve?" question, posted once CI is green at the same head. Red CI with no agreed
+  queues an approval that the loop posts once CI is green at the same head. Red CI with no agreed
   `must` gives `COMMENT`, and the summary names the failed checks. The engine
   reads CI again just before it posts; a stale or failed read counts as
   unknown and blocks `APPROVE`.

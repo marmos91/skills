@@ -19,7 +19,7 @@ import { hygiene as realHygiene } from "./hygiene.mjs";
 import { limiter } from "./limit.mjs";
 import { decide as realDecide } from "./decider.mjs";
 import { linkFix } from "./reply.mjs";
-import { appliedAnswer, pendingAnswers, queueQuestion, waitingQuestions } from "./questions.mjs";
+import { answer, appliedAnswer, pendingAnswers, queueQuestion, waitingQuestions } from "./questions.mjs";
 import { applyProof, checkFix, directionOnly, isProven, markUnproven, mutantFindings, proofLine, runMutants, scopePatch, suggestionOf, uncheckedNote } from "./proof.mjs";
 import { cherryPicked, coreCandidates, depthLine, pickDepth, queueCoreQuestion, readCorePaths, runSetup, settleCoreQuestions } from "./setup.mjs";
 import { FINAL_STAGE, VERSION, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, commitStatus, summaryMarker, usageByStage, writeAtomic } from "./state.mjs";
@@ -759,12 +759,14 @@ async function once(o, restart) {
   }
   // Same fingerprint and record as tick.mjs: a rerun (or the tick after it) finds the question and adds nothing.
   if (queueApprove) {
-    queueQuestion(repoState, {
+    const id = queueQuestion(repoState, {
       pr: n, sha: f.headSha, fingerprint: sha1(`approve:${n}:${f.headSha}`), file: "(whole PR)", line: 0, snippet: "",
       finding: { kind: "approve", title: "Approve this PR?", case: `The review at ${f.headSha} has no agreed finding. The loop approves only a trusted author with a unanimous zero-finding vote. Reasons: ${reasons.join("; ")}.` },
       sides: { keep: "post: approve the PR at this commit.", drop: "drop: keep the review as a comment." },
       failure: "The PR waits for a human approval.",
     });
+    // Pending CI alone needs no human: answered here, the tick approves once CI is green at this head.
+    if (reasons.join() === "ci pending") answer(repoState, id, "post");
   }
 
   // A folded finding counts as posted when its host comment is.

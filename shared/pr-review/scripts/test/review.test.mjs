@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { composeGuidance, review } from "../lib/review.mjs";
 import { ChildFailed } from "../lib/child.mjs";
 import { decide as realDecide } from "../lib/decider.mjs";
-import { answer, openQuestions } from "../lib/questions.mjs";
+import { answer, openQuestions, pendingAnswers } from "../lib/questions.mjs";
 import { stateRoot, prState, readSummaryMarker, savePrState } from "../lib/state.mjs";
 import { fingerprint, learnKey, settledKey as keyOf } from "../lib/convergence.mjs";
 import { learn } from "../lib/learnings.mjs";
@@ -1096,8 +1096,9 @@ test("CI is read again at post time: none at frame, red at post -> no APPROVE", 
   assert.match(p.body, /Failed checks: build\./);
 });
 
-test("CI pending is the only reason: COMMENT, the approve question is queued and the body says why (#82)", async () => {
-  for (const mode of ["interactive", "loop"]) {
+test("CI pending is the only reason: COMMENT, the approve is queued and the body says why (#82)", async () => {
+  // interactive: CI alone, no human needed (answered post); loop with an untrusted author: the question stays open
+  for (const [mode, ask, why] of [["interactive", false, "CI is still running. It is approved when CI passes."], ["loop", true, "CI is still running and the loop approves only a trusted author. It is approved when CI passes and you answer post to the approve question."]]) {
     const fx = fixture(); routes(fx);
     const gh = { ...github, checks: async () => ({ state: "pending", since: null, items: [] }) };
     const { r } = await go(fx, { all: { findings: [] }, compose: { verdict: "Nothing blocks.", body: "Fine.", comments: [] } }, { gh, mode });
@@ -1105,8 +1106,9 @@ test("CI pending is the only reason: COMMENT, the approve question is queued and
     const p = posts(fx)[0];
     assert.equal(p.event, "COMMENT", mode);
     assert.equal(r.queueApprove, true, mode);
-    assert.match(p.body, /Nothing blocks\.\n\nNot approved yet: CI is still running[^\n]*\. It is approved when CI passes and you answer post to the approve question\./, mode);
-    assert.equal(openQuestions(fx.state).filter((q) => q.finding.kind === "approve").length, 1, mode);
+    assert.ok(p.body.startsWith(`Nothing blocks.\n\nNot approved yet: ${why}\n`), `${mode}: ${p.body}`);
+    assert.equal(openQuestions(fx.state).filter((q) => q.finding.kind === "approve").length, ask ? 1 : 0, mode);
+    assert.equal(pendingAnswers(fx.state).filter((q) => q.finding.kind === "approve" && q.answer === "post").length, ask ? 0 : 1, mode);
   }
 });
 

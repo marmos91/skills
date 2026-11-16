@@ -27,7 +27,6 @@ export function verdict(i) {
 
 const n = (k, one, many) => `${k} ${k === 1 ? one : many}`;
 const WHY = {
-  "own PR": () => "it is your own PR",
   "open questions": (c) => `${n(c.questions, "question is", "questions are")} still open`,
   "failed lenses": (c) => `${n(c.lenses, "lens", "lenses")} did not run`,
   "dropped seats": (c) => `${n(c.seats, "seat", "seats")} did not finish`,
@@ -40,9 +39,10 @@ const WHY = {
 
 // The body line that says why a review with no blocking finding is not an APPROVE. Engine text, from the reasons.
 export function whyNotApproved({ event, queueApprove, reasons }, counts) {
-  if (event !== "COMMENT" || reasons.some((r) => r.includes("must"))) return "";
+  if (event !== "COMMENT" || reasons.some((r) => r.includes("must") || r === "own PR")) return "";
   const why = reasons.map((r) => WHY[r]?.(counts) ?? (r.startsWith("ci ") ? "the CI state is unknown" : r));
   const list = why.length > 1 ? `${why.slice(0, -1).join(", ")} and ${why.at(-1)}` : why[0];
   if (!queueApprove) return `Not approved: ${list}.`;
+  if (reasons.join() === "ci pending") return `Not approved yet: ${list}. It is approved when CI passes.`;
   return `Not approved yet: ${list}. It is approved when ${reasons.includes("ci pending") ? "CI passes and " : ""}you answer post to the approve question.`;
 }
