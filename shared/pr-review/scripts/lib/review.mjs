@@ -603,11 +603,7 @@ async function once(o, restart) {
     open.length ? `${open.length} ${open.length === 1 ? "point is" : "points are"} still open with the reviewer.` : "",
     leftOut ? `${leftOut} ${leftOut === 1 ? "finding was" : "findings were"} left out by the effort limit.` : "",
     run.missing?.length ? `Lenses not run: ${run.missing.join(", ")}.` : "",
-    ...run.dropped.map((d) => `Seat ${safeText(d.seat.slice(d.seat.indexOf(":") + 1))} was dropped (${d.reason}).`),
-    ...[...new Set(missedNow.map((m) => m.seat))].map((id) => {
-      const m = missedNow.filter((x) => x.seat === id), n = new Set(m.map((x) => x.key)).size;
-      return `Seat ${safeText(id.slice(id.indexOf(":") + 1))} missed ${n} ${n === 1 ? "part" : "parts"} of the split diff (${[...new Set(m.map((x) => x.reason))].join(", ")}).`;
-    }),
+    // Dropped seats and missed parts stay out of the body: they are in run.json and the run log.
     ci.line ?? "", marker(runId, f.headSha, key),
   ].filter(Boolean).join("\n\n");
   const permalink = `https://github.com/${repo}/blob/${f.headSha}`;

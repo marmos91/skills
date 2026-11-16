@@ -1016,7 +1016,7 @@ test("a seat that hits its turn limit in round 1 is dropped: the rest of the cou
   const p = posts(fx)[0];
   assert.equal(p.event, "REQUEST_CHANGES");
   assert.deepEqual(p.threads.map((t) => t.line), [2]);
-  assert.match(p.body, /Seat cubbit\/mimir-pro was dropped \(turn limit\)\./);
+  assert.doesNotMatch(p.body, /Seat /);
   assert.deepEqual(runJson(r).dropped, [{ seat: S2, reason: "turn limit", stage: "round1" }]);
   assert.ok(!run.calls.some((c) => c.k === "v~2"), "a dropped seat does not vote");
 });
@@ -1029,7 +1029,7 @@ test("a dropped seat blocks APPROVE, interactive and loop", async () => {
     const p = posts(fx)[0];
     assert.equal(p.event, "COMMENT", mode);
     assert.equal(r.queueApprove, false, mode);
-    assert.match(p.body, /Seat cubbit\/mimir was dropped \(timeout\)\./);
+    assert.doesNotMatch(p.body, /Seat /);
   }
 });
 
@@ -1065,7 +1065,7 @@ test("resume: a dropped seat stays dropped and is not run again", async () => {
   const { r, run } = await go(fx, happy());
   assert.equal(r.exit, 0, r.summary);
   assert.ok(!run.calls.some((c) => c.k === "all~2"));
-  assert.match(posts(fx)[0].body, /Seat cubbit\/mimir-pro was dropped \(turn limit\)\./);
+  assert.doesNotMatch(posts(fx)[0].body, /Seat /);
 });
 
 // --- two seats on one model (opus high + opus medium): two independent seats, by the user's choice
@@ -1260,7 +1260,7 @@ test("split PR: a seat that misses one part keeps its other parts and its vote; 
   assert.deepEqual(st.missed.map((m) => [m.seat, m.key]), [[S2, "all~2@1"]]);
   assert.ok(run.calls.some((c) => c.k === "v~2"), "the seat still votes");
   const p = posts(fx)[0];
-  assert.match(p.body, /Seat cubbit\/mimir-pro missed 1 part of the split diff \(turn limit\)\./);
+  assert.doesNotMatch(p.body, /Seat /);
   assert.notEqual(p.event, "APPROVE");
 });
 
