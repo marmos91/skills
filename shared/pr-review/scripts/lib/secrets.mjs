@@ -1,5 +1,5 @@
 // The one secret scan: pr-review, pr-respond and pr-open use it here; the secret-scan skill is its CLI.
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -56,10 +56,12 @@ function gitleaksHits(text, timeoutMs) {
 
 // Local, untracked config: the lists never leave the machine and are never printed.
 const configDir = () => process.env.SECRET_SCAN_CONFIG || join(homedir(), ".config", "secret-scan");
-function lines(name) {
-  try { return readFileSync(join(configDir(), name), "utf8").split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#")); }
-  catch { return []; }
+// A missing file is skipped (other machines); a file that is there but unreadable throws, so the scan fails closed.
+function readIfThere(path) {
+  try { return readFileSync(path, "utf8"); } catch (e) { if (e.code === "ENOENT") return null; throw e; }
 }
+// `#` at the start of a line or after whitespace starts a comment; `\#` is a literal `#` in a pattern.
+const lines = (name) => (readIfThere(join(configDir(), name)) ?? "").split("\n").map((l) => l.replace(/(^|\s)#.*$/, "").trim()).filter(Boolean);
 const fingerprint = (rule, value) => createHash("sha256").update(`${rule}\0${value}`).digest("hex").slice(0, 12);
 
 // private.txt: one regex per line, case-insensitive; a line that is not a valid regex is a literal.
@@ -80,9 +82,8 @@ function fileValues(text) {
 }
 function sopsValues() {
   return lines("sops-files.txt").flatMap((f) => {
-    let text;
-    try { text = readFileSync(f.replace(/^~(?=\/)/, homedir()), "utf8"); } catch { return []; }
-    return fileValues(text).map((v) => v.trim().replace(/^(["'])(.*)\1$/, "$2")).filter((v) => v.length >= 12 && !/\s/.test(v));
+    const text = readIfThere(f.replace(/^~(?=\/)/, homedir()));
+    return text === null ? [] : fileValues(text).map((v) => v.trim().replace(/^(["'])(.*)\1$/, "$2")).filter((v) => v.length >= 12 && !/\s/.test(v));
   });
 }
 
@@ -103,21 +104,40 @@ function locator(text, label) {
 
 /**
  * Every hit in text: { rule, masked, where, fp, allowed }. Never holds the full value.
- * A repo (owner/repo) listed in private-repos.txt skips the private-infrastructure patterns.
+ * A repo (owner/repo) listed in private-repos.txt skips the private-infrastructure patterns; no repo is strict.
  */
 export function findings(text, { timeoutMs = 30000, repo = null, label = null } = {}) {
   const where = locator(text, label);
-  const lineOf = (i) => text.slice(0, i).split("\n").length;
+  const starts = [0];
+  for (let i = text.indexOf("\n"); i >= 0; i = text.indexOf("\n", i + 1)) starts.push(i + 1);
+  const lineOf = (i) => { // binary search: a big diff has many hits
+    let lo = 0, hi = starts.length - 1;
+    while (lo < hi) { const m = (lo + hi + 1) >> 1; if (starts[m] <= i) lo = m; else hi = m - 1; }
+    return lo + 1;
+  };
   const out = gitleaksHits(text, timeoutMs).map(({ line, ...h }) => ({ ...h, where: line ? where(line) : null, fp: null }));
   const add = (rule, value, i) => out.push({ rule, masked: mask(value), where: where(lineOf(i)), fp: fingerprint(rule, value) });
   for (const [kind, re] of PATTERNS) for (const m of text.matchAll(re)) add(kind, m[0], m.index);
-  if (!(repo && lines("private-repos.txt").includes(repo))) {
-    for (const re of privatePatterns()) for (const m of text.matchAll(re)) if (m[0]) add("private-infra", m[0], m.index);
+  let allowed = new Set();
+  try {
+    if (!(repo && lines("private-repos.txt").includes(repo))) {
+      for (const re of privatePatterns()) for (const m of text.matchAll(re)) if (m[0]) add("private-infra", m[0], m.index);
+    }
+    for (const v of new Set(sopsValues())) for (let i = text.indexOf(v); i >= 0; i = text.indexOf(v, i + 1)) add("sops-value", v, i);
+    // allow.txt: `<fp> <reason>`; a line without a reason allows nothing
+    allowed = new Set(lines("allow.txt").filter((l) => /^\S+\s+\S/.test(l)).map((l) => l.split(/\s/)[0]));
+  } catch (e) {
+    out.push({ rule: "secret-scan", masked: `config unreadable (${e.code ?? "error"})`, where: null, fp: null });
   }
-  for (const v of new Set(sopsValues())) for (let i = text.indexOf(v); i >= 0; i = text.indexOf(v, i + 1)) add("sops-value", v, i);
-  // allow.txt: `<fp> <reason>`; a line without a reason allows nothing
-  const allowed = new Set(lines("allow.txt").filter((l) => /^\S+\s+\S/.test(l)).map((l) => l.split(/\s/)[0]));
   return out.map((h) => ({ ...h, allowed: !!h.fp && allowed.has(h.fp) }));
+}
+
+/** owner/repo of the GitHub origin of the clone at dir; null elsewhere (then the strict set applies). */
+export function originRepo(dir = process.cwd()) {
+  try {
+    const url = execFileSync("git", ["remote", "get-url", "origin"], { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    return /github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?$/.exec(url)?.[1] ?? null;
+  } catch { return null; }
 }
 
 /** One line per hit: rule: masked (where, fp). */

@@ -19,13 +19,15 @@ unified diff or a named file, else `line N`), and a fingerprint. It never
 prints a full match, and never prints the private list or the sops values.
 
 ```sh
-git log -p origin/main..HEAD | secret-scan        # the commits you are about to push
+d=$(mktemp) && git log -p origin/main..HEAD > "$d" && secret-scan "$d"   # the commits you are about to push
 git diff --cached | secret-scan                   # what you are about to commit
 secret-scan < body.md                             # a PR body, a comment, an issue
 secret-scan --repo owner/repo < body.md           # name the repo (else the origin of cwd)
 ```
 
 Scan the diff or the text, not the whole history, unless the user asks.
+Write a `git` range to a file first, as above: in a plain pipe a range that
+does not resolve gives empty input, and the scan passes.
 
 ## What it finds
 
@@ -40,15 +42,18 @@ Scan the diff or the text, not the whole history, unless the user asks.
 ## Config
 
 All in `~/.config/secret-scan/` (`SECRET_SCAN_CONFIG` overrides the
-folder). Every file is optional, one entry per line, `#` starts a comment.
-Keep the folder out of every repo.
+folder). Every file is optional, one entry per line. `#` at the start of a
+line or after a space starts a comment; write `\#` for a `#` in a pattern.
+A missing file is skipped; a file that is there but cannot be read (for
+example root-owned) is a hit, `secret-scan: config unreadable`, so the scan
+never passes without its lists. Keep the folder out of every repo.
 
 | File | Line |
 |---|---|
 | `private.txt` | a regex, case-insensitive (a line that is not a valid regex is a literal). It can be rendered there by sops-nix, so the list lives encrypted in your dotfiles. |
 | `sops-files.txt` | the path of a file sops-nix renders (for example a kubeconfig or `~/.aws/credentials`). JSON leaves, the value of `key = value` / `key: value` lines and bare lines count; keys, values under 12 characters and values with spaces do not. A missing file is skipped. |
-| `allow.txt` | `<fp> <reason>`: the hit with that fingerprint does not block. A line without a reason allows nothing. |
-| `private-repos.txt` | `owner/repo`: a private repo where the `private.txt` set is skipped. Secrets and sops values are still checked. Remove the line if the repo goes public. |
+| `allow.txt` | `<fp> <reason>`: the hit with that fingerprint does not block. A line without a reason allows nothing. gitleaks hits have no fingerprint (its report is redacted, so the value never touches the disk): allow one with a `gitleaks:allow` comment on the line, or an allowlist in the gitleaks config (`GITLEAKS_CONFIG`). |
+| `private-repos.txt` | `owner/repo`: a private repo where the `private.txt` set is skipped. Secrets and sops values are still checked. Remove the line if the repo goes public. The CLI takes the repo from `--repo`, else the `origin` of the current folder; pr-review, pr-respond and pr-open pass the PR's repo. Text sent to jev has no repo and gets the strict set. |
 
 ## Steps
 

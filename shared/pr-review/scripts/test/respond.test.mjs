@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GitError, NotOnHead, Q, RoundCap, approve, gitReaders, decide, decline, findings, fixed, summary, summaryText } from "../lib/respond.mjs";
@@ -226,4 +226,18 @@ test("git readers: a failed git throws; only exit 1 of merge-base means not in t
   assert.throws(() => gitReaders(fake({ "merge-base": 128 })).onHead("s", "h"), GitError);
   assert.throws(() => gitReaders(fake({ "cat-file": 1 })).show("h1", "a.js"), /not fetched/);
   assert.equal(gitReaders(fake({ show: 128 })).show("h1", "gone.js"), null);
+});
+
+test("decline: a private name passes in a repo listed in private-repos.txt, and is held elsewhere", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "ss-"));
+  writeFileSync(join(dir, "private.txt"), "example\\.internal\n");
+  writeFileSync(join(dir, "private-repos.txt"), `${REPO}\n`);
+  const old = process.env.SECRET_SCAN_CONFIG;
+  process.env.SECRET_SCAN_CONFIG = dir;
+  t.after(() => { process.env.SECRET_SCAN_CONFIG = old; });
+  freshState();
+  const reason = "Runs on db01.example.internal only.";
+  assert.equal((await decline({ repo: REPO, n: N, threadId: "T1", reason, gh: fakeGh([th("T1", [bot(1, "x")])]) })).action, "replied");
+  freshState();
+  await assert.rejects(decline({ repo: "o/public", n: N, threadId: "T1", reason, gh: fakeGh([th("T1", [bot(1, "x")])]) }), /secret scan holds/);
 });

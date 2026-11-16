@@ -171,7 +171,7 @@ export async function decline({ repo, n, threadId, reason, gh }) {
   if (handledNow(t, me, load(repo, n).handled)) return { action: "skipped" };
   const body = String(reason).trim();
   if (!body) throw new Error("decline needs a reason");
-  if (!scanOutbound(body).ok) throw new Error("the secret scan holds the reason; write it again without the secret");
+  if (!scanOutbound(body, { repo }).ok) throw new Error("the secret scan holds the reason; write it again without the secret");
   // a crash after the post and before markHandled must not post twice: the marker is the record on GitHub
   const key = sha1(`respond-decline\0${threadId}\0${lastOther(t, me)}`);
   if (!(await gh.findMarker(repo, n, key))) await gh.reply(repo, n, t.comments[0].id, `${body}\n\n<!-- pr-review key=${key} -->`);
@@ -232,7 +232,7 @@ export async function summary({ repo, n, points, gh }) {
   const { headSha } = await gh.pr(repo, n);
   const key = sha1(`respond-summary\0${headSha}`);
   const body = `${summaryText(repo, points)}\n\n<!-- pr-review sha=${headSha} key=${key} -->`;
-  if (!scanOutbound(body).ok) throw new Error("the secret scan holds the summary");
+  if (!scanOutbound(body, { repo }).ok) throw new Error("the secret scan holds the summary");
   if (await gh.findMarker(repo, n, key)) return { action: "skipped" };
   await gh.comment(repo, n, body);
   return { action: "posted" };

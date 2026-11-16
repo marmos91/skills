@@ -52,9 +52,11 @@ the full command each time: zsh does not split a variable into words.
    the fix, see the test fail, put the fix back.
 4. Run the full test suite. Commit signed (`git commit -S`) with a concise
    message, in the repo's commit style. Do not name an AI or a tool. Before
-   the push, run `git log -p @{u}..HEAD | secret-scan`: a non-zero exit
-   blocks the push. Remove the hit, or allow a false one as the
-   `secret-scan` skill says. Push.
+   the push, scan every commit since the PR base (this works on a branch
+   with no upstream too):
+   `b=$(gh pr view --json baseRefName --jq .baseRefName) && git fetch -q origin "$b" && d=$(mktemp) && git log -p "origin/$b..HEAD" > "$d" && secret-scan "$d"`.
+   Any non-zero exit blocks the push (a git error too). Remove the hit, or
+   allow a false one as the `secret-scan` skill says. Push.
 5. For each fixed thread, run `$P fixed <id> <sha>` with the sha of the
    pushed fixing commit (a sha that is not in the PR head is refused). jev
    checks that the commit fixes the case first. Only on a yes it replies

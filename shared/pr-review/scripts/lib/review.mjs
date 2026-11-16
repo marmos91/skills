@@ -644,7 +644,7 @@ async function once(o, restart) {
   const own = (c) => ({ ...c, fps: [c.fp], body: mark(c, `**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}`) });
   // One scan per item: each scan spawns gitleaks.
   const scans = new Map();
-  const scan1 = (x) => { if (!scans.has(x)) scans.set(x, scanOutbound(x.answered ? redact(x.body) : x.body)); return scans.get(x); };
+  const scan1 = (x) => { if (!scans.has(x)) scans.set(x, scanOutbound(x.answered ? redact(x.body) : x.body, { repo })); return scans.get(x); };
   const passes = (x) => scan1(x).ok;
   const heldHosts = new Set(items.filter((x) => !passes(x)).map((x) => x.id));
   for (const c of folded.filter((c) => heldHosts.has(hostOf.get(c.id)))) { hostOf.delete(c.id); items.push(await checked(own(c))); }
@@ -672,7 +672,7 @@ async function once(o, restart) {
   const p = place(fresh.map((x) => ({ file: x.file, line: x.line, body: `${x.body}\n\n${marker(runId, f.headSha, inlineKey(x), x.fps.join(","))}` })), hunks, permalink);
   const key = sha1(`review\0${runId}`);
   const body = bodyOf(p.body, key, clean.filter((x) => !offDiff(x)));
-  const scan = scanOutbound(body);
+  const scan = scanOutbound(body, { repo });
   if (!scan.ok) {
     const st = prState(repoState, n);
     const tries = (st.summaryBlocked?.[f.headSha] ?? 0) + 1;
@@ -784,7 +784,7 @@ async function followUp(o, head, pst, answered) {
     const fix = f.fix && f.proven !== undefined && suggestionOf(f.fix) ? uncheckedNote(f.fix, "a follow-up runs no test") : f.fix;
     const base = `**${f.severity}:** ${f.title}\n\n${f.case}${fix ? `\n\n${fix}` : ""}${q.answer === "ask-author" ? "\n\nCan you confirm this case?" : ""}`;
     const text = f.secret ? heldText(repoState, n, pst.lastRunId, q.fingerprint) : f.proven === false ? markUnproven(base, !diffLine(hunks, f.file, f.line)) : base;
-    if (text && scanOutbound(text).ok) items.push({ q, text });
+    if (text && scanOutbound(text, { repo }).ok) items.push({ q, text });
   }
   let url = null;
   if (items.length) {
@@ -800,7 +800,7 @@ async function followUp(o, head, pst, answered) {
       gaps: was ? was.gaps : 1,
     };
     const body = [`Follow-up on the review of ${head}: points settled by the maintainer.`, p.body.length ? p.body.map((l) => `- ${l}`).join("\n") : "", summaryMarker(runId, head, key, counts)].filter(Boolean).join("\n\n");
-    if (!scanOutbound(body).ok) return { exit: 4, skipped: true, summary: "follow-up blocked by the secret scan" };
+    if (!scanOutbound(body, { repo }).ok) return { exit: 4, skipped: true, summary: "follow-up blocked by the secret scan" };
     if (!seen.has(key)) {
       if (await gh.pendingReview(repo, n)) return { exit: 0, skipped: true, summary: "skipped: you have a pending review on this PR; submit or delete it, then run again" };
       url = (await gh.postReview(repo, n, { commitOID: head, event: "COMMENT", body, threads: p.inline })).url;

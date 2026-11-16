@@ -7,6 +7,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scanOutbound, redact } from "../lib/secrets.mjs";
 
+// A developer's own ~/.config/secret-scan must not change these results.
+process.env.SECRET_SCAN_CONFIG = mkdtempSync(join(tmpdir(), "ss-empty-"));
+
 const r = (c, n) => c.repeat(n);
 const cases = {
   "aws-access-key-id": "AKIA" + r("X", 16),
@@ -139,18 +142,63 @@ test("real gitleaks flags a random token and passes clean text", { skip: !hasGit
   assert.deepEqual(scanOutbound("Looks fine, but check GH_TOKEN handling."), { ok: true, hits: [] });
 });
 
-test("the outbound scan applies the local secret-scan config: private names, sops values, allow list", (t) => {
+function withConfig(t, files) {
   const dir = mkdtempSync(join(tmpdir(), "ss-"));
+  for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), typeof text === "function" ? text(dir) : text);
   const old = process.env.SECRET_SCAN_CONFIG;
   process.env.SECRET_SCAN_CONFIG = dir;
-  t.after(() => { if (old === undefined) delete process.env.SECRET_SCAN_CONFIG; else process.env.SECRET_SCAN_CONFIG = old; });
+  t.after(() => { process.env.SECRET_SCAN_CONFIG = old; });
+  return dir;
+}
+
+test("the outbound scan applies the local secret-scan config: private names, sops values, allow list", (t) => {
   const value = "v4lue" + "x".repeat(12);
-  writeFileSync(join(dir, "private.txt"), "example\\.internal\n");
-  writeFileSync(join(dir, "creds.env"), `export API_KEY="${value}"\n`);
-  writeFileSync(join(dir, "sops-files.txt"), join(dir, "creds.env"));
+  const dir = withConfig(t, { "private.txt": "example\\.internal\n", "creds.env": `export API_KEY="${value}"\n`, "sops-files.txt": (d) => join(d, "creds.env") });
   const res = scanOutbound(`ping db.example.internal with ${value}`);
   assert.deepEqual(res.hits.map((h) => h.split(":")[0]), ["private-infra", "sops-value"]);
   assert.ok(res.hits.every((h) => !h.includes("example") && !h.includes(value)));
   writeFileSync(join(dir, "allow.txt"), res.hits.map((h) => `${/fp (\w+)/.exec(h)[1]} test fixture`).join("\n"));
   assert.deepEqual(scanOutbound(`ping db.example.internal with ${value}`), { ok: true, hits: [] });
+});
+
+test("a trailing # comment on a config line is dropped; \\# is a literal #", (t) => {
+  const value = "v4lue" + "y".repeat(12);
+  withConfig(t, {
+    "private.txt": "example\\.internal # our domain\nbuild\\#7\n",
+    "creds.env": `TOKEN=${value}\n`,
+    "sops-files.txt": (d) => `${join(d, "creds.env")}   # rendered by sops-nix\n`,
+  });
+  assert.equal(scanOutbound("deploy on db01.example.internal").ok, false);
+  assert.equal(scanOutbound("see build#7").ok, false);
+  assert.equal(scanOutbound(`uses ${value}`).ok, false);
+});
+
+test("a config file that is there but unreadable blocks; a missing one is skipped", { skip: process.getuid?.() === 0 && "root reads every file" }, (t) => {
+  const dir = withConfig(t, { "private.txt": "example\\.internal\n" });
+  assert.deepEqual(scanOutbound("clean text"), { ok: true, hits: [] });
+  chmodSync(join(dir, "private.txt"), 0o000);
+  t.after(() => chmodSync(join(dir, "private.txt"), 0o600));
+  const res = scanOutbound("clean text");
+  assert.equal(res.ok, false);
+  assert.match(res.hits[0], /^secret-scan: config unreadable \(EACCES\)/);
+  writeFileSync(join(dir, "sops-files.txt"), join(dir, "nope.env"));
+  chmodSync(join(dir, "private.txt"), 0o600);
+  assert.deepEqual(scanOutbound("clean text"), { ok: true, hits: [] });
+});
+
+test("a repo in private-repos.txt skips the private set through the library too; no repo is strict", (t) => {
+  withConfig(t, { "private.txt": "example\\.internal\n", "private-repos.txt": "me/infra\n" });
+  assert.equal(scanOutbound("db01.example.internal", { repo: "me/infra" }).ok, true);
+  assert.equal(scanOutbound("db01.example.internal", { repo: "me/public" }).ok, false);
+  assert.equal(scanOutbound("db01.example.internal").ok, false);
+});
+
+test("many hits in a big diff stay fast (line numbers are not recounted per hit)", () => {
+  const line = `+const k = "${cases["aws-access-key-id"]}";\n`;
+  const text = "+x\n".repeat(100000) + line.repeat(3000);
+  const t0 = Date.now();
+  const res = scanOutbound(text);
+  assert.equal(res.hits.length, 3000);
+  assert.match(res.hits.at(-1), /\(line 103000, fp/);
+  assert.ok(Date.now() - t0 < 3000, `took ${Date.now() - t0} ms`);
 });

@@ -2,7 +2,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { scanOutbound } from "../../../pr-review/scripts/lib/secrets.mjs";
+import { originRepo, scanOutbound } from "../../../pr-review/scripts/lib/secrets.mjs";
 import { checkBranch } from "./check.mjs";
 import { Blocked, Usage, readRecord } from "./counts.mjs";
 import { readOverride } from "./detect.mjs";
@@ -44,9 +44,9 @@ function gh(dir, args) {
 const openPrOf = (dir, branch) => JSON.parse(gh(dir, ["pr", "list", "--head", branch, "--state", "open", "--json", "number,url"]))[0] ?? null;
 
 // secret-scan (#39) when installed, else the pr-review scan. Hits are masked by both.
-function secretHits(text) {
-  const r = spawnSync(process.env.PR_OPEN_SECRET_SCAN || "secret-scan", [], { input: text, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
-  if (r.error?.code === "ENOENT") return scanOutbound(text).hits;
+function secretHits(dir, text) {
+  const r = spawnSync(process.env.PR_OPEN_SECRET_SCAN || "secret-scan", [], { cwd: dir, input: text, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+  if (r.error?.code === "ENOENT") return scanOutbound(text, { repo: originRepo(dir) }).hits;
   if (r.error) return [`secret-scan: ${r.error.message}`];
   return r.status === 0 ? [] : [String(r.stderr || "secret-scan: hit").trim()];
 }
@@ -96,7 +96,7 @@ export async function openPr(dir, { title, bodyFile, base: wanted, draft = false
 
   // The secret scan sees everything that is posted: every commit's patch and message, the title, the final body.
   const final = buildBody({ body, record, parent, parentPr: parentPr?.number });
-  const hits = secretHits(`${git(dir, "log", "-p", "--cc", "--no-ext-diff", "--no-textconv", "--format=%B", `${ref}..${sha}`)}\n${title}\n${final}`);
+  const hits = secretHits(dir, `${git(dir, "log", "-p", "--cc", "--no-ext-diff", "--no-textconv", "--format=%B", `${ref}..${sha}`)}\n${title}\n${final}`);
   if (hits.length) throw new Blocked("the secret scan found a hit", { hits });
 
   if (!/#\d+/.test(body)) warnings.push("no linked issue");
