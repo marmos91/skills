@@ -1,7 +1,7 @@
 import "./hermetic.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, existsSync, readFileSync } from "node:fs";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -55,6 +55,18 @@ test("answer drop learns nothing until a review run applies it", () => {
   const r = cli(fx, "answer", queueQuestion(stateRoot("o/r"), QUESTION), "drop");
   assert.equal(r.status, 0, r.stderr);
   assert.equal(existsSync(join(fx.state, "learnings.md")), false);
+});
+
+test("learnings forget removes a learned key from the local file", () => {
+  const fx = fixture();
+  const [a, b] = ["a".repeat(40), "b".repeat(40)];
+  mkdirSync(fx.state, { recursive: true });
+  writeFileSync(join(fx.state, "learnings.md"), `- ${a} PR #1: x\n- ${b} PR #2: y\n`);
+  let r = cli(fx, "learnings", "forget", a);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(readFileSync(join(fx.state, "learnings.md"), "utf8"), `- ${b} PR #2: y\n`);
+  assert.equal(cli(fx, "learnings", "forget", a).status, 1, "already gone");
+  assert.equal(cli(fx, "learnings", "forget", "nope").status, 1, "not a key");
 });
 
 test("a command with no --repo and no git remote is a usage error", () => {

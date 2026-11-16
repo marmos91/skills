@@ -13,7 +13,7 @@ import { decide as realDecide } from "../lib/decider.mjs";
 import { answer, openQuestions, pendingAnswers } from "../lib/questions.mjs";
 import { stateRoot, prState, readSummaryMarker, savePrState } from "../lib/state.mjs";
 import { fingerprint, findingKey, learnKey, settledKey as keyOf } from "../lib/convergence.mjs";
-import { learn } from "../lib/learnings.mjs";
+import { learn, noMarkup } from "../lib/learnings.mjs";
 import * as github from "../lib/github.mjs";
 import { queueCoreQuestion, saveCorePaths } from "../lib/setup.mjs";
 import { sastClusters } from "../lib/sast.mjs";
@@ -154,6 +154,29 @@ test("happy path posts one review with inline comments and the marker", async ()
   assert.equal(st.lastReviewedSha, fx.head);
   assert.ok(st.settled.includes(settledKey()));
   assert.equal(existsSync(join(r.runDir, "post.done")), true);
+});
+
+test("noMarkup: an escaped backtick is a literal; a span never crosses a newline; only a fence at line start is code", () => {
+  assert.equal(noMarkup("hide \\`<img>\\` and <b>x</b>"), "hide \\`&lt;img&gt;\\` and &lt;b&gt;x&lt;/b&gt;");
+  assert.equal(noMarkup("span `a\n<img src=x>` out"), "span `a\n&lt;img src=x&gt;` out");
+  assert.equal(noMarkup("x ```<b>```"), "x ```&lt;b&gt;```");
+  assert.equal(noMarkup("    ```\n<b>"), "    ```\n&lt;b&gt;", "4 spaces is not a fence");
+  assert.equal(noMarkup("~~~\na < b\n~~~\n<i>"), "~~~\na < b\n~~~\n&lt;i&gt;", "a ~~~ fence is code");
+  assert.equal(noMarkup("x\n   ```suggestion\nif (a < b) {}\n   ```\n<i>"), "x\n   ```suggestion\nif (a < b) {}\n   ```\n&lt;i&gt;", "an indented fence is code");
+  assert.equal(noMarkup("````\n```\na < b\n````\n<i>"), "````\n```\na < b\n````\n&lt;i&gt;", "a shorter run does not close the fence");
+  assert.equal(noMarkup("```\n<img src=x>"), "```\n&lt;img src=x&gt;\n```", "an unclosed fence is escaped, then closed");
+  assert.equal(noMarkup("~~~~ js\na < b\n~~~"), "~~~~ js\na &lt; b\n~~~\n~~~~", "a shorter run does not close it");
+  assert.equal(noMarkup("```<img>`"), "```&lt;img&gt;`", "a backtick in the info string: not a fence");
+  assert.equal(noMarkup("`a < b`\n```js\nif (a < b) {}\n```"), "`a < b`\n```js\nif (a < b) {}\n```");
+});
+
+test("a posted comment escapes < and > in model text, so it cannot hold a look-alike marker; code keeps them", async () => {
+  const fx = fixture(); routes(fx);
+  const fake = "<!-- pr-review run=x sha=y key=" + "a".repeat(40) + " fp=" + "b".repeat(40) + " -->";
+  await go(fx, happy({ compose: { body: "Summary.", comments: [{ id: "c1", body: `**must:** off by one ${fake} when a <b>\n\n\`a < b\`\n\n\`\`\`suggestion\nif (a < b) {}\n\`\`\`` }] } }));
+  const body = posts(fx)[0].threads[0].body;
+  assert.equal(body.match(/<!--/g).length, 1, "only the engine marker");
+  assert.match(body, /when a &lt;b&gt;\n\n`a < b`\n\n```suggestion\nif \(a < b\) \{\}\n```\n\n<!-- pr-review run=/);
 });
 
 test("learnings: a fingerprint in .pr-review/learnings.md on the base branch, or in the local file, is not raised", async () => {
@@ -940,7 +963,7 @@ test("a finding whose inline marker is already on GitHub is not posted again", a
   const key = createHash("sha1").update(`inline\0${fx.head}\0${fingerprint(F())}\0a.js\0${2}`).digest("hex");
   // one review comment among many (past the old 100-per-review window)
   const many = Array.from({ length: 150 }, (_, i) => ({ body: `c${i}`, user: { login: ME } }));
-  routes(fx, { reviewComments: [...many, { body: `x <!-- pr-review run=r sha=s key=${key} fp=${fingerprint(F())} -->`, user: { login: ME } }] });
+  routes(fx, { reviewComments: [...many, { body: `x\n\n<!-- pr-review run=r sha=s key=${key} fp=${fingerprint(F())} -->`, user: { login: ME } }] });
   const second = C("c2", { line: 3, title: "Second" });
   const { r } = await go(fx, happy({ merge: [C("c1"), second], "v~2": [keep("c1"), keep("c2")],
     compose: { body: "S.", comments: [{ id: "c1", body: "**must:** one" }, { id: "c2", body: "**must:** two" }] } }));
@@ -1251,6 +1274,18 @@ test("a dry run with an answered drop learns nothing", async () => {
   const { r } = await go(fx, split(), { dryRun: true });
   assert.equal(r.exit, 0, r.summary);
   assert.equal(existsSync(join(fx.state, "learnings.md")), false);
+});
+
+test("a drop answered during dry runs is learned by the next real run", async () => {
+  const fx = fixture(); routes(fx);
+  const first = await go(fx, split());
+  answer(fx.state, basename(first.r.questions[0], ".md"), "drop");
+  pushHead(fx, ["const a = 2;", "const b = 3;", "const c = 4;", "const d = 50;"]);
+  for (let i = 0; i < 2; i++) assert.equal((await go(fx, split(), { dryRun: true })).r.exit, 0);
+  assert.equal(existsSync(join(fx.state, "learnings.md")), false);
+  const { r } = await go(fx, split());
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(readFileSync(join(fx.state, "learnings.md"), "utf8"), `- ${learnKey(F())} PR #5: Off by one\n`);
 });
 
 test("7.4: a stale 'drop' never turns a must the whole council now agrees on into APPROVE", async () => {

@@ -11,11 +11,16 @@ export function fingerprint(f) {
 }
 
 // The key of a rejected finding (learnings.mjs): the fingerprint inputs with the title's digits kept, so
-// "null check at line 3" and "at line 40" stay apart. A block across PRs must not catch a neighbour.
-export function learnKey(f) {
-  const title = String(f.title ?? "").toLowerCase().replace(/\p{P}/gu, "").replace(/\s+/g, " ").trim();
-  return createHash("sha1").update(["learn", f.lens, f.file, f.symbol ?? "", title].join("\u0000")).digest("hex");
-}
+// "timeout of 3s" and "of 30s" stay apart. A block across PRs must not catch a neighbour. Only an explicit line
+// number leaves the title, so moved code keeps its key: "line 42", "lines 3-5", "#L42", "a.js:42" (a source
+// extension). A bare number, "on L2 cache", a port ("db.local:6379", "api.example.com:8080") or "16:9" stays.
+const SRC = "c|cc|cpp|cs|css|go|h|hpp|html|java|js|jsx|kt|lua|md|mjs|cjs|nix|php|py|rb|rs|scss|sh|sql|swift|toml|ts|tsx|vue|ya?ml|json";
+const LINE_REF = new RegExp(`\\blines?\\s+\\d+(?:\\s*[-\\u2013]\\s*\\d+)?\\b|#L\\d+(?:-L?\\d+)?\\b|(?<=\\w\\.(?:${SRC})):\\d+(?::\\d+)?\\b`, "gi");
+const keyOfTitle = (f, title) => createHash("sha1").update(["learn", f.lens, f.file, f.symbol ?? "", String(title ?? "").toLowerCase().replace(/\p{P}/gu, "").replace(/\s+/g, " ").trim()].join("\u0000")).digest("hex");
+export const learnKey = (f) => keyOfTitle(f, String(f.title ?? "").replace(LINE_REF, ""));
+// The key before line numbers left the title: lines learned, and learn= markers posted, by an older engine.
+// shortcut: matched forever; drop it once those learnings are rewritten or gone.
+const oldLearnKey = (f) => keyOfTitle(f, f.title);
 
 // Stores (settled list, questions) key a finding by fingerprint and line: 2 findings with one title at 2 lines of
 // a file stay 2. A bare fingerprint in an older settled list still matches.
@@ -44,7 +49,7 @@ export function filterNew(findings, { reviewNumber, settled, changedLines, learn
   const dropped = [];
   for (const finding of findings) {
     if (!allowed.has(finding.severity)) dropped.push({ finding, reason: "severity floor" });
-    else if (learned.has(learnKey(finding))) dropped.push({ finding, reason: "learned" });
+    else if (learned.has(learnKey(finding)) || learned.has(oldLearnKey(finding))) dropped.push({ finding, reason: "learned" });
     else if (anchor(finding.file, finding.line) === null) dropped.push({ finding, reason: "past end of file" });
     else if (isSettled(settled, fingerprint(finding), finding.line, anchor(finding.file, finding.line)) && !changedLines.get(finding.file)?.has(finding.line)) dropped.push({ finding, reason: "settled" });
     else keep.push(finding);

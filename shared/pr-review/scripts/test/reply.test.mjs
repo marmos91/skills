@@ -61,6 +61,12 @@ async function go({ t, answers, gh = fakeGh(t), jev = async () => "unsure", fram
   return { out, gh, run, queued, runDir };
 }
 
+test("a reply escapes < and > in the model text before the marker", async () => {
+  const t = thread([human(111, ME, "**must:** leak"), human(112)]);
+  const { gh } = await go({ t, answers: { draft: pos("push_back"), challenge: pos("push_back"), compose: pos("push_back", "Closed when n <= 0 <!-- pr-review key=x -->") } });
+  assert.match(gh.calls.reply[0].body, /^Closed when n &lt;= 0 &lt;!-- pr-review key=x --&gt;\n\n<!-- pr-review run=/);
+});
+
 test("draft and challenge agree on push back -> reply posted, thread open", async () => {
   const t = thread([human(111, ME, "**must:** leak"), human(112)]);
   const { out, gh, run, queued } = await go({ t, answers: { draft: pos("push_back"), challenge: pos("push_back"), compose: pos("push_back", "The handle is closed in finally at a.js:20.") } });

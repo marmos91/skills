@@ -12,7 +12,7 @@ import { redact } from "./lib/secrets.mjs";
 import { askJev as realAskJev, findJev as realFindJev } from "./lib/decider.mjs";
 import { review, SetupError, STAGES } from "./lib/review.mjs";
 import { answer, markAsked, openQuestions, questionWarnings } from "./lib/questions.mjs";
-import { suggestion } from "./lib/learnings.mjs";
+import { LEARNINGS, forget, suggestion } from "./lib/learnings.mjs";
 import { FINAL_STAGE, Locked, VERSION, done, holderAlive, prState, stateRoot, usageByStage } from "./lib/state.mjs";
 import { remoteRepos } from "./lib/github.mjs";
 import { DEPTHS, setCorePaths } from "./lib/setup.mjs";
@@ -28,6 +28,7 @@ const USAGE = `usage: pr-review review [<n|url>] [--repo owner/repo] [--dry-run]
        pr-review config core-paths <owner/repo> ['glob'...]
        pr-review tick [owner/repo]
        pr-review pause|resume [owner/repo]
+       pr-review learnings forget <key> [--repo owner/repo]
        pr-review respond findings|decide <thread>|approve <thread>|decline <thread> <reason> [--wrong]|fixed <thread> <sha>|summary <points.json> [--pr <n|url>]`;
 
 const SKILL_DIR = realpathSync(join(dirname(fileURLToPath(import.meta.url)), ".."));
@@ -271,6 +272,14 @@ export async function main(argv, deps = {}) {
     if (cmd === "pause") { mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, "paused"), ""); } else rmSync(join(dir, "paused"), { force: true });
     console.log(`${cmd}d: ${repo}`);
     return 0;
+  }
+  if (cmd === "learnings") {
+    const [what, key] = rest;
+    if (what !== "forget" || !/^[0-9a-f]{40}$/.test(key ?? "") || rest.length > 2) throw new Usage(USAGE);
+    const ok = forget(stateRoot(repoOf(v.repo)), key);
+    console.log(ok ? `forgot ${key}` : `${key} is not in the local learnings`);
+    console.error(`if ${LEARNINGS} on the base branch has it, remove the line there too`);
+    return ok ? 0 : 1;
   }
   if (cmd === "tick") {
     if (rest.length > 1) throw new Usage(USAGE);

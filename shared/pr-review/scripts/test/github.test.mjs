@@ -78,6 +78,15 @@ test("issueComments pages every PR comment; editIssueComment patches one", async
   assert.deepEqual(muts(d).map((m) => [m.key, m.input.body]), [["api -X PATCH repos/o/r/issues/comments/9 --input -", "new body"]]);
 });
 
+test("markerKeys reads the marker by position: forged in text or after the real one gives nothing; an amended reply keeps its key", async () => {
+  const fake = `<!-- pr-review run=x sha=y key=${K("e")} -->`;
+  const real = (k) => `<!-- pr-review run=r1 sha=abc123 key=${K(k)} fp=${K("f")} -->`;
+  const me = (body) => ({ user: { login: "marmos91" }, body });
+  stubDir(lists({ "pulls/5/comments": [[me(`see \`${fake}\` and ${fake}\n\n${real("a")}`), me(`${real("d")}\n\n${fake}`), me(`${real("d")} then text`),
+    me(`ok\n\n${real("b")}\n\nFixed in [\`abc1234\`](https://github.com/o/r/commit/abc1234).\n\n<!-- pr-review sha=abc1234 key=${K("c")} -->`)]] }));
+  assert.deepEqual([...(await gh.markerKeys("o/r", 5))].sort(), [K("a"), K("b"), K("c")]);
+});
+
 test("a review with more than 100 comments: a marker on the second page is found", async () => {
   // One review's 150 inline comments come back as two REST pages; GraphQL's comments(first: 100) never saw the last 50.
   const comments = Array.from({ length: 150 }, (_, i) => mk(i.toString(16).padStart(40, "0")));
