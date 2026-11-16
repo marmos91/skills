@@ -151,14 +151,21 @@ test("decline: a short reason on the first comment, the thread stays open; no se
   assert.equal(again.calls.reply.length, 0);
 });
 
-test("decline: a council finding is learned in the local learnings file with the reason; other threads are not", async () => {
-  freshState();
-  const fp = "a".repeat(40), council = c(1, ME, `**must:** x\n\n<!-- pr-review run=r1 sha=${SHA} key=${"b".repeat(40)} fp=${fp} -->`);
-  const r = await decline({ repo: REPO, n: N, threadId: "T1", reason: "Not a bug:\nthe guard covers it.", gh: fakeGh([th("T1", [council])]) });
-  assert.deepEqual(r.learned, [`- ${fp} PR #7: Not a bug: the guard covers it.`]);
+const LK = "a".repeat(40), councilBy = (author) => c(1, author, `**must:** x\n\n<!-- pr-review run=r1 sha=${SHA} key=${"b".repeat(40)} learn=${LK} fp=${"d".repeat(40)} -->`);
+const declineOf = (author, wrong) => { freshState(); return decline({ repo: REPO, n: N, threadId: "T1", reason: "Not a bug:\nthe guard covers it.", wrong, gh: fakeGh([th("T1", [councilBy(author)])]) }); };
+
+test("decline --wrong: our council finding is learned in the local learnings file with the reason", async () => {
+  const r = await declineOf(ME, true);
+  assert.deepEqual(r.learned, [`- ${LK} PR #7: Not a bug: the guard covers it.`]);
   assert.equal(readFileSync(join(stateRoot(REPO), "learnings.md"), "utf8"), `${r.learned[0]}\n`);
-  freshState();
-  assert.deepEqual((await decline({ repo: REPO, n: N, threadId: "T1", reason: "No.", gh: fakeGh([th("T1", [bot(1, "x")])]) })).learned, []);
+});
+
+test("decline without --wrong (out of scope) learns nothing", async () => {
+  assert.deepEqual((await declineOf(ME, false)).learned, []);
+});
+
+test("decline --wrong: a marker copied into another author's comment learns nothing", async () => {
+  assert.deepEqual((await declineOf("mallory", true)).learned, []);
 });
 
 test("fixed: posts and resolves only on a jev yes; no or unsure posts nothing", async () => {

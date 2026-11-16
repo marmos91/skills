@@ -12,7 +12,8 @@ import { redact } from "./lib/secrets.mjs";
 import { askJev as realAskJev, findJev as realFindJev } from "./lib/decider.mjs";
 import { review, SetupError, STAGES } from "./lib/review.mjs";
 import { answer, markAsked, openQuestions, questionWarnings } from "./lib/questions.mjs";
-import { learn, suggestion } from "./lib/learnings.mjs";
+import { learn, suggestion, unlearn } from "./lib/learnings.mjs";
+import { learnKey } from "./lib/convergence.mjs";
 import { FINAL_STAGE, Locked, VERSION, done, holderAlive, prState, stateRoot, usageByStage } from "./lib/state.mjs";
 import { remoteRepos } from "./lib/github.mjs";
 import { DEPTHS, setCorePaths } from "./lib/setup.mjs";
@@ -28,7 +29,7 @@ const USAGE = `usage: pr-review review [<n|url>] [--repo owner/repo] [--dry-run]
        pr-review config core-paths <owner/repo> ['glob'...]
        pr-review tick [owner/repo]
        pr-review pause|resume [owner/repo]
-       pr-review respond findings|decide <thread>|approve <thread>|decline <thread> <reason>|fixed <thread> <sha>|summary <points.json> [--pr <n|url>]`;
+       pr-review respond findings|decide <thread>|approve <thread>|decline <thread> <reason> [--wrong]|fixed <thread> <sha>|summary <points.json> [--pr <n|url>]`;
 
 const SKILL_DIR = realpathSync(join(dirname(fileURLToPath(import.meta.url)), ".."));
 
@@ -196,7 +197,7 @@ async function respondCmd([action, ...args], v, deps) {
     if (action === "findings") out = await r.findings({ repo, n, gh, config });
     else if (action === "decide") out = await r.decide({ repo, n, threadId: a, gh, jev, show, fileDiff });
     else if (action === "approve") out = await r.approve({ repo, n, threadId: a, gh });
-    else if (action === "decline") out = await r.decline({ repo, n, threadId: a, reason: b, gh });
+    else if (action === "decline") out = await r.decline({ repo, n, threadId: a, reason: b, wrong: !!v.wrong, gh });
     else if (action === "fixed") {
       const full = inRepo("rev-parse", "--verify", "--quiet", `${b}^{commit}`);
       if (!/^[0-9a-f]{7,40}$/.test(b) || full.status !== 0) throw new Usage(`not a commit sha in this clone: ${b}`);
@@ -223,7 +224,7 @@ export async function main(argv, deps = {}) {
     args: argv, allowPositionals: true,
     options: {
       repo: { type: "string" }, "dry-run": { type: "boolean" }, lens: { type: "string" }, until: { type: "string" },
-      config: { type: "string" }, effort: { type: "string" }, depth: { type: "string" }, "max-diff-lines": { type: "string" }, restart: { type: "boolean" }, loop: { type: "boolean" }, pr: { type: "string" }, help: { type: "boolean", short: "h" },
+      config: { type: "string" }, effort: { type: "string" }, depth: { type: "string" }, "max-diff-lines": { type: "string" }, restart: { type: "boolean" }, loop: { type: "boolean" }, wrong: { type: "boolean" }, pr: { type: "string" }, help: { type: "boolean", short: "h" },
     },
   });
   if (v.help || !cmd) { console.log(USAGE); return v.help ? 0 : 1; }
@@ -235,9 +236,14 @@ export async function main(argv, deps = {}) {
     let q;
     try { q = answer(rs, id, option); } catch (e) { throw new Usage(e.message); }
     console.log(`${id}: ${option}`);
-    // a drop of a council finding is learned; a loop question (kind) or a held secret is not about the finding
-    const lines = option === "drop" && !q.finding?.kind && !q.finding?.secret ? learn(rs, [q.fingerprint], `PR #${q.pr}: ${q.finding?.title ?? ""}`) : [];
-    if (lines.length) console.log(suggestion(lines));
+    // a drop of a council finding is learned, and another answer unlearns it; a loop question (kind) or a held
+    // secret is not about the finding
+    if (!q.finding?.kind && !q.finding?.secret) {
+      const key = learnKey(q.finding);
+      if (option !== "drop") unlearn(rs, [key]);
+      const lines = option === "drop" ? learn(rs, [key], `PR #${q.pr}: ${q.finding.title ?? ""}`) : [];
+      if (lines.length) console.log(suggestion(lines));
+    }
     return 0;
   }
   if (cmd === "status") {

@@ -44,9 +44,11 @@ the full command each time: zsh does not split a variable into words.
      - the finding is correct and in scope: go to step 3;
      - you confirm it is wrong or out of scope: write one or two sentences
        why, then run `$P decline <id> "<reason>"`. The thread stays open for
-       the reviewer. A declined council finding is learned (`learned` in the
-       output): show the user the line to commit to `.pr-review/learnings.md`
-       on the base branch;
+       the reviewer. Add `--wrong` only when the finding is wrong, not when
+       it is only out of scope: a council finding declined with `--wrong` is
+       learned, and later reviews never raise it again (`learned` in the
+       output). Show the user the line to commit to
+       `.pr-review/learnings.md` on the base branch;
      - it needs a design decision, or you cannot tell: ask the user (Claude Code: `AskUserQuestion`; pi:
        `ask_user`). Show the file, the line, the finding and the `reason`.
        Then fix or decline as the user says.

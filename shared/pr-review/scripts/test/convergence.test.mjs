@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fingerprint, allowedSeverities, filterNew, budgetLeft } from "../lib/convergence.mjs";
+import { fingerprint, allowedSeverities, filterNew, budgetLeft, learnKey } from "../lib/convergence.mjs";
 
 const f = (o = {}) => ({ lens: "bugs", file: "a.js", line: 42, severity: "must", title: "Null deref in parse()", ...o });
 
@@ -25,11 +25,16 @@ test("settled fingerprint is dropped unless its lines changed", () => {
   r = filterNew([x], { reviewNumber: 1, settled, changedLines: new Map([["a.js", new Set([7])]]) });
   assert.equal(r.keep.length, 0);
 });
-test("a learned fingerprint is dropped, also on a changed line", () => {
+test("a learned finding is dropped, also on a changed line", () => {
   const x = f();
-  const r = filterNew([x], { reviewNumber: 1, settled: new Set(), changedLines: new Map([["a.js", new Set([42])]]), learned: new Set([fingerprint(x)]) });
+  const r = filterNew([x], { reviewNumber: 1, settled: new Set(), changedLines: new Map([["a.js", new Set([42])]]), learned: new Set([learnKey(x)]) });
   assert.equal(r.keep.length, 0);
   assert.equal(r.dropped[0].reason, "learned");
+});
+test("a learned finding does not drop one whose title differs only in digits", () => {
+  const [a, b] = [f({ title: "Missing null check at line 3" }), f({ title: "Missing null check at line 40" })];
+  assert.equal(fingerprint(a), fingerprint(b));
+  assert.deepEqual(filterNew([b], { reviewNumber: 1, settled: new Set(), changedLines: new Map(), learned: new Set([learnKey(a)]) }).keep, [b]);
 });
 test("titles that normalize to empty fall back to the case", () => {
   assert.notEqual(fingerprint(f({ title: "1.", case: "a -> b" })), fingerprint(f({ title: "2!", case: "c -> d" })));

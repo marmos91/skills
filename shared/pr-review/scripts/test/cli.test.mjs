@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { openQuestions, queueQuestion } from "../lib/questions.mjs";
 import { queueCoreQuestion, readCorePaths } from "../lib/setup.mjs";
 import { stateRoot } from "../lib/state.mjs";
+import { learnKey } from "../lib/convergence.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const MAIN = join(here, "..", "main.mjs");
@@ -49,14 +50,23 @@ test("answer: no args lists open questions as JSON; an answer closes the questio
   assert.equal(cli(fx, "answer", id, "maybe").status, 1);
 });
 
-test("answer drop: the finding's fingerprint is learned locally and suggested for the base branch", () => {
+test("answer drop: the finding is learned locally and suggested for the base branch", () => {
   const fx = fixture();
   process.env.XDG_STATE_HOME = fx.env.XDG_STATE_HOME;
-  const fp = "c".repeat(40), id = queueQuestion(stateRoot("o/r"), { ...QUESTION, fingerprint: fp });
+  const key = learnKey(QUESTION.finding), id = queueQuestion(stateRoot("o/r"), QUESTION);
   const r = cli(fx, "answer", id, "drop");
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, new RegExp(`add to \\.pr-review/learnings\\.md on the base branch.*\\n- ${fp} PR #7: Off by one\\n$`, "s"));
-  assert.equal(readFileSync(join(fx.state, "learnings.md"), "utf8"), `- ${fp} PR #7: Off by one\n`);
+  assert.match(r.stdout, new RegExp(`add to \\.pr-review/learnings\\.md on the base branch.*\\n- ${key} PR #7: Off by one\\n$`, "s"));
+  assert.equal(readFileSync(join(fx.state, "learnings.md"), "utf8"), `- ${key} PR #7: Off by one\n`);
+});
+
+test("answer: a drop changed to post before it is applied is no longer learned", () => {
+  const fx = fixture();
+  process.env.XDG_STATE_HOME = fx.env.XDG_STATE_HOME;
+  const id = queueQuestion(stateRoot("o/r"), QUESTION);
+  cli(fx, "answer", id, "drop");
+  assert.equal(cli(fx, "answer", id, "post").status, 0);
+  assert.equal(readFileSync(join(fx.state, "learnings.md"), "utf8"), "");
 });
 
 test("a command with no --repo and no git remote is a usage error", () => {
