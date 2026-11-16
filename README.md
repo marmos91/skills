@@ -49,6 +49,7 @@ installer and `install.sh` link each one into `~/.local/bin` (`BIN_DIR`). Add a 
 | secret-scan | both | One check before any push or post: secrets (gitleaks or built-in patterns), private infrastructure names from a local untracked list, and values from your sops-rendered files; prints only masked hits; local allow list with reasons. `pr-review`, `pr-respond` and `pr-open` use it |
 | pr-open | both | Takes a finished branch to an open PR: the project's format, lint and test commands, signed commits with no AI mentions, real test counts in the body, a secret scan, the linked issue, and a parent marker for stacked PRs |
 | pr-land | both | Merges a converged PR and cleans up: checks the live state (CI, reviews, threads), retargets and rebases stacked PRs, squash-merges after a secret scan, deletes the branch and local worktree, ticks the tracking issue and closes fixed issues |
+| pr-converge | both | Drives one PR from open to merged: a pr-review round, pr-respond on its findings, again until a round adds nothing new, then pr-land, only with `--merge`; round cap, no-progress stop, pauses on a user question or a push by someone else; resumable, one summary comment at the end |
 | pr-review-loop | both | Runs `pr-review` and thread replies for one repo on an interval (`/loop 30m`, cron or launchd); queues disagreements as questions, never blocks, never changes code or merges; pause and resume |
 
 (graphify and humanizer were removed from this repo — they exist upstream:

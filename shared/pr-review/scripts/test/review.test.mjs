@@ -294,6 +294,8 @@ test("a comment held by a private name: answer post cannot redact it, so it stay
   const reopened = openQuestions(fx.state);
   assert.equal(reopened.length, 1, "asked again");
   assert.equal(reopened[0].fingerprint, q[0].fingerprint);
+  // the follow-up returns the question it asked again, as a full run does: a caller must not read exit 3 as clean
+  assert.deepEqual(again.r.questions, [join(fx.state, "questions", `${reopened[0].id}.md`)]);
   // the hit allowed by its fp: the next answer posts it
   writeFileSync(join(dir, "allow.txt"), `${/fp ([0-9a-f]{12})/.exec(why)[1]} the example host is public\n`);
   answer(fx.state, reopened[0].id, "post");

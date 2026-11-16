@@ -57,6 +57,8 @@ export const DEFAULTS = {
   hygiene: { enabled: true },
   // pr-respond: the review rounds on your own PR before it stops and reports
   respond: { max_rounds: 5 },
+  // pr-converge: the review rounds before the loop stops and reports
+  converge: { max_rounds: 4 },
 };
 
 // Repo level may set only these paths; "*" matches one lens name.
@@ -198,6 +200,7 @@ function validate(c, known) {
   need(["use", "ignore"].includes(c.review.ci), "review.ci", "use or ignore");
   need(isObj(c.hygiene) && typeof c.hygiene.enabled === "boolean", "hygiene.enabled", "a boolean");
   need(isObj(c.respond) && posInt(c.respond.max_rounds), "respond.max_rounds", "a positive integer");
+  need(isObj(c.converge) && posInt(c.converge.max_rounds), "converge.max_rounds", "a positive integer");
   need(["light", "full", "auto"].includes(c.review.depth), "review.depth", "light, full or auto");
   need(c.review.core_paths === undefined || strList(c.review.core_paths), "review.core_paths", "an array of strings");
   need(c.review.checks === null || Array.isArray(c.review.checks), "review.checks", "an array");

@@ -829,10 +829,10 @@ async function followUp(o, head, pst, answered) {
     savePrState(repoState, n, st);
   }
   for (const q of answered) appliedAnswer(repoState, q.id);
-  // still held: ask again (an applied question comes back fresh)
-  for (const q of held) queueQuestion(repoState, { pr: n, sha: head, fingerprint: q.fingerprint, file: q.finding.file, line: q.finding.line, snippet: "", finding: q.finding, sides: q.sides, failure: q.finding.case });
+  // still held: ask again (an applied question comes back fresh); returned like a full run's questions
+  const asked = held.map((q) => queueQuestion(repoState, { pr: n, sha: head, fingerprint: q.fingerprint, file: q.finding.file, line: q.finding.line, snippet: "", finding: q.finding, sides: q.sides, failure: q.finding.case }));
   return {
-    exit: held.length && o.mode === "interactive" ? 3 : 0, skipped: !items.length, url, event: items.length ? "COMMENT" : undefined, queueApprove: false, reasons: [],
+    exit: held.length && o.mode === "interactive" ? 3 : 0, skipped: !items.length, questions: asked.map((id) => join(repoState, "questions", `${id}.md`)), url, event: items.length ? "COMMENT" : undefined, queueApprove: false, reasons: [],
     summary: items.length ? `follow-up posted with ${items.length} answered finding(s)${url ? `: ${url}` : " (marker found on GitHub)"}` : `answers applied at ${head}; nothing to post`,
   };
 }
