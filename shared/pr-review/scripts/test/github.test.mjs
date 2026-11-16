@@ -116,6 +116,29 @@ test("postReview sends exactly one mutation with commitOID", async () => {
   assert.deepEqual(m[0].input.variables.input, { pullRequestId: "PR_node1", commitOID: "abc123", event: "COMMENT", body: "sum", threads: [{ path: "a.js", line: 3, side: "RIGHT", body: "c" }] });
 });
 
+test("postReview pages past the 100 comments the mutation lists", async () => {
+  const node = (i) => ({ url: `https://github.com/o/r/pull/5#discussion_r${i}`, body: `c${i}` });
+  stubDir({
+    "graphql PostReview": { stdout: { data: { addPullRequestReview: { pullRequestReview: { id: "PRR_1", databaseId: 77, url: "u", comments: { totalCount: 101, nodes: Array.from({ length: 100 }, (_, i) => node(i)) } } } } } },
+    "api --paginate --slurp repos/o/r/pulls/5/reviews/77/comments": { stdout: [Array.from({ length: 101 }, (_, i) => ({ html_url: node(i).url, body: node(i).body }))] },
+  });
+  const r = await gh.postReview("o/r", 5, { commitOID: "abc123", event: "COMMENT", body: "sum" });
+  assert.equal(r.comments.length, 101);
+  assert.deepEqual(r.comments[100], node(100));
+});
+
+test("postReview keeps the first 100 comments when the paged read fails after the post", async () => {
+  const node = (i) => ({ url: `https://github.com/o/r/pull/5#discussion_r${i}`, body: `c${i}` });
+  stubDir({
+    "graphql PostReview": { stdout: { data: { addPullRequestReview: { pullRequestReview: { id: "PRR_1", databaseId: 77, url: "u", comments: { totalCount: 101, nodes: Array.from({ length: 100 }, (_, i) => node(i)) } } } } } },
+    "api --paginate --slurp repos/o/r/pulls/5/reviews/77/comments": { stderr: "HTTP 502", exit: 1 },
+  });
+  const r = await gh.postReview("o/r", 5, { commitOID: "abc123", event: "COMMENT", body: "sum" });
+  assert.equal(r.url, "u");
+  assert.equal(r.comments.length, 100);
+  assert.match(r.commentsError, /502/);
+});
+
 test("reply and resolve are mutations", async () => {
   const d = stubDir();
   await gh.reply("o/r", 5, 111, "Agreed");

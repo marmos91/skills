@@ -128,7 +128,7 @@ export async function markerCounts(repo, n, sha) {
 export const findMarker = async (repo, n, key) => (await markerKeys(repo, n)).has(key.replace(/^key=/, ""));
 
 const POST = `mutation PostReview($input: AddPullRequestReviewInput!) {
-  addPullRequestReview(input: $input) { pullRequestReview { id url comments(first: 100) { nodes { url body } } } } }`;
+  addPullRequestReview(input: $input) { pullRequestReview { id databaseId url comments(first: 100) { totalCount nodes { url body } } } } }`;
 
 export async function postReview(repo, n, { commitOID, event, body, threads: ths = [] }) {
   if (!commitOID) throw new GhError("postReview: commitOID is required");
@@ -141,7 +141,14 @@ export async function postReview(repo, n, { commitOID, event, body, threads: ths
   };
   const d = await gql(POST, { input });
   const r = d.addPullRequestReview.pullRequestReview;
-  return { id: r.id, url: r.url, comments: r.comments?.nodes ?? [] };
+  // the reply lists 100 comments: a bigger review reads the rest through REST, fully paged.
+  // The review is posted already: a failed read keeps the first 100 and says why (commentsError).
+  let comments = r.comments?.nodes ?? [], commentsError;
+  if ((r.comments?.totalCount ?? 0) > comments.length) {
+    try { comments = (await json(["api", "--paginate", "--slurp", `repos/${repo}/pulls/${n}/reviews/${r.databaseId}/comments`])).flat().map((c) => ({ url: c.html_url, body: c.body })); }
+    catch (e) { commentsError = e.message; }
+  }
+  return { id: r.id, url: r.url, comments, ...(commentsError && { commentsError }) };
 }
 
 const EDIT_REVIEW = `mutation EditReview($id: ID!, $body: String!) {
