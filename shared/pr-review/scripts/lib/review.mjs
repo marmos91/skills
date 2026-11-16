@@ -19,7 +19,7 @@ import { hygiene as realHygiene } from "./hygiene.mjs";
 import { limiter } from "./limit.mjs";
 import { decide as realDecide } from "./decider.mjs";
 import { linkFix } from "./reply.mjs";
-import { answer, appliedAnswer, pendingAnswers, queueQuestion, waitingQuestions } from "./questions.mjs";
+import { answer, appliedAnswer, openQuestions, pendingAnswers, queueQuestion, waitingQuestions } from "./questions.mjs";
 import { applyProof, checkFix, directionOnly, isProven, markUnproven, mutantFindings, proofLine, runMutants, scopePatch, suggestionOf, uncheckedNote } from "./proof.mjs";
 import { cherryPicked, coreCandidates, depthLine, pickDepth, queueCoreQuestion, readCorePaths, runSetup, settleCoreQuestions } from "./setup.mjs";
 import { FINAL_STAGE, VERSION, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, commitStatus, summaryMarker, usageByStage, writeAtomic } from "./state.mjs";
@@ -767,7 +767,8 @@ async function once(o, restart) {
       failure: "The PR waits for a human approval.",
     });
     // Pending CI alone needs no human: answered here, the tick approves once CI is green at this head.
-    if (reasons.join() === "ci pending") answer(repoState, id, "post");
+    // never over an answer already given: the owner's drop stands
+    if (reasons.join() === "ci pending" && openQuestions(repoState).some((q) => q.id === id)) answer(repoState, id, "post");
   }
 
   // A folded finding counts as posted when its host comment is.

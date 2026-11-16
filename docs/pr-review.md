@@ -292,7 +292,8 @@ When the event is `COMMENT`, no `must` blocks and it is not your own PR, the
 body has one engine line that says why it is not an approval, for example "Not
 approved yet: CI is still running. It is approved when CI passes." Only
 pr-review-loop posts the approval, at the same head with green CI; an
-interactive review says so.
+interactive review says "pr-review-loop approves it when CI passes." An answer
+you already gave to the approve question is never replaced.
 
 ### 9. Post
 

@@ -1098,7 +1098,7 @@ test("CI is read again at post time: none at frame, red at post -> no APPROVE", 
 
 test("CI pending is the only reason: COMMENT, the approve is queued and the body says why (#82)", async () => {
   // interactive: CI alone, no human needed (answered post); loop with an untrusted author: the question stays open
-  for (const [mode, ask, why] of [["interactive", false, "CI is still running. pr-review-loop approves it when CI passes; or run pr-review again then."], ["loop", true, "CI is still running and the loop approves only a trusted author. It is approved when CI passes and you answer post to the approve question."]]) {
+  for (const [mode, ask, why] of [["interactive", false, "CI is still running. pr-review-loop approves it when CI passes."], ["loop", true, "CI is still running and the loop approves only a trusted author. It is approved when CI passes and you answer post to the approve question."]]) {
     const fx = fixture(); routes(fx);
     const gh = { ...github, checks: async () => ({ state: "pending", since: null, items: [] }) };
     const { r } = await go(fx, { all: { findings: [] }, compose: { verdict: "Nothing blocks.", body: "Fine.", comments: [] } }, { gh, mode });
@@ -1110,6 +1110,19 @@ test("CI pending is the only reason: COMMENT, the approve is queued and the body
     assert.equal(openQuestions(fx.state).filter((q) => q.finding.kind === "approve").length, ask ? 1 : 0, mode);
     assert.equal(pendingAnswers(fx.state).filter((q) => q.finding.kind === "approve" && q.answer === "post").length, ask ? 0 : 1, mode);
   }
+});
+
+test("CI pending alone never overwrites an answer already given to the approve question (#82)", async () => {
+  const fx = fixture(); routes(fx);
+  const { queueQuestion } = await import("../lib/questions.mjs");
+  const fp = createHash("sha1").update(`approve:${N}:${fx.head}`).digest("hex");
+  const id = queueQuestion(fx.state, { pr: N, sha: fx.head, fingerprint: fp, file: "(whole PR)", line: 0, snippet: "", finding: { kind: "approve", title: "Approve this PR?", case: "c" }, sides: { keep: "k", drop: "d" }, failure: "" });
+  answer(fx.state, id, "drop");
+  const gh = { ...github, checks: async () => ({ state: "pending", since: null, items: [] }) };
+  const { r } = await go(fx, { all: { findings: [] }, compose: { body: "Fine.", comments: [] } }, { gh });
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(r.queueApprove, true);
+  assert.equal(pendingAnswers(fx.state).find((q) => q.id === id)?.answer, "drop");
 });
 
 test("a CI read that fails at post time counts as unknown: no APPROVE", async () => {
