@@ -154,6 +154,15 @@ async function doctor(v, { runChild = realRunChild, askJev = realAskJev, findJev
   try { execFileSync(process.env.GH_BIN || "gh", ["auth", "status"], { stdio: "ignore" }); line("ok", "gh auth status"); }
   catch { line("FAIL", "gh auth status: not logged in (run gh auth login, or export GH_TOKEN)"); }
 
+  // A token without status write fails the pr-review status with only a log line. The probe posts to a sha that does
+  // not exist: GitHub checks the permission first (404/403), then the sha (422), so nothing is written.
+  const repo = remoteRepos()[0];
+  if (repo) {
+    const r = spawnSync(process.env.GH_BIN || "gh", ["api", "-X", "POST", `repos/${repo}/statuses/${"0".repeat(40)}`, "-f", "state=pending", "-f", "context=pr-review"], { encoding: "utf8" });
+    if (r.status === 0 || /HTTP 422/.test(r.stderr)) line("ok", `commit status: the token can set pr-review on ${repo}`);
+    else line("WARN", `commit status: the token cannot set pr-review on ${repo} (${redact((r.stderr || "").trim().split("\n").at(-1))}); give it the repo:status scope or Commit statuses: write`);
+  }
+
   // jev missing is a warning: the decider then queues questions.
   const bin = findJev(SKILL_DIR, process.env);
   if (!bin) line("WARN", "jev: not found; split findings become questions");
