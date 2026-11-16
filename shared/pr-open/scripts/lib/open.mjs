@@ -2,7 +2,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { scanOutbound } from "../../../pr-review/scripts/lib/secrets.mjs";
+import { rangeText, scanOutbound } from "../../../pr-review/scripts/lib/secrets.mjs";
 import { checkBranch } from "./check.mjs";
 import { Blocked, Usage, readRecord } from "./counts.mjs";
 import { readOverride } from "./detect.mjs";
@@ -99,7 +99,7 @@ export async function openPr(dir, { title, bodyFile, base: wanted, draft = false
 
   // The secret scan sees everything that is posted: every commit's patch and message, the title, the final body.
   const final = buildBody({ body, record, parent, parentPr: parentPr?.number });
-  const hits = secretHits(dir, `${git(dir, "log", "-p", "--cc", "--no-ext-diff", "--no-textconv", "--format=%B", `${ref}..${sha}`)}\n${title}\n${final}`, repo);
+  const hits = secretHits(dir, `${rangeText(dir, `${ref}..${sha}`)}\n${title}\n${final}`, repo);
   if (hits.length) throw new Blocked("the secret scan found a hit", { hits });
 
   if (!/#\d+/.test(body)) warnings.push("no linked issue");

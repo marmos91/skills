@@ -1,5 +1,5 @@
 import "../../../pr-review/scripts/test/hermetic.mjs";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -92,4 +92,47 @@ test("every hit line reaches a pipe before the exit", () => {
   const r = scan("", "big.txt");
   assert.equal(r.status, 1);
   assert.equal(r.stderr.trimEnd().split("\n").length, 50000);
+});
+
+const git = (dir, ...a) => execFileSync("git", a, { cwd: dir, encoding: "utf8", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
+
+test("more than 125k hits: every line printed, no stack overflow", () => {
+  const { dir, scan } = setup();
+  writeFileSync(join(dir, "huge.txt"), `${TOKEN}\n`.repeat(150000));
+  const r = scan("", "huge.txt");
+  assert.equal(r.status, 1, r.stderr.slice(-300));
+  assert.equal(r.stderr.trimEnd().split("\n").length, 150000);
+});
+
+test("a read error on a later file: the earlier hits still print, then the error, exit 2", () => {
+  const { dir, scan } = setup();
+  writeFileSync(join(dir, "a.txt"), `${TOKEN}\n`);
+  const r = scan("", "a.txt", "missing.md");
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /^github-token: ghp_… \(a\.txt:1, fp [0-9a-f]{12}\)\nsecret-scan: cannot read missing\.md: ENOENT/);
+});
+
+test("no --repo is strict: the cwd's origin does not opt out", () => {
+  const { dir, scan } = setup({ "private.txt": "example\\.internal\n", "private-repos.txt": "me/infra\n" });
+  git(dir, "init", "-q");
+  git(dir, "remote", "add", "origin", "git@github.com:me/infra.git");
+  assert.equal(scan(`host ${HOST}`).status, 1);
+  assert.equal(scan(`host ${HOST}`, "--repo", "me/infra").status, 0);
+});
+
+test("--range scans each commit's patch, binary-marked files included, and a bad range exits 2", () => {
+  const { dir, scan } = setup();
+  const g = (...a) => git(dir, ...a);
+  g("init", "-q", "-b", "main"); g("config", "user.name", "T"); g("config", "user.email", "t@example.com");
+  writeFileSync(join(dir, "README.md"), "x\n"); g("add", "."); g("commit", "-q", "--no-gpg-sign", "-m", "init");
+  writeFileSync(join(dir, ".gitattributes"), "* -diff\n");
+  writeFileSync(join(dir, "prod.yaml"), `token: ${TOKEN}\n`);
+  g("add", "."); g("commit", "-q", "--no-gpg-sign", "-m", "add config");
+  const r = scan("", "--range", "HEAD~1..HEAD");
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /^github-token: ghp_… \(prod\.yaml:1, fp /m);
+  assert.equal(scan("", "--range", "HEAD..HEAD").status, 0);
+  const bad = scan("", "--range", "nope..HEAD");
+  assert.equal(bad.status, 2);
+  assert.match(bad.stderr, /cannot read range nope\.\.HEAD/);
 });

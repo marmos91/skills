@@ -1,25 +1,34 @@
-// secret-scan [--repo owner/repo] [file...]: text on stdin (or the files) -> exit 0 clean, 1 hit (masked hits on stderr), 2 usage.
+// secret-scan [--repo owner/repo] [--range a..b] [file...]: text on stdin, the files, or the commits of a range
+// -> exit 0 clean, 1 hit (masked hits on stderr), 2 usage or read error (after the hits found so far).
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { findings, format, originRepo } from "../../pr-review/scripts/lib/secrets.mjs";
+import { rangeText, scanOutbound } from "../../pr-review/scripts/lib/secrets.mjs";
 
-const USAGE = "usage: secret-scan [--repo owner/repo] [file...]   (no file: reads stdin)";
+const USAGE = "usage: secret-scan [--repo owner/repo] [--range <a..b>] [file...]   (no file or range: reads stdin)";
 
 let args;
-try { args = parseArgs({ options: { repo: { type: "string" }, help: { type: "boolean", short: "h" } }, allowPositionals: true }); }
+try { args = parseArgs({ options: { repo: { type: "string" }, range: { type: "string" }, help: { type: "boolean", short: "h" } }, allowPositionals: true }); }
 catch (e) { console.error(`${e.message}\n${USAGE}`); process.exit(2); }
 if (args.values.help) { console.log(USAGE); process.exit(0); }
 
 // exitCode, not exit(): exit() drops stderr writes still pending on a pipe
 process.exitCode = (() => {
-  const repo = args.values.repo ?? originRepo();
-  const inputs = args.positionals.length ? args.positionals.map((f) => [f, f]) : [[null, "-"]];
-  const hits = [];
-  for (const [label, path] of inputs) {
+  // No --repo: strict. The cwd's origin can be a private fork of a public target.
+  const repo = args.values.repo ?? null;
+  const { range } = args.values;
+  // [name, label for hit lines, read]; a range is a diff, so its hits carry file:line
+  const inputs = [
+    ...(range ? [[`range ${range}`, null, () => rangeText(process.cwd(), range)]] : []),
+    ...args.positionals.map((f) => [f, f, () => readFileSync(f, "utf8")]),
+  ];
+  if (!inputs.length) inputs.push(["stdin", null, () => readFileSync(0, "utf8")]);
+  let hits = 0;
+  const errors = [];
+  for (const [name, label, read] of inputs) {
     let text;
-    try { text = readFileSync(path === "-" ? 0 : path, "utf8"); } catch (e) { console.error(`secret-scan: cannot read ${path}: ${e.message}`); return 2; }
-    hits.push(...findings(text, { repo, label }).filter((h) => !h.allowed));
+    try { text = read(); } catch (e) { errors.push(`secret-scan: cannot read ${name}: ${String(e.stderr || e.message).trim()}`); continue; }
+    for (const h of scanOutbound(text, { repo, label }).hits) { console.error(h); hits++; }
   }
-  for (const h of hits) console.error(format(h));
-  return hits.length ? 1 : 0;
+  for (const e of errors) console.error(e);
+  return errors.length ? 2 : hits ? 1 : 0;
 })();

@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstatSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 const L = "(?<![A-Za-z0-9])"; // \b misses tokens after "_"
 const R = "(?![A-Za-z0-9])";
@@ -23,7 +23,8 @@ const PATTERNS = [
   ["slack-webhook", /https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/_-]{20,}/g],
 ];
 
-const mask = (s) => `${String(s).slice(0, 4)}…`;
+// At most 4 characters, and never the whole value: a short value shows half.
+const mask = (s) => `${String(s).slice(0, Math.min(4, Math.floor(String(s).length / 2)))}…`;
 
 /** Replace every built-in pattern match with [REDACTED:<kind>]. */
 export function redact(text) {
@@ -40,7 +41,8 @@ function gitleaksHits(text, timeoutMs) {
     const res = spawnSync(
       "gitleaks",
       ["stdin", "--redact", "--report-format", "json", "--report-path", report],
-      { input: text, encoding: "utf8", timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 },
+      // cwd outside the scanned repo: its .gitleaks.toml or .gitleaksignore must not change the scan (GITLEAKS_CONFIG still applies)
+      { cwd: dir, input: text, encoding: "utf8", timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 },
     );
     if (res.error?.code === "ENOENT") return [];
     if (res.error || (res.status !== 0 && res.status !== 1)) return [SCANNER_ERROR];
@@ -77,20 +79,40 @@ function privatePatterns() {
   });
 }
 
-// sops-files.txt: one plain file per line, as sops-nix renders them (missing ones are skipped: other machines).
-// Each value is a secret: JSON leaves, or the value of each `key = value` / `key: value` line, or a bare line.
-// shortcut: values under 12 chars or with spaces are skipped as noise; add them to private.txt when they matter.
-const leaves = (v) => (v && typeof v === "object" ? Object.values(v).flatMap(leaves) : [String(v)]);
-function fileValues(text) {
-  try { return leaves(JSON.parse(text)); } catch { /* not JSON */ }
-  return text.split("\n").map((l) => l.trim()).filter((l) => l && !/^[#;[]/.test(l))
-    .map((l) => l.replace(/^(?:export\s+|-\s+)?[\w.-]+\s*[=:]\s*/, ""));
-}
+// sops-files.txt: one plain file per line, as sops-nix renders them; a relative path is in the config folder.
+// A missing file is skipped (other machines).
 function sopsValues() {
   return lines("sops-files.txt").flatMap((f) => {
-    const text = readIfThere(f.replace(/^~(?=\/)/, homedir()));
-    return text === null ? [] : fileValues(text).map((v) => v.trim().replace(/^(["'])(.*)\1$/, "$2")).filter((v) => v.length >= 12 && !/\s/.test(v));
+    const p = f.replace(/^~(?=\/)/, homedir());
+    const text = readIfThere(isAbsolute(p) ? p : join(configDir(), p));
+    return text === null ? [] : fileValues(text);
   });
+}
+
+const leaves = (v) => (v && typeof v === "object" ? Object.values(v).flatMap(leaves) : [String(v)]);
+/**
+ * The secret values of a rendered file: JSON leaves; else, per line, the line and the value of `key = value`,
+ * `key: value`, `export KEY=value` and `- item`, without an inline ` #` / ` ;` comment or quotes.
+ * shortcut: values under 12 chars or with spaces are skipped as noise; add them to private.txt when they matter.
+ */
+export function fileValues(text) {
+  let raw;
+  try { raw = leaves(JSON.parse(text)); } catch {
+    raw = text.split(/\r?\n/).flatMap((l) => {
+      const line = l.trim().replace(/\s+[#;].*$/, "").replace(/^(?:export\s+|-\s+)/, "");
+      if (!line || /^[#;[]|^---$/.test(line)) return [];
+      const v = line.replace(/^[\w.-]+\s*[=:]\s*/, "");
+      return v === line ? [line] : [line, v]; // the whole line too: a bare base64 value ends in `=`
+    });
+  }
+  const unq = raw.map((v) => v.trim().replace(/^(["'])(.*)\1$/, "$2"));
+  return [...new Set(unq.filter((v) => v.length >= 12 && !/\s/.test(v)))];
+}
+
+/** Every commit of a range as one text to scan: patches of merges and binary-marked files too, no textconv. */
+export function rangeText(dir, range) {
+  return execFileSync("git", ["log", "-p", "--cc", "--text", "--no-ext-diff", "--no-textconv", "--format=%B", range],
+    { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 256 * 1024 * 1024 });
 }
 
 // Where line n (1-based) is: file:line inside a unified diff, else `label:n` or `line n`.
@@ -136,14 +158,6 @@ export function findings(text, { timeoutMs = 30000, repo = null, label = null } 
     out.push({ rule: "secret-scan", masked: `config unreadable (${e.code ?? "error"})`, where: null, fp: null });
   }
   return out.map((h) => ({ ...h, allowed: !!h.fp && allowed.has(h.fp) }));
-}
-
-/** owner/repo of the GitHub origin of the clone at dir; null elsewhere (then the strict set applies). */
-export function originRepo(dir = process.cwd()) {
-  try {
-    const url = execFileSync("git", ["remote", "get-url", "origin"], { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-    return /github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?$/.exec(url)?.[1] ?? null;
-  } catch { return null; }
 }
 
 /** One line per hit: rule: masked (where, fp). */

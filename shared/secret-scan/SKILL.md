@@ -7,27 +7,33 @@ metadata:
 
 # secret-scan: one check before any push or post
 
-`secret-scan` reads text on stdin (or the files you name) and exits:
-`0` clean, `1` a hit, `2` usage error. Each hit is one line on stderr:
+`secret-scan` reads text on stdin, the files you name, or the commits of
+`--range <a..b>`, and exits: `0` clean, `1` a hit, `2` a usage or read
+error (a bad range too; the hits found so far print first). Each hit is
+one line on stderr:
 
 ```
 github-token: ghp_… (src/config.js:12, fp 3fa9c0d21b7e)
 ```
 
-the rule, the first 4 characters of the match, where it is (`file:line` in a
+the rule, the first characters of the match (at most 4, never all of a
+short one), where it is (`file:line` in a
 unified diff or a named file, else `line N`), and a fingerprint. It never
 prints a full match, and never prints the private list or the sops values.
 
 ```sh
-d=$(mktemp) && git log -p --cc --text --no-ext-diff --no-textconv --format=%B origin/main..HEAD > "$d" && secret-scan "$d"   # the commits you are about to push
-git diff --cached | secret-scan                   # what you are about to commit
+secret-scan --range origin/main..HEAD             # the commits you are about to push
+d=$(mktemp) && git diff --cached --text --no-ext-diff --no-textconv > "$d" && secret-scan "$d"   # what you are about to commit
 secret-scan < body.md                             # a PR body, a comment, an issue
-secret-scan --repo owner/repo < body.md           # name the repo (else the origin of cwd)
+secret-scan --repo owner/repo < body.md           # name the repo the text goes to
 ```
 
 Scan the diff or the text, not the whole history, unless the user asks.
-Write a `git` range to a file first, as above: in a plain pipe a range that
-does not resolve gives empty input, and the scan passes.
+`--range` runs `git log -p --cc --text --no-ext-diff --no-textconv`: merge
+commits and files marked `-diff` show their patch, and no textconv (which
+could decrypt sops files) runs. pr-open uses the same command. Do not pipe
+`git` into the scan: a git error gives empty input, and the scan passes;
+write to a file with `&&`, as above.
 
 ## What it finds
 
@@ -51,9 +57,9 @@ never passes without its lists. Keep the folder out of every repo.
 | File | Line |
 |---|---|
 | `private.txt` | a regex, case-insensitive (a line that is not a valid regex is a literal). It can be rendered there by sops-nix, so the list lives encrypted in your dotfiles. |
-| `sops-files.txt` | the path of a file sops-nix renders (for example a kubeconfig or `~/.aws/credentials`). JSON leaves, the value of `key = value` / `key: value` lines and bare lines count; keys, values under 12 characters and values with spaces do not. A missing file is skipped. |
+| `sops-files.txt` | the path of a file sops-nix renders (for example a kubeconfig or `~/.aws/credentials`). A relative path is in the config folder. JSON leaves, and per line the whole line and the value of `key = value`, `key: value`, `export KEY=value` or `- item` (an inline ` #` or ` ;` comment and quotes removed) count; keys, values under 12 characters and values with spaces do not. A missing file is skipped. |
 | `allow.txt` | `<fp> <reason>`: the hit with that fingerprint does not block. A line without a reason allows nothing. gitleaks hits have no fingerprint (its report is redacted, so the value never touches the disk): allow one with a `gitleaks:allow` comment on the line, or an allowlist in the gitleaks config (`GITLEAKS_CONFIG`). |
-| `private-repos.txt` | `owner/repo`: a private repo where the `private.txt` set is skipped. Secrets and sops values are still checked. Remove the line if the repo goes public. The CLI takes the repo from `--repo`, else the `origin` of the current folder; pr-review and pr-respond pass the PR's repo; pr-open passes the repo `gh` opens the PR in (`--repo` to the CLI). Text sent to jev has no repo and gets the strict set. |
+| `private-repos.txt` | `owner/repo`: a private repo where the `private.txt` set is skipped. Secrets and sops values are still checked. Remove the line if the repo goes public. The CLI opts out only with `--repo`; without it the scan is strict (the folder's origin can be a private fork of a public repo). pr-review and pr-respond pass the PR's repo; pr-open passes the repo `gh` opens the PR in (`--repo` to the CLI). Text sent to jev has no repo and gets the strict set. |
 
 ## Steps
 

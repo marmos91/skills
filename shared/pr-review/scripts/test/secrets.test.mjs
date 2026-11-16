@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, chmodSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { scanOutbound, redact } from "../lib/secrets.mjs";
+import { fileValues, scanOutbound, redact } from "../lib/secrets.mjs";
 
 // A developer's own ~/.config/secret-scan must not change these results.
 process.env.SECRET_SCAN_CONFIG = mkdtempSync(join(tmpdir(), "ss-empty-"));
@@ -226,4 +226,54 @@ test("many hits in a big diff stay fast (line numbers are not recounted per hit)
   assert.equal(res.hits.length, 3000);
   assert.match(res.hits.at(-1), /\(line 103000, fp/);
   assert.ok(Date.now() - t0 < 3000, `took ${Date.now() - t0} ms`);
+});
+
+test("fileValues: the values of each supported format", () => {
+  const v = "Abcd1234Efgh5678";
+  const pad = "dGhpc2lzYXZlcnlsb25nc2VjcmV0dmFsdWU=";
+  const table = [
+    ["bare line", `${v}\n`, [v]],
+    ["bare base64 with = padding", `${pad}\n`, [pad]],
+    ["key = value (INI)", `[default]\naws_secret = ${v}\n`, [v]],
+    ["key=value (env)", `TOKEN=${v}\n`, [`TOKEN=${v}`, v]],
+    ["export KEY=\"value\"", `export TOKEN="${v}"\n`, [`TOKEN="${v}"`, v]],
+    ["key: value (YAML)", `token: ${v}\n`, [v]],
+    ["nested YAML, quoted", `a:\n  b: '${v}'\n`, [v]],
+    ["YAML list item", `- ${v}\n`, [v]],
+    ["inline # comment", `token: ${v} # prod\n`, [v]],
+    ["inline ; comment", `token = ${v} ; rotated\n`, [v]],
+    ["# inside a value stays", `token: ab#cd${v}\n`, [`ab#cd${v}`]],
+    ["CRLF", `token: ${v}\r\n`, [v]],
+    ["JSON leaves", JSON.stringify({ a: { b: v }, n: [pad] }), [v, pad]],
+    ["comments, sections, short values and spaces are not values", `# ${v}\n; ${v}\n[section]\n---\nregion: eu-west-1\nname: two words here ok\n`, []],
+  ];
+  for (const [name, text, want] of table) assert.deepEqual(fileValues(text), want, name);
+});
+
+test("a relative sops-files.txt entry is in the config folder, wherever the scan runs", (t) => {
+  const value = "r3lative" + "z".repeat(10);
+  withConfig(t, { "kubeconfig": `token: ${value}\n`, "sops-files.txt": "kubeconfig\n" });
+  const cwd = process.cwd();
+  process.chdir(tmpdir());
+  t.after(() => process.chdir(cwd));
+  assert.equal(scanOutbound(`uses ${value}`).ok, false);
+});
+
+test("mask never shows a whole short value", (t) => {
+  withConfig(t, { "private.txt": "\\bab\\b\n" });
+  const res = scanOutbound("x ab y");
+  assert.equal(res.ok, false);
+  assert.match(res.hits[0], /^private-infra: a… /);
+});
+
+test("gitleaks runs outside the scanned repo: a .gitleaks.toml in the cwd does not reach it", (t) => {
+  const repo = mkdtempSync(join(tmpdir(), "repo-"));
+  writeFileSync(join(repo, ".gitleaks.toml"), "[allowlist]\nregexes = ['.*']\n");
+  const cwd = process.cwd();
+  process.chdir(repo);
+  t.after(() => process.chdir(cwd));
+  // the stub fails when it can see a repo config: a scan that reads it errors (fails closed)
+  withStub(`cat >/dev/null; [ -e .gitleaks.toml ] && exit 2; ${getReport}; echo '[]' > "$p"`, () => {
+    assert.deepEqual(scanOutbound("clean text"), { ok: true, hits: [] });
+  });
 });

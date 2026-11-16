@@ -34,6 +34,8 @@ const marker = (runId, sha, key, fp) => `<!-- pr-review run=${runId} sha=${sha} 
 const view = ({ seats, fp, answered, ...c }) => c;
 // GitHub text that the engine puts into a posted body: no markup, no mentions, no marker look-alikes.
 export const safeText = (s) => String(s ?? "").replace(/[<>@`]/g, "").replace(/\s+/g, " ").trim().slice(0, 80);
+// The masked hits (fp included, never the value) of an answered "post" that still hits after redaction.
+const stillHeld = (where, hits) => `${where}: answered "post", but the comment still hits after redaction: ${hits.join("; ")}. Not posted; asked again. Remove the value, or allow a hit by its fp in secret-scan's allow.txt${hits.some((h) => !/fp [0-9a-f]{12}/.test(h)) ? " (a hit with no fp is from gitleaks: use a gitleaks:allow comment or a GITLEAKS_CONFIG allowlist)" : ""}`;
 const ruleIds = (hits) => [...new Set(hits.map((h) => h.split(":")[0]))].join(", ");
 const MARKER_FP = /<!-- pr-review run=\S+ sha=\S+ key=[0-9a-f]{40} fp=([0-9a-f]{40}(?:,[0-9a-f]{40})*) -->/;
 
@@ -654,7 +656,12 @@ async function once(o, restart) {
     const s = scan1(x);
     if (s.ok) { clean.push({ ...x, body: text }); continue; }
     // redact() knows only the built-in patterns: a private name or a sops value still hits. Say so; never the value.
-    if (x.answered) { log(`${x.file}:${x.line}: answered "post", but the comment still hits after redaction (${ruleIds(s.hits)}): not posted; remove the value from the finding or allow it in secret-scan's allow.txt`); continue; }
+    // The answer is closed now and the question below is asked again, so it stays open until the hit is gone or allowed.
+    if (x.answered) {
+      log(stillHeld(`${x.file}:${x.line}`, s.hits));
+      const id = pendingAnswers(repoState).find((q) => q.pr === n && q.fingerprint === x.fp)?.id;
+      if (id) { appliedAnswer(repoState, id); if (applied.includes(id)) applied.splice(applied.indexOf(id), 1); }
+    }
     // A later "post" answer posts this engine-final body (checked, marked). A held host keeps its own finding
     // only: its folded findings went out on their own.
     save(join(runDir, "held", `${x.fp}.json`), { body: redact(x.fps.length > 1 ? (await checked(own(x))).body : x.body) });
@@ -770,7 +777,7 @@ function heldText(repoState, n, runId, fp) {
  */
 async function followUp(o, head, pst, answered) {
   const { repo, n, gh, repoState } = o;
-  const items = [], already = [];
+  const items = [], already = [], held = [];
   // one fetch: an answered finding already posted inline at this head (an earlier follow-up that crashed
   // before appliedAnswer, or a later full run) is not posted again
   const seen = await gh.markerKeys(repo, n);
@@ -788,7 +795,7 @@ async function followUp(o, head, pst, answered) {
     if (!text) continue;
     const s = scanOutbound(text, { repo });
     if (s.ok) items.push({ q, text });
-    else o.log(`question ${q.id}: answered "post", but the comment still hits after redaction (${ruleIds(s.hits)}): not posted; remove the value or allow it in secret-scan's allow.txt`);
+    else { o.log(stillHeld(`question ${q.id}`, s.hits)); held.push(q); }
   }
   let url = null;
   if (items.length) {
@@ -822,8 +829,10 @@ async function followUp(o, head, pst, answered) {
     savePrState(repoState, n, st);
   }
   for (const q of answered) appliedAnswer(repoState, q.id);
+  // still held: ask again (an applied question comes back fresh)
+  for (const q of held) queueQuestion(repoState, { pr: n, sha: head, fingerprint: q.fingerprint, file: q.finding.file, line: q.finding.line, snippet: "", finding: q.finding, sides: q.sides, failure: q.finding.case });
   return {
-    exit: 0, skipped: !items.length, url, event: items.length ? "COMMENT" : undefined, queueApprove: false, reasons: [],
+    exit: held.length && o.mode === "interactive" ? 3 : 0, skipped: !items.length, url, event: items.length ? "COMMENT" : undefined, queueApprove: false, reasons: [],
     summary: items.length ? `follow-up posted with ${items.length} answered finding(s)${url ? `: ${url}` : " (marker found on GitHub)"}` : `answers applied at ${head}; nothing to post`,
   };
 }

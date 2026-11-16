@@ -188,6 +188,16 @@ test("a secret in the test command would reach the body: blocked", async () => {
   assert.equal(created(gh), undefined);
 });
 
+test("a secret in a file marked -diff: still scanned, blocked, no PR", async () => {
+  const { dir, bodyFile } = await stack({ test: false });
+  commit(dir, ".gitattributes", "*.yaml -diff\n", "chore: attributes");
+  commit(dir, "prod.yaml", `token: ${TOKEN}\n`, "feat: config");
+  await runTests(dir, 'echo "ℹ pass 2"; echo "ℹ fail 0"', { quiet: true });
+  const gh = ghStub(routes());
+  await assert.rejects(openPr(dir, { title: "feat: b", bodyFile, base: "feat/a" }), (e) => e instanceof Blocked && e.detail.hits.some((h) => h.startsWith("github-token")));
+  assert.equal(created(gh), undefined);
+});
+
 test("a secret in the title: blocked, no PR", async () => {
   const { dir, bodyFile } = await stack();
   const gh = ghStub(routes());
