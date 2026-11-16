@@ -34,7 +34,10 @@ const stages = {
     });
   },
   merge(v, errs) {
+    const ids = new Set(); // votes and proof join on the id
     list(v, "merge", errs, (x, p) => {
+      if (str(x?.id) && ids.has(x.id)) errs.push(`${p}.id: duplicate ${x.id}`);
+      ids.add(x?.id);
       for (const k of ["id", "lens", "file", "title"]) if (!str(x?.[k])) errs.push(`${p}.${k}: required`);
       if (!SEV.includes(x?.severity)) errs.push(`${p}.severity: must be ${SEV.join("|")}`);
       if (typeof x?.line !== "number") errs.push(`${p}.line: must be a number`);

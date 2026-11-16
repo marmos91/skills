@@ -313,3 +313,11 @@ test("applyProof: a member from another file proves nothing", () => {
   applyProof([c], [{ cluster: c, votes: [], status: "split" }], fids);
   assert.deepEqual([c.proven, c.severity], [false, "should"]);
 });
+
+test("applyProof: two clusters with one fingerprint keep their own tally", () => {
+  // the fingerprint has no line: the same title at 2 lines of a file gives 2 clusters with one fp
+  const a = { id: "c1", fp: "same", lens: "correctness", severity: "must", found: ["s0"], seats: ["s0", "s1"] };
+  const b = { ...a, id: "c2" };
+  applyProof([a, b], [{ cluster: a, votes: [], status: "split" }, { cluster: b, votes: [{ seat: "s1", vote: "keep", counter_case: "", evidence_run: true }], status: "agreed" }], new Map());
+  assert.deepEqual([a, b].map((x) => [x.proven, x.severity]), [[false, "should"], [true, "must"]]);
+});

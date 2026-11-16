@@ -18,7 +18,7 @@ import { limiter } from "./limit.mjs";
 import { decide as realDecide } from "./decider.mjs";
 import { linkFix } from "./reply.mjs";
 import { appliedAnswer, pendingAnswers, queueQuestion } from "./questions.mjs";
-import { applyProof, checkFix, directionOnly, isProven, mutantFindings, proofLine, runMutants, scopePatch, suggestionOf, uncheckedNote, UNPROVEN } from "./proof.mjs";
+import { applyProof, checkFix, directionOnly, isProven, markUnproven, mutantFindings, proofLine, runMutants, scopePatch, suggestionOf, uncheckedNote } from "./proof.mjs";
 import { cherryPicked, coreCandidates, depthLine, pickDepth, queueCoreQuestion, readCorePaths, runSetup, settleCoreQuestions } from "./setup.mjs";
 import { FINAL_STAGE, VERSION, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, usageByStage, writeAtomic } from "./state.mjs";
 
@@ -494,7 +494,9 @@ async function once(o, restart) {
   const forced = agreed.filter((c) => c.answered);
   const ranked = agreed.filter((c) => !c.answered && allowed.has(c.severity) && floor.has(c.severity)).sort((a, b) => RANK[a.severity] - RANK[b.severity]);
   const posted = [...forced, ...ranked.slice(0, Math.max(0, (config.post.maxFindings ?? Infinity) - forced.length))];
-  const leftOut = agreed.length - posted.length;
+  // below the floor here is only a must that proof lowered: a higher effort would not post it
+  const belowFloor = agreed.filter((c) => !c.answered && !floor.has(c.severity)).length;
+  const leftOut = agreed.length - posted.length - belowFloor;
   // Hygiene obeys the same severity floor and settled list as council findings (spec 7.5).
   const hygNew = filterNew(hyg.findings.map((h) => ({ ...h, file: "", line: null })), { reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: new Map() }).keep;
   const hygItems = hygNew.filter((h) => allowed.has(h.severity)).map((h, i) => ({ ...h, id: `h${i + 1}`, fp: fingerprint(h) }));
@@ -536,7 +538,7 @@ async function once(o, restart) {
   }
   const folded = posted.filter((c) => hostOf.has(c.id));
   // Full depth: an unproven finding says so in its body (engine text).
-  const mark = (c, b) => (depth === "full" && !c.proven ? `${b}\n\n${UNPROVEN}` : b);
+  const mark = (c, b) => (depth === "full" && !c.proven ? markUnproven(b, offDiff(c)) : b);
   const items = posted.filter((c) => !hostOf.has(c.id)).map((c) => ({
     ...c, fps: [c.fp, ...folded.filter((o) => hostOf.get(o.id) === c.id).map((o) => o.fp)],
     body: mark(c, text.get(c.id) ?? `**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}`),
@@ -602,6 +604,7 @@ async function once(o, restart) {
     outside.length ? `Outside the diff:\n${outside.map((l) => `- ${l}`).join("\n")}` : "",
     open.length ? `${open.length} ${open.length === 1 ? "point is" : "points are"} still open with the reviewer.` : "",
     leftOut ? `${leftOut} ${leftOut === 1 ? "finding was" : "findings were"} left out by the effort limit.` : "",
+    belowFloor ? `${belowFloor} unproven ${belowFloor === 1 ? "finding was" : "findings were"} left out: review ${f.reviewNumber} posts only must findings.` : "",
     run.missing?.length ? `Lenses not run: ${run.missing.join(", ")}.` : "",
     // Dropped seats and missed parts stay out of the body: they are in run.json and the run log.
     ci.line ?? "", marker(runId, f.headSha, key),
@@ -757,23 +760,23 @@ async function followUp(o, head, pst, answered) {
   // one fetch: an answered finding already posted inline at this head (an earlier follow-up that crashed
   // before appliedAnswer, or a later full run) is not posted again
   const seen = await gh.markerKeys(repo, n);
+  const runId = pst.lastRunId ?? "followup";
+  const diff = join(repoState, "pr", String(n), "runs", runId, "ctx", "diff.patch");
+  const hunks = parseHunks(existsSync(diff) ? readFileSync(diff, "utf8") : "");
   for (const q of answered.filter((x) => x.answer !== "drop")) {
     if (seen.has(sha1(`inline\0${head}\0${q.fingerprint}`))) { already.push(q.fingerprint); continue; }
     if (codeMoved(o.repoDir ?? process.cwd(), q, head)) { o.log(`question ${q.id}: the code at ${q.finding?.file}:${q.finding?.line} changed since ${q.sha}; its answer is dropped`); continue; }
     const f = q.finding;
     // full depth (proven is set): a suggestion the follow-up cannot test says so, like one the time cap cut
     const fix = f.fix && f.proven !== undefined && suggestionOf(f.fix) ? uncheckedNote(f.fix, "a follow-up runs no test") : f.fix;
-    const text = f.secret ? heldText(repoState, n, pst.lastRunId, q.fingerprint)
-      : `**${f.severity}:** ${f.title}\n\n${f.case}${fix ? `\n\n${fix}` : ""}${q.answer === "ask-author" ? "\n\nCan you confirm this case?" : ""}${f.proven === false ? `\n\n${UNPROVEN}` : ""}`;
+    const base = `**${f.severity}:** ${f.title}\n\n${f.case}${fix ? `\n\n${fix}` : ""}${q.answer === "ask-author" ? "\n\nCan you confirm this case?" : ""}`;
+    const text = f.secret ? heldText(repoState, n, pst.lastRunId, q.fingerprint) : f.proven === false ? markUnproven(base, !diffLine(hunks, f.file, f.line)) : base;
     if (text && scanOutbound(text).ok) items.push({ q, text });
   }
   let url = null;
   if (items.length) {
     const fps = items.map((x) => x.q.fingerprint).sort();
     const key = sha1(`followup\0${head}\0${fps.join(",")}`);
-    const runId = pst.lastRunId ?? "followup";
-    const diff = join(repoState, "pr", String(n), "runs", runId, "ctx", "diff.patch");
-    const hunks = parseHunks(existsSync(diff) ? readFileSync(diff, "utf8") : "");
     const p = place(items.map(({ q, text }) => ({ file: q.finding.file, line: q.finding.line, body: `${text}\n\n${marker(runId, head, sha1(`inline\0${head}\0${q.fingerprint}`), q.fingerprint)}` })), hunks, `https://github.com/${repo}/blob/${head}`);
     const body = [`Follow-up on the review of ${head}: points settled by the maintainer.`, p.body.length ? p.body.map((l) => `- ${l}`).join("\n") : "", marker(runId, head, key)].filter(Boolean).join("\n\n");
     if (!scanOutbound(body).ok) return { exit: 4, skipped: true, summary: "follow-up blocked by the secret scan" };

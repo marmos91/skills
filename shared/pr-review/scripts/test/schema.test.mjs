@@ -36,3 +36,8 @@ test("validate(round1): a seat that reports an error failed; it is never zero fi
     assert.ok(validate("round1", { findings: [], error }).some((e) => /^error: /.test(e)), JSON.stringify(error));
   }
 });
+test("validate(merge): cluster ids are unique: votes and proof join on them", () => {
+  const c = { id: "c1", lens: "l", severity: "nit", file: "f", line: 1, title: "t", found: [] };
+  assert.match(validate("merge", [c, { ...c, line: 2 }]).join(), /merge\[1\]\.id: duplicate c1/);
+  assert.deepEqual(validate("merge", [c, { ...c, id: "c2" }]), []);
+});

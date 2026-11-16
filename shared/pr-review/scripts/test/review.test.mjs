@@ -1880,7 +1880,8 @@ test("full depth: at review 3 an unproven must lowered to should does not post",
   assert.equal(r.exit, 0, r.summary);
   assert.equal(posts(fx)[0].threads.length, 0);
   assert.equal(posts(fx)[0].event, "COMMENT", "the lowered finding still counts: no APPROVE");
-  assert.match(posts(fx)[0].body, /1 finding was left out/);
+  assert.match(posts(fx)[0].body, /1 unproven finding was left out: review 3 posts only must findings\./);
+  assert.doesNotMatch(posts(fx)[0].body, /effort limit/, "a higher effort would not post it");
 });
 
 test("full depth: a `proven` the judge copies into a merge cluster proves nothing", async () => {
@@ -1929,4 +1930,23 @@ test("full depth: an answered finding posted by a follow-up says its suggestion 
   const again = await go(fx, answers, { depth: "full" });
   assert.equal(again.r.exit, 0, again.r.summary);
   assert.match(posts(fx)[1].threads[0].body, /const b = 99;\n```\n\nEngine note: this fix was not checked, because a follow-up runs no test\./);
+});
+
+test("full depth: an unproven finding off the diff keeps its mark in the summary line", async () => {
+  const fx = fixture(); routes(fx); trusted(fx);
+  const { r } = await go(fx, happy({ merge: [C("c1"), C("c2", { line: 99, title: "Off diff" })], "v~2": [keep("c1"), keep("c2")],
+    compose: { body: "Changes a.", comments: [{ id: "c1", body: "**must:** one" }, { id: "c2", body: "**must:** two\n\nmore" }] } }), { depth: "full" });
+  assert.equal(r.exit, 0, r.summary);
+  assert.match(posts(fx)[0].body, /`a\.js:99` — \*\*must:\*\* two \(unproven\) \(https:/);
+});
+
+test("full depth: an unproven finding off the diff keeps its mark in a follow-up", async () => {
+  const fx = fixture(); routes(fx); trusted(fx);
+  const answers = split({ merge: [C("c1", { found: [S0], line: 99 })] });
+  await go(fx, answers, { mode: "loop", depth: "full", decide: async () => ({ decision: "unsure", raw: null }) });
+  const [q] = openQuestions(fx.state);
+  answer(fx.state, q.id, "post");
+  const again = await go(fx, answers, { depth: "full" });
+  assert.equal(again.r.exit, 0, again.r.summary);
+  assert.match(posts(fx)[1].body, /`a\.js:99` — \*\*must:\*\* Off by one \(unproven\) \(https:/);
 });
