@@ -961,6 +961,16 @@ test("a drop answer is learned when the next run applies it", async () => {
   assert.equal(readFileSync(join(fx.state, "learnings.md"), "utf8"), `- ${learnKey(F())} PR #5: Off by one\n`);
 });
 
+test("a dry run with an answered drop learns nothing", async () => {
+  const fx = fixture(); routes(fx);
+  const first = await go(fx, split());
+  answer(fx.state, basename(first.r.questions[0], ".md"), "drop");
+  pushHead(fx, ["const a = 2;", "const b = 3;", "const c = 4;", "const d = 50;"]);
+  const { r } = await go(fx, split(), { dryRun: true });
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(existsSync(join(fx.state, "learnings.md")), false);
+});
+
 test("7.4: a stale 'drop' never turns a must the whole council now agrees on into APPROVE", async () => {
   const fx = fixture(); routes(fx);
   const first = await go(fx, split());

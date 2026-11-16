@@ -436,7 +436,7 @@ async function once(o, restart) {
   if (o.until === "tally") return finish("tally");
 
   // Decide (spec 6.7): jev settles splits; otherwise a question. A finding of one seat, or settled by jev, asks the author.
-  const agreed = [], rejected = [], open = [], applied = [];
+  const agreed = [], rejected = [], open = [], applied = [], drops = [];
   // Marco's answers win over the tally, from this run or an earlier one (the loop posts without the finding).
   const answers = new Map(pendingAnswers(repoState).filter((q) => q.pr === n).map((q) => [q.fingerprint, q]));
   const repoDir = o.repoDir ?? process.cwd();
@@ -447,8 +447,7 @@ async function once(o, restart) {
   };
   const take = (q, c) => {
     if (!applied.includes(q.id)) applied.push(q.id);
-    learnDrop(o, q);
-    if (q.answer === "drop") rejected.push(c);
+    if (q.answer === "drop") { rejected.push(c); drops.push(q); }
     else agreed.push({ ...c, ask_author: q.answer === "ask-author", answered: q.answer });
   };
   // the question is per fingerprint, so its answer settles every cluster with that fp (the fp has no line)
@@ -778,6 +777,8 @@ async function once(o, restart) {
   }
   markDone(runDir, FINAL_STAGE);
   for (const id of applied) appliedAnswer(repoState, id);
+  // only now: a dry run, a question exit, a held post or a crash before this line learns nothing
+  for (const q of drops.filter((x) => applied.includes(x.id))) learnDrop(o, q);
   return {
     // Interactive: a comment held by the secret scan is an open question, so exit 3. The rerun takes the answer-only path.
     exit: open.length && mode === "interactive" ? 3 : 0, runDir, planned, url, event, queueApprove, reasons, questions: questionFiles(),
