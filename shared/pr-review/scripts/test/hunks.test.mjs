@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { linkRefs, parseHunks, place } from "../lib/hunks.mjs";
+import { fences, linkRefs, parseHunks, place } from "../lib/hunks.mjs";
 
 const fx = (n) => parseHunks(readFileSync(new URL(`./fixtures/${n}`, import.meta.url), "utf8"));
 const base = "https://github.com/o/r/blob/abc";
@@ -86,4 +86,16 @@ test("linkRefs turns file:line into a permalink and an RFC section into a link, 
   const out = linkRefs("See `src/a.ts:12` and src/a.ts:3-5, not example.com:443. RFC 9110 §15.3 and [RFC 7230](https://x/rfc7230).\n```suggestion\nconst s = \"§1\"; // src/a.ts:12\n```", base, isFile);
   assert.equal(out, `See [\`src/a.ts\`](${base}/src/a.ts#L12) and [\`src/a.ts\`](${base}/src/a.ts#L3-L5), not example.com:443. [RFC 9110, section 15.3](https://www.rfc-editor.org/rfc/rfc9110#section-15.3) and [RFC 7230](https://x/rfc7230).\n\`\`\`suggestion\nconst s = "§1"; // src/a.ts:12\n\`\`\``);
   assert.equal(linkRefs("see spec §6.4", base, isFile), "see spec section 6.4");
+});
+
+test("linkRefs leaves inline code, links and ~~~ fences as they are, but links a span that is only path:line", () => {
+  const isFile = (p) => p === "lib/a.js";
+  for (const t of ['the separator `"§"` in `split("§")`', "run `node lib/a.js:3`", "see [lib/a.js:12](u)", "see the `RFC 9110` spec", "~~~js\n// lib/a.js:12 §2\n~~~"]) {
+    assert.equal(linkRefs(t, base, isFile), t, t);
+  }
+  assert.equal(linkRefs("in `lib/a.js:3` here", base, isFile), `in [\`lib/a.js\`](${base}/lib/a.js#L3) here`);
+});
+
+test("fences: ~~~ opens a block that only ~~~ closes", () => {
+  assert.deepEqual(fences("~~~\n```\nx\n~~~").map((b) => [b.start, b.end, b.closed]), [[0, 3, true]]);
 });

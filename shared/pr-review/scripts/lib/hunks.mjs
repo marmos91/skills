@@ -49,10 +49,10 @@ export function fences(text) {
   const lines = String(text).split("\n"), out = [];
   let open = null;
   lines.forEach((l, i) => {
-    const m = /^\s*(`{3,})(.*)$/.exec(l);
+    const m = /^\s*(`{3,}|~{3,})(.*)$/.exec(l);
     if (!m) return;
-    if (!open) open = { start: i, ticks: m[1].length, info: m[2].trim() };
-    else if (m[1].length >= open.ticks && !m[2].trim()) { out.push({ start: open.start, end: i, info: open.info, code: lines.slice(open.start + 1, i).join("\n"), closed: true }); open = null; }
+    if (!open) open = { start: i, ch: m[1][0], ticks: m[1].length, info: m[2].trim() };
+    else if (m[1][0] === open.ch && m[1].length >= open.ticks && !m[2].trim()) { out.push({ start: open.start, end: i, info: open.info, code: lines.slice(open.start + 1, i).join("\n"), closed: true }); open = null; }
   });
   if (open) out.push({ start: open.start, end: lines.length - 1, info: open.info, code: lines.slice(open.start + 1).join("\n"), closed: false });
   return out;
@@ -76,17 +76,22 @@ export function place(findings, hunks, permalinkBase) {
 }
 
 const FILE_LINE = /`?((?:[\w.-]+\/)*[\w.-]+\.\w+):(\d+)(?:-(\d+))?`?/g;
+const SPAN = /(`+[^`]*`+|\[[^\]]*\]\([^)]*\))/;
+const PATH_SPAN = /^`(?:[\w.-]+\/)*[\w.-]+\.\w+:\d+(?:-\d+)?`$/;
 const RFC = /(?<![[\w/-])RFC ?(\d{3,5})(?:,? ?(?:§|section) ?(\d+(?:\.\d+)*))?/gi;
 
 /**
  * Readable references for posted text (#65): `a.js:42` becomes a permalink at the head when isFile(path),
- * "RFC 9110 §15.3" a link to that section, and no § is left. Fenced code (a suggestion) is left as is.
+ * "RFC 9110 §15.3" a link to that section, and no § is left. Fenced code, inline code and links are left as is,
+ * except a code span that is exactly `path:line`.
  */
 export function linkRefs(text, permalinkBase, isFile) {
   const lines = String(text).split("\n"), code = new Set();
   for (const b of fences(text)) for (let i = b.start; i <= b.end; i++) code.add(i);
-  return lines.map((l, i) => code.has(i) ? l : l
+  const plain = (s) => s
     .replace(FILE_LINE, (m, p, a, b) => (isFile(p) ? `[\`${p}\`](${permalinkBase}/${encodeURI(p)}#L${a}${b ? `-L${b}` : ""})` : m))
     .replace(RFC, (_, n, s) => `[RFC ${n}${s ? `, section ${s}` : ""}](https://www.rfc-editor.org/rfc/rfc${n}${s ? `#section-${s}` : ""})`)
-    .replace(/§\s*/g, "section ")).join("\n");
+    .replace(/§\s*/g, "section ");
+  return lines.map((l, i) => code.has(i) ? l : l.split(SPAN)
+    .map((part, j) => (j % 2 === 0 || PATH_SPAN.test(part) ? plain(part) : part)).join("")).join("\n");
 }
