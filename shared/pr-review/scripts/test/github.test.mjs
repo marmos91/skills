@@ -150,6 +150,13 @@ test("checks: the engine's own pr-review status is not CI", async () => {
   assert.deepEqual(c.items.map((x) => x.name), ["build"]);
 });
 
+test("checks: a CI job named pr-review still counts", async () => {
+  stubDir({ "pr checks 5 -R o/r --json name,state,link,bucket,startedAt": { exit: 1, stdout: [
+    { name: "pr-review", state: "FAILURE", bucket: "fail", link: "https://github.com/o/r/actions/runs/7/job/1", startedAt: "2026-11-01T10:00:00Z" },
+  ] } });
+  assert.equal((await gh.checks("o/r", 5, "abc123")).state, "red");
+});
+
 test("checks: stale head, queued-only since, real failures throw", async () => {
   stubDir();
   assert.deepEqual(await gh.checks("o/r", 11, "abc123"), { state: "pending", since: null, items: [], stale: true });
