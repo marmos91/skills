@@ -567,7 +567,8 @@ command, or no mutant and no fix check runs.
 
 - a round-1 finding with `evidence_run` from a seat with a shell, that the
   merge put in the cluster (`members`). A member the merge leaves out or
-  names wrong proves nothing: the finding is posted as unproven;
+  names wrong adds no proof: with no other run evidence below, the finding
+  is unproven;
 - a keep vote with `evidence_run` that the tally counts (an eligible seat,
   its first vote);
 - a surviving mutant.

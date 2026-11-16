@@ -1950,3 +1950,14 @@ test("full depth: an unproven finding off the diff keeps its mark in a follow-up
   assert.equal(again.r.exit, 0, again.r.summary);
   assert.match(posts(fx)[1].body, /`a\.js:99` — \*\*must:\*\* Off by one \(unproven\) \(https:/);
 });
+
+test("2 split clusters with one fingerprint get a decision each", async () => {
+  const fx = fixture(); routes(fx);
+  // the fingerprint has no line: the same title at lines 2 and 3 gives 2 clusters with one fp
+  let calls = 0;
+  const decide = async () => ({ decision: calls++ ? "rejected" : "agreed", raw: null });
+  const { r, run } = await go(fx, split({ merge: [C("c1", { found: [S0] }), C("c2", { found: [S0], line: 3 })], "v~1": [keep("c1"), keep("c2")], "v~2": [drop("c1"), drop("c2")] }), { decide });
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(calls, 2, "c2 is not given c1's decision");
+  assert.deepEqual(agreedInCompose(run).map((x) => x.id), ["c1"]);
+});

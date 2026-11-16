@@ -442,7 +442,7 @@ async function once(o, restart) {
     }
     if (status === "agreed") { agreed.push({ ...c, ask_author: c.found.length === 1 }); continue; }
     if (status === "rejected") { rejected.push(c); continue; }
-    const dfile = join(runDir, "decide", `${c.fp}.json`);
+    const dfile = join(runDir, "decide", `${c.id}-${c.fp}.json`); // by id too: 2 clusters can share one fp, as in applyProof
     if (!existsSync(dfile)) {
       const snippet = hunk(f, c);
       const r = await o.decide(view(c), votes, snippet, config);
