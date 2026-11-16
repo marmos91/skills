@@ -69,9 +69,24 @@ export function place(findings, hunks, permalinkBase) {
       inline.push({ path: f.file, line: f.line, side: "RIGHT", body: f.body }); // right holds only add/ctx lines
     } else {
       const head = f.body.replace(FENCE, "$1").split("\n")[0];
-      const loc = f.line == null ? "" : `:${f.line}`;
-      body.push(`\`${f.file}${loc}\` — ${head} (${permalinkBase}/${f.file}${f.line == null ? "" : `#L${f.line}`})`);
+      body.push(`[\`${f.file}\`](${permalinkBase}/${encodeURI(f.file)}${f.line == null ? "" : `#L${f.line}`}): ${head}`);
     }
   }
   return { inline, body };
+}
+
+const FILE_LINE = /`?((?:[\w.-]+\/)*[\w.-]+\.\w+):(\d+)(?:-(\d+))?`?/g;
+const RFC = /(?<![[\w/-])RFC ?(\d{3,5})(?:,? ?(?:§|section) ?(\d+(?:\.\d+)*))?/gi;
+
+/**
+ * Readable references for posted text (#65): `a.js:42` becomes a permalink at the head when isFile(path),
+ * "RFC 9110 §15.3" a link to that section, and no § is left. Fenced code (a suggestion) is left as is.
+ */
+export function linkRefs(text, permalinkBase, isFile) {
+  const lines = String(text).split("\n"), code = new Set();
+  for (const b of fences(text)) for (let i = b.start; i <= b.end; i++) code.add(i);
+  return lines.map((l, i) => code.has(i) ? l : l
+    .replace(FILE_LINE, (m, p, a, b) => (isFile(p) ? `[\`${p}\`](${permalinkBase}/${encodeURI(p)}#L${a}${b ? `-L${b}` : ""})` : m))
+    .replace(RFC, (_, n, s) => `[RFC ${n}${s ? `, section ${s}` : ""}](https://www.rfc-editor.org/rfc/rfc${n}${s ? `#section-${s}` : ""})`)
+    .replace(/§\s*/g, "section ")).join("\n");
 }

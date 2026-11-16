@@ -109,7 +109,7 @@ export async function markerKeys(repo, n) {
 export const findMarker = async (repo, n, key) => (await markerKeys(repo, n)).has(key.replace(/^key=/, ""));
 
 const POST = `mutation PostReview($input: AddPullRequestReviewInput!) {
-  addPullRequestReview(input: $input) { pullRequestReview { url } } }`;
+  addPullRequestReview(input: $input) { pullRequestReview { id url comments(first: 100) { nodes { url body } } } } }`;
 
 export async function postReview(repo, n, { commitOID, event, body, threads: ths = [] }) {
   if (!commitOID) throw new GhError("postReview: commitOID is required");
@@ -121,7 +121,16 @@ export async function postReview(repo, n, { commitOID, event, body, threads: ths
     })),
   };
   const d = await gql(POST, { input });
-  return { url: d.addPullRequestReview.pullRequestReview.url };
+  const r = d.addPullRequestReview.pullRequestReview;
+  return { id: r.id, url: r.url, comments: r.comments?.nodes ?? [] };
+}
+
+const EDIT_REVIEW = `mutation EditReview($id: ID!, $body: String!) {
+  updatePullRequestReview(input: { pullRequestReviewId: $id, body: $body }) { pullRequestReview { id } } }`;
+
+/** Replaces the body of a submitted review. */
+export async function editReview(id, body) {
+  await gql(EDIT_REVIEW, { id, body });
 }
 
 // GitHub has no replies to replies: pass the id of the thread's first comment.

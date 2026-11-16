@@ -61,7 +61,7 @@ function fixture(baseFiles = {}) {
 
 const threadsRoute = (nodes = []) => ({ stdout: { data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } } } } } });
 
-function routes(fx, { head = fx.head, body = "Changes a.", threads = [], pending = null, postExit = 0, reviews = [], reviewComments = [] } = {}) {
+function routes(fx, { head = fx.head, body = "Changes a.", threads = [], pending = null, postExit = 0, reviews = [], reviewComments = [], posted = [] } = {}) {
   const r = {
     "api user": { stdout: { login: ME } },
     "pr view 5 -R o/r --json id,headRefOid,baseRefName,baseRefOid,author,isDraft,body,title,closingIssuesReferences,headRefName": {
@@ -78,7 +78,8 @@ function routes(fx, { head = fx.head, body = "Changes a.", threads = [], pending
     "pr view 5 -R o/r --json headRefOid,updatedAt": { stdout: { headRefOid: head, updatedAt: "2026-11-11T00:00:00Z" } },
     "pr checks 5 -R o/r --json name,state,link,bucket,startedAt": { stderr: "no checks reported on the 'feat' branch", exit: 1 },
     "graphql PendingReview": { stdout: { data: { repository: { pullRequest: { reviews: { nodes: pending ? [pending] : [] } } } } } },
-    "graphql PostReview": postExit ? { stderr: "boom", exit: postExit } : { stdout: { data: { addPullRequestReview: { pullRequestReview: { url: "https://github.com/o/r/pull/5#pullrequestreview-1" } } } } },
+    "graphql PostReview": postExit ? { stderr: "boom", exit: postExit } : { stdout: { data: { addPullRequestReview: { pullRequestReview: { id: "PRR_1", url: "https://github.com/o/r/pull/5#pullrequestreview-1", comments: { nodes: posted } } } } } },
+    "graphql EditReview": { stdout: { data: { updatePullRequestReview: { pullRequestReview: { id: "PRR_1" } } } } },
     "api -X POST repos/o/r/pulls/5/comments/11/replies --input -": { stdout: {} },
     "api -X PATCH repos/o/r/pulls/comments/12 --input -": { stdout: {} },
     "api -X PATCH repos/o/r/pulls/comments/13 --input -": { stdout: {} },
@@ -1513,9 +1514,32 @@ test("the body index lists only threads that went inline, at their real line, Cr
   const { r } = await go(fx, { all: { findings: [F()] }, merge: [C("c1"), c2, c3], "v~2": [keep("c1"), keep("c2"), keep("c3")], compose });
   assert.equal(r.exit, 0, r.summary);
   const b = posts(fx)[0].body;
-  assert.match(b, /^The off by one blocks\.\n\nWhat was checked: light depth, no checks run\.\n\nCritical:\n- Fix the total\. \(thread on `a\.js` L2\)\n\nTotals:\n- Rename c\. \(thread on `a\.js` L3\)\n\nThe test covers the edge\./);
+  assert.match(b, /^The off by one blocks\.\n\nWhat was checked: light depth, no checks run\.\n\nCritical:\n- Fix the total\. \(\[`a\.js`\]\(https:\/\/github\.com\/o\/r\/blob\/\w+\/a\.js#L2\)\)\n\nTotals:\n- Rename c\. \(\[`a\.js`\]\(https:\/\/github\.com\/o\/r\/blob\/\w+\/a\.js#L3\)\)\n\nThe test covers the edge\./);
   assert.doesNotMatch(b, /Off-diff item|Made up/);
   assert.match(b, /Outside the diff:/);
+});
+
+test("once posted, the body index links each thread to its inline comment, with no line number", async () => {
+  const fx = fixture();
+  const key = createHash("sha1").update(`inline\0${fx.head}\0${fingerprint(F())}`).digest("hex");
+  routes(fx, { posted: [{ url: "https://github.com/o/r/pull/5#discussion_r900", body: `**must:** off by one\n\n<!-- pr-review run=x sha=${fx.head} key=${key} fp=y -->` }] });
+  const compose = { verdict: "The off by one blocks.", body: "", index: [{ theme: "Totals", items: [{ id: "c1", text: "Fix the total." }] }], comments: [{ id: "c1", body: "**must:** off by one" }] };
+  const { r } = await go(fx, happy({ compose }));
+  assert.equal(r.exit, 0, r.summary);
+  const edit = mutations(fx).find((m) => m.key === "graphql EditReview").input.variables;
+  assert.equal(edit.id, "PRR_1");
+  assert.match(edit.body, /\n- Fix the total\. \(\[thread\]\(https:\/\/github\.com\/o\/r\/pull\/5#discussion_r900\)\)\n/);
+  assert.doesNotMatch(edit.body, /\bL\d|a\.js:\d/);
+});
+
+test("posted text links file:line and RFC references, and no section sign is left", async () => {
+  const fx = fixture(); routes(fx);
+  const compose = { verdict: "The off by one blocks.", body: "Per spec §6.4 the total is fixed.", comments: [{ id: "c1", body: "**must:** off by one (read a.js:1), see RFC 9110 §15.3" }] };
+  const { r } = await go(fx, happy({ compose }));
+  assert.equal(r.exit, 0, r.summary);
+  const p = posts(fx)[0];
+  assert.match(p.threads[0].body, new RegExp(`\\(read \\[\`a\\.js\`\\]\\(https://github\\.com/o/r/blob/${fx.head}/a\\.js#L1\\)\\), see \\[RFC 9110, section 15\\.3\\]\\(https://www\\.rfc-editor\\.org/rfc/rfc9110#section-15\\.3\\)`));
+  assert.doesNotMatch(p.body + p.threads[0].body, /§/);
 });
 
 test("the body marker counts a must off the diff, for pr-land", async () => {
@@ -1559,7 +1583,7 @@ test("pass 2: an earlier finding the seats judge wrong is retracted first, and n
   assert.equal(r.exit, 0, r.summary);
   assert.match(run.calls.find((c) => c.k === "compose").prompt, /a\.js:1 is the documented default/);
   const p = posts(fx)[0];
-  assert.match(p.body, new RegExp(`^Second pass, on \`${fx.head.slice(0, 7)}\`\\.\n\nCorrection: Our finding on a was wrong: 2 is the documented default\\. \\(thread on \`a\\.js\` L1\\)\n\nNothing blocks\\.`));
+  assert.match(p.body, new RegExp(`^Second pass, on \`${fx.head.slice(0, 7)}\`\\.\n\nCorrection: Our finding on a was wrong: 2 is the documented default\\. \\(\\[thread\\]\\(https://github\\.com/o/r/pull/5#discussion_r11\\)\\)\n\nNothing blocks\\.`));
   assert.notEqual(p.event, "REQUEST_CHANGES");
   assert.ok(!mutations(fx).some((x) => x.key.includes("replies")), "a retracted thread gets no 'Fixed in' reply");
   assert.ok(mutations(fx).some((x) => x.key === "graphql ResolveThread"), "a retracted thread is resolved");
@@ -2009,7 +2033,7 @@ test("full depth: an unproven finding off the diff keeps its mark in the summary
   const { r } = await go(fx, happy({ merge: [C("c1"), C("c2", { line: 99, title: "Off diff" })], "v~2": [keep("c1"), keep("c2")],
     compose: { body: "Changes a.", comments: [{ id: "c1", body: "**must:** one" }, { id: "c2", body: "**must:** two\n\nmore" }] } }), { depth: "full" });
   assert.equal(r.exit, 0, r.summary);
-  assert.match(posts(fx)[0].body, /`a\.js:99` — \*\*must:\*\* two \(unproven\) \(https:/);
+  assert.match(posts(fx)[0].body, /\[`a\.js`\]\(https:\/\/github\.com\/o\/r\/blob\/\w+\/a\.js#L99\): \*\*must:\*\* two \(unproven\)/);
 });
 
 test("full depth: an unproven finding off the diff keeps its mark in a follow-up", async () => {
@@ -2020,7 +2044,7 @@ test("full depth: an unproven finding off the diff keeps its mark in a follow-up
   answer(fx.state, q.id, "post");
   const again = await go(fx, answers, { depth: "full" });
   assert.equal(again.r.exit, 0, again.r.summary);
-  assert.match(posts(fx)[1].body, /`a\.js:99` — \*\*must:\*\* Off by one \(unproven\) \(https:/);
+  assert.match(posts(fx)[1].body, /\[`a\.js`\]\(https:\/\/github\.com\/o\/r\/blob\/\w+\/a\.js#L99\): \*\*must:\*\* Off by one \(unproven\)/);
 });
 
 test("2 split clusters with one fingerprint get a decision each", async () => {

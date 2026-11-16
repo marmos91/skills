@@ -8,8 +8,8 @@ is the author of the PR. The author knows the code, so start with the point.
 - Write short sentences. Put one idea in each sentence. Use active voice.
 - Use plain words: "use", not "leverage"; "is", not "serves as".
 - Show code when it is shorter. Write each claim one time, with no recap.
-- Name the file, the function and the input. Do not write "this may cause
-  issues"; write what breaks and when.
+- Name the function and the input, never a line ("L60", `a.js:42`). Do not
+  write "this may cause issues"; write what breaks and when.
 - Use a qualifier ("may", "probably") only for real doubt.
 
 ## Do not write
@@ -36,14 +36,14 @@ One finding per comment, in this order:
 1. The severity label, then a title that states the conclusion with a verb:
    `must: Reject port 0`. Use the repo's labels if its guidance sets others.
 2. The case in one line. Say where each claim comes from: "(ran `cmd`)",
-   "(read a.js:42)", or "I think" when you did not check.
+   "(read `parse` in a.js)", or "I think" when you did not check.
 3. A paste-ready fix: a `suggestion` block when it replaces only the
    commented line, else a `diff` block or the exact text to add.
 
 A finding marked `ask_author` is a question; state each other finding directly.
 A question says what each answer changes: "question: Can `id` be empty? If yes,
-line 42 reads past the end; if no, drop the check." Credit what the author got
-right, and link the PR or commit that settles a point.
+the loop reads past the end; if no, drop the check." Credit what the author got
+right. Link each PR, commit, RFC or doc you cite, never with `§` or `¶`: `[RFC 9110, Range requests](https://www.rfc-editor.org/rfc/rfc9110#name-range-requests)`.
 
 ## Review body
 

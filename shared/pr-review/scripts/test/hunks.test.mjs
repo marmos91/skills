@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { parseHunks, place } from "../lib/hunks.mjs";
+import { linkRefs, parseHunks, place } from "../lib/hunks.mjs";
 
 const fx = (n) => parseHunks(readFileSync(new URL(`./fixtures/${n}`, import.meta.url), "utf8"));
 const base = "https://github.com/o/r/blob/abc";
@@ -24,7 +24,7 @@ test("line inside a hunk -> inline", () => {
 test("line outside any hunk -> body with permalink", () => {
   const r = place([{ file: "src/a.ts", line: 120, body: "first\nsecond" }], fx("diff-basic.patch"), base);
   assert.equal(r.inline.length, 0);
-  assert.equal(r.body[0], `\`src/a.ts:120\` — first (${base}/src/a.ts#L120)`);
+  assert.equal(r.body[0], `[\`src/a.ts\`](${base}/src/a.ts#L120): first`);
 });
 
 test("deleted file / LEFT-only line -> body; new file lines inline", () => {
@@ -73,10 +73,17 @@ test("binary file whose path holds \" b/\" keeps its full path", () => {
 
 test("finding without line goes to body without #L", () => {
   const r = place([{ file: "src/a.ts", line: null, body: "general" }], fx("diff-basic.patch"), base);
-  assert.equal(r.body[0], `\`src/a.ts\` — general (${base}/src/a.ts)`);
+  assert.equal(r.body[0], `[\`src/a.ts\`](${base}/src/a.ts): general`);
 });
 
 test("a longer suggestion fence is downgraded too", () => {
   const r = place([{ file: "gone.txt", line: 9, body: "````suggestion\na\n````" }], new Map(), base);
   assert.doesNotMatch(r.body[0], /suggestion/);
+});
+
+test("linkRefs turns file:line into a permalink and an RFC section into a link, with no section sign; code is left as is", () => {
+  const isFile = (p) => p === "src/a.ts";
+  const out = linkRefs("See `src/a.ts:12` and src/a.ts:3-5, not example.com:443. RFC 9110 §15.3 and [RFC 7230](https://x/rfc7230).\n```suggestion\nconst s = \"§1\"; // src/a.ts:12\n```", base, isFile);
+  assert.equal(out, `See [\`src/a.ts\`](${base}/src/a.ts#L12) and [\`src/a.ts\`](${base}/src/a.ts#L3-L5), not example.com:443. [RFC 9110, section 15.3](https://www.rfc-editor.org/rfc/rfc9110#section-15.3) and [RFC 7230](https://x/rfc7230).\n\`\`\`suggestion\nconst s = "§1"; // src/a.ts:12\n\`\`\``);
+  assert.equal(linkRefs("see spec §6.4", base, isFile), "see spec section 6.4");
 });
