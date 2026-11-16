@@ -1049,6 +1049,22 @@ test("answer-only rerun: 'post' goes out as one small COMMENT follow-up, never t
   assert.equal(posts(fx).length, 2);
 });
 
+test("answer-only rerun without local counts: the follow-up takes them from the full review's marker on GitHub", async () => {
+  const fx = fixture(); routes(fx);
+  const answers = split({
+    merge: [C("c1", { found: [S0] }), C("c2", { severity: "must", line: 3, title: "Must one" })], "v~1": [keep("c1")], "v~2": [drop("c1"), keep("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c2", body: "**must:** one" }] },
+  });
+  await go(fx, answers, { mode: "loop", effort: "medium" });
+  const [full] = posts(fx);
+  const st = prState(fx.state, N); delete st.counts; savePrState(fx.state, N, st); // reviewed elsewhere, or before counts were saved
+  routes(fx, { reviews: [{ body: full.body, user: { login: ME }, state: "CHANGES_REQUESTED" }, { body: full.body.replace(/must=1/, "must=9"), user: { login: "mallory" }, state: "COMMENTED" }] });
+  answer(fx.state, openQuestions(fx.state)[0].id, "post");
+  const again = await go(fx, answers);
+  assert.equal(again.r.exit, 0, again.r.summary);
+  assert.deepEqual(counts(posts(fx)[1].body), { must: 2, questions: 0, gaps: 0 }, "not gaps=1");
+});
+
 test("answer-only rerun: a finding already posted inline at this head is not posted again", async () => {
   const fx = fixture(); routes(fx);
   const answers = split({
