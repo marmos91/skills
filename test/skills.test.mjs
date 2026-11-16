@@ -103,6 +103,14 @@ test("install of secret-scan brings pr-review, whose scan it runs", (t) => {
   assert.match(s.stderr, /^github-token: ghp_…/m);
 });
 
+test("install of pr-converge brings the skills it drives: pr-review, pr-respond and pr-land", (t) => {
+  const { env, run } = setup(t);
+  assert.equal(run(REPO, "install", "--claude", "pr-converge").status, 0);
+  assert.deepEqual(readdirSync(env.CLAUDE_DIR).sort(), ["pr-converge", "pr-land", "pr-open", "pr-respond", "pr-review", "secret-scan"]);
+  const d = spawnSync(join(env.BIN_DIR, "pr-converge"), ["--help"], { env, cwd: REPO, encoding: "utf8" });
+  assert.equal(d.status, 0, d.stderr);
+});
+
 test("a local copy is moved aside once; a link is replaced; --link links to the package", (t) => {
   const { env, run } = setup(t);
   mkdirSync(join(env.CLAUDE_DIR, "jev"), { recursive: true });

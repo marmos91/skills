@@ -51,5 +51,7 @@
   // PR hygiene check (title, body, linked issue, changelog). Repo level may set it too.
   "hygiene": { "enabled": true },
   // pr-respond: review rounds on your own PR before it stops and reports (exit 5).
-  "respond": { "max_rounds": 5 }
+  "respond": { "max_rounds": 5 },
+  // pr-converge: review rounds before the loop stops and reports (exit 5); it never merges at the cap.
+  "converge": { "max_rounds": 4 }
 }

@@ -20,6 +20,7 @@ The skills:
 - `pr-respond` fixes the review findings on your own PR, round by round, until a round adds nothing new. It uses `jev` to confirm each finding.
 - `pr-open` takes a finished branch to an open PR, with signed commits, real test counts and a secret scan.
 - `pr-land` merges a converged PR, retargets and rebases the PRs stacked on it, and cleans up branches and issues.
+- `pr-converge` loops `pr-review` and `pr-respond` on one PR until a round adds nothing new, then lands it with `pr-land` when you opt in.
 - `refute-root-cause` tries to disprove a claimed root cause. It stands alone.
 
 ## Install
@@ -238,6 +239,16 @@ base. The steps are in `shared/pr-open/SKILL.md`.
 Ask "land PR 42" in Claude Code or pi. The skill shows the plan from
 `pr-land 42 --dry-run`, then merges after a yes. A PR that is not ready is
 not merged; the output says why. The steps are in `shared/pr-land/SKILL.md`.
+
+### pr-converge
+
+Ask "converge PR 42" in Claude Code or pi, and say whether it may merge.
+The skill runs `pr-converge run 42 [--merge]`: a review round, your fixes
+through `pr-respond`, and again, until a round adds nothing new. It stops
+at `converge.max_rounds` (default 4) or when two rounds raise the same
+findings, and pauses on a question for you or a push by someone else.
+With `--merge` it lands the PR with `pr-land`. The steps are in
+`shared/pr-converge/SKILL.md`.
 
 ## Troubleshooting
 
