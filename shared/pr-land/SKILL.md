@@ -77,9 +77,11 @@ sh $SKILL_DIR/scripts/pr-land <pr>... [--dry-run]
    merge also lists `retargeted`, `rebased` and `rebasePending` (children
    not yet rebased). A rebase conflict: the rebase is aborted and the
    child's branch is untouched; the user rebases it by hand, or fixes the
-   cause and runs `pr-land` on the merged PR again: a merged PR resumes
-   after the merge with the children still on its branch and the
-   retargeted ones whose history still holds its head.
+   cause and runs `pr-land` on the merged PR again. The merge records its
+   children in pr-land's state; a merged PR resumes after the merge with
+   only the children still on its branch and the recorded ones not yet
+   rebased, never other PRs on the base. When the base already holds the
+   merged head (a merge commit or a fast-forward), no child is rebased.
 
 ## Rules
 

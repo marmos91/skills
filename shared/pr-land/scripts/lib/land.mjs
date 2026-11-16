@@ -1,13 +1,13 @@
 // Land one converged PR: check the live state, squash-merge through merge-async, retarget the stacked children,
 // delete the branch, rebase the children, tick the tracking issue, close fixed issues and clean up locally.
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { repoArgs, scanOutbound } from "../../../pr-review/scripts/lib/secrets.mjs";
 import { threads } from "../../../pr-review/scripts/lib/github.mjs";
 import { waitingQuestions } from "../../../pr-review/scripts/lib/questions.mjs";
-import { readSummaryMarker, stateRoot } from "../../../pr-review/scripts/lib/state.mjs";
+import { readSummaryMarker, stateRoot, writeAtomic } from "../../../pr-review/scripts/lib/state.mjs";
 import { aiMentions } from "../../../pr-open/scripts/lib/check.mjs";
 import { Blocked, Usage } from "../../../pr-open/scripts/lib/counts.mjs";
 import { readOverride } from "../../../pr-open/scripts/lib/detect.mjs";
@@ -119,13 +119,14 @@ function prsOn(dir, branch) {
   return prs;
 }
 
-// shortcut: fetches every same-repo PR branch on base; fine for a stack resume, slow on a repo with hundreds of open PRs.
-/** Same-repo open PRs on base whose history holds sha: the children an earlier run retargeted but did not rebase. */
-function stackedOn(dir, remote, base, sha) {
-  const prs = prsOn(dir, base).filter((c) => !c.isCrossRepository);
-  if (!prs.length) return [];
-  git(dir, "fetch", "-q", remote, ...prs.map((c) => `+refs/heads/${c.headRefName}:refs/remotes/${remote}/${c.headRefName}`));
-  return prs.filter((c) => gitOk(dir, "merge-base", "--is-ancestor", sha, `refs/remotes/${remote}/${c.headRefName}`)).map((c) => ({ ...c, onBase: true }));
+// The children of a merge, kept until they are rebased: a resume touches only these, never other PRs on the base.
+const recordFile = (repo, n) => join(stateRoot(repo), "land", `${n}.json`);
+function readRecord(repo, n) {
+  try { return JSON.parse(readFileSync(recordFile(repo, n), "utf8")); } catch { return null; }
+}
+function saveRecord(repo, n, rec) {
+  mkdirSync(join(stateRoot(repo), "land"), { recursive: true });
+  writeAtomic(recordFile(repo, n), JSON.stringify(rec));
 }
 
 /** Squash title and message: the PR title with (#N), the body without HTML comments. Blocked on a bad title, an AI mention or a secret. */
@@ -178,10 +179,16 @@ export async function land(dir, n, { dryRun = false } = {}) {
   await step("check", async () => {
     pr = ghJson(dir, ["pr", "view", String(n), "--json", PR_FIELDS]);
     remote = remoteOf(dir, repo, host);
-    // A rerun after a stop past the merge resumes: the children still on the head, and those retargeted but not rebased.
+    // A rerun after a stop past the merge resumes: the children still on the head, and the ones this merge recorded and
+    // did not rebase yet. Nothing else: a PR on the base is someone else's work.
     if (pr.state === "MERGED") {
-      merged = true; msg = { title: pr.title };
-      if (!pr.isCrossRepository) children = [...prsOn(dir, pr.headRefName), ...stackedOn(dir, remote, pr.baseRefName, pr.headRefOid)];
+      merged = true; msg = { title: `${pr.title.replace(/\s*\(#\d+\)\s*$/, "")} (#${n})` };
+      if (pr.isCrossRepository) return;
+      const rec = readRecord(repo, n), onHead = prsOn(dir, pr.headRefName);
+      const left = (rec?.children ?? []).filter((k) => !rec.rebased.includes(k) && !onHead.some((c) => c.number === k));
+      const now = left.map((k) => ghJson(dir, ["pr", "view", String(k), "--json", "number,state,baseRefName,headRefName,headRefOid,isCrossRepository,body"]));
+      for (const c of now.filter((c) => c.state !== "OPEN" || c.baseRefName !== pr.baseRefName)) notes.push(`#${c.number} is ${c.state.toLowerCase()} on ${c.baseRefName}: left alone`);
+      children = [...onHead, ...now.filter((c) => c.state === "OPEN" && c.baseRefName === pr.baseRefName).map((c) => ({ ...c, onBase: true }))];
       return;
     }
     const st = stateRoot(repo);
@@ -198,10 +205,16 @@ export async function land(dir, n, { dryRun = false } = {}) {
 
   // Merge first: a failed merge leaves every child where it was. The branch is deleted only after the retarget below.
   await step("merge", async () => {
-    if (merged) return notes.push(`#${n} was already merged: resumed after the merge`);
-    // Keep the merged head locally: the rebase below needs it after the branch is gone.
-    if (children.length) git(dir, "fetch", "-q", remote, `+refs/heads/${head}:refs/pr-land/${n}`);
-    await mergeAsync(dir, repo, pr, msg);
+    if (merged) {
+      notes.push(`#${n} was already merged: resumed after the merge`);
+      // a resume in another clone: the merged head is still at refs/pull/N/head
+      if (children.length && !gitOk(dir, "cat-file", "-e", `${sha}^{commit}`)) git(dir, "fetch", "-q", remote, `+refs/pull/${n}/head:refs/pr-land/${n}`);
+    } else if (children.length) git(dir, "fetch", "-q", remote, `+refs/heads/${head}:refs/pr-land/${n}`); // the rebase below needs it after the branch is gone
+    if (children.length) {
+      const rec = (merged && readRecord(repo, n)) || { children: [], rebased: [] };
+      saveRecord(repo, n, { ...rec, children: [...new Set([...rec.children, ...children.map((c) => c.number)])] });
+    }
+    if (!merged) await mergeAsync(dir, repo, pr, msg);
   });
 
   await step("retarget children", () => {
@@ -242,7 +255,11 @@ export async function land(dir, n, { dryRun = false } = {}) {
   await step("rebase children", () => {
     if (!children.length) return;
     git(dir, "fetch", "-q", remote, `+refs/heads/${base}:refs/remotes/${remote}/${base}`);
-    for (const c of children) {
+    // Merged by a merge commit or a fast-forward: the children already sit on the base, and a rebase would rewrite them.
+    if (gitOk(dir, "merge-base", "--is-ancestor", sha, `refs/remotes/${remote}/${base}`)) {
+      notes.push(`${base} already holds ${sha.slice(0, 7)}: no child rebased`);
+      children.forEach((c) => skipped.push(c.number));
+    } else for (const c of children) {
       if (c.isCrossRepository) { skipped.push(c.number); notes.push(`#${c.number} is on a fork: not rebased`); continue; }
       git(dir, "fetch", "-q", remote, `+refs/heads/${c.headRefName}:refs/remotes/${remote}/${c.headRefName}`);
       // A force-push rewrites someone's branch: only for a PR that pr-open opened as stacked on this head, or one whose history holds it.
@@ -259,12 +276,15 @@ export async function land(dir, n, { dryRun = false } = {}) {
         }
         git(wt, "push", "-q", `--force-with-lease=refs/heads/${c.headRefName}:${c.headRefOid}`, remote, `HEAD:refs/heads/${c.headRefName}`);
         rebased.push(c.number);
+        const rec = readRecord(repo, n);
+        if (rec) saveRecord(repo, n, { ...rec, rebased: [...rec.rebased, c.number] });
       } finally {
         gitOk(dir, "worktree", "remove", "--force", wt);
         rmSync(wt, { recursive: true, force: true });
       }
     }
     gitOk(dir, "update-ref", "-d", `refs/pr-land/${n}`);
+    rmSync(recordFile(repo, n), { force: true });
   });
 
   // Issues first: a worktree that cannot be removed must not keep the tracking issue unticked.

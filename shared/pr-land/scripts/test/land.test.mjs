@@ -269,6 +269,7 @@ test("a child that conflicts: the rebase is aborted, its branch untouched, the r
   // where each child is: retargeted, still to rebase, and how to resume
   assert.deepEqual([json.retargeted, json.rebased, json.rebasePending], [[29], [], [29]]);
   assert.ok(json.notes.includes("#27 is merged: run pr-land 27 again to resume with the children"));
+  assert.deepEqual(JSON.parse(readFileSync(join(stateRoot("o/r"), "land", "27.json"), "utf8")), { children: [29], rebased: [] }, "the resume reads this record");
   assert.equal(git(s.dir, "ls-remote", "upstream", "refs/heads/feat/b").split("\t")[0], s.B);
   assert.equal(git(s.dir, "worktree", "list").split("\n").length, 2); // the repo and the user's feat/a worktree: no temp one
 });
@@ -331,26 +332,57 @@ test("a PR on the head without the marker whose history holds the merged head: r
   assert.equal(git(s.dir, "rev-parse", `${b}^`), git(s.dir, "rev-parse", "upstream/main"));
 });
 
-test("a rerun on a merged PR resumes with the children: no merge, the retargeted child still to rebase is rebased", async (t) => {
+// What the run that stopped after the merge left in pr-land's state.
+const record = (rec) => {
+  mkdirSync(join(stateRoot("o/r"), "land"), { recursive: true });
+  writeFileSync(join(stateRoot("o/r"), "land", "27.json"), JSON.stringify(rec));
+};
+const resumeRoutes = (s, extra = {}) => routes(s, {
+  "pr view 27": { stdout: ready({ headRefOid: s.A, state: "MERGED", reviews: [] }) },
+  "pr list --base feat/a": { stdout: [] },
+  "pr view 29": { stdout: { number: 29, state: "OPEN", baseRefName: "main", headRefName: "feat/b", headRefOid: s.B, isCrossRepository: false, body: "" } },
+  // a busy base with unrelated PRs: a resume never reads it
+  "pr list --base main": { stdout: Array.from({ length: 1001 }, (_, i) => ({ number: 100 + i, headRefName: "feat/b", headRefOid: s.B, isCrossRepository: false, body: "" })) },
+  "api repos/o/r/git/ref/heads/feat/a": { stdout: { message: "Not Found" }, stderr: "HTTP 404", exit: 1 },
+  ...extra,
+});
+
+test("a rerun on a merged PR resumes with the recorded children only: no merge, no base list, the title with (#N)", async (t) => {
   const s = stack();
-  git(s.dir, "checkout", "-q", "-b", "feat/z", "main~1");
-  const Z = commit(s.dir, "z.txt", "z\n", "feat: z");
-  git(s.dir, "push", "-q", "upstream", "feat/z");
-  git(s.dir, "checkout", "-q", "main");
-  const gh = ghStub(routes(s, {
-    "pr view 27": { stdout: ready({ headRefOid: s.A, state: "MERGED", reviews: [] }) },
-    "pr list --base feat/a": { stdout: [] },
-    // #29 was retargeted by the run that stopped; #30 on main is unrelated (its history lacks the merged head)
-    "pr list --base main": { stdout: [{ number: 29, headRefName: "feat/b", headRefOid: s.B, isCrossRepository: false, body: "" }, { number: 30, headRefName: "feat/z", headRefOid: Z, isCrossRepository: false, body: "" }] },
-    "api repos/o/r/git/ref/heads/feat/a": { stdout: { message: "Not Found" }, stderr: "HTTP 404", exit: 1 },
-  }));
+  record({ children: [29], rebased: [] });
+  const gh = ghStub(resumeRoutes(s));
   git(s.dir, "push", "-q", "upstream", "--delete", "feat/a");
   const { code, json } = await run(t, s.dir, ["27"]);
   assert.equal(code, 0, JSON.stringify(json));
-  assert.deepEqual([json.landed[0].retargeted, json.landed[0].rebased], [[29], [29]]);
+  assert.deepEqual([json.landed[0].title, json.landed[0].retargeted, json.landed[0].rebased], ["feat(x): a (#27)", [29], [29]]);
   assert.equal(at(gh, "api -X PUT"), -1, "never merged again");
   assert.equal(at(gh, "pr edit"), -1, "#29 is already on main");
+  assert.equal(at(gh, "pr list --base main"), -1, "other PRs on the base are never read");
   assert.ok(json.landed[0].notes.includes("#27 was already merged: resumed after the merge"));
+  assert.ok(!existsSync(join(stateRoot("o/r"), "land", "27.json")), "the record goes once every child is rebased");
+});
+
+test("a rerun on a PR merged by a merge commit or a fast-forward: no PR is pushed, recorded or not", async (t) => {
+  for (const how of ["merge commit", "fast-forward"]) {
+    const s = stack();
+    if (how === "fast-forward") git(s.dir, "push", "-q", "-f", "upstream", `${s.A}:refs/heads/main`);
+    else { git(s.dir, "merge", "-q", "--no-ff", "-m", "Merge feat/a", "feat/a"); git(s.dir, "push", "-q", "upstream", "main"); }
+    git(s.dir, "fetch", "-q", "upstream");
+    // feat/x: opened from main after the merge, then main moves on
+    git(s.dir, "checkout", "-q", "-b", "feat/x", "upstream/main");
+    const X = commit(s.dir, "x.txt", "x\n", "feat: x");
+    git(s.dir, "push", "-q", "upstream", "feat/x");
+    git(s.dir, "checkout", "-q", "--detach", "upstream/main");
+    commit(s.dir, "m.txt", "m\n", "fix: m");
+    git(s.dir, "push", "-q", "upstream", "HEAD:refs/heads/main");
+    record({ children: [29], rebased: [] });
+    ghStub(resumeRoutes(s, { "pr list --base main": { stdout: [{ number: 29, headRefName: "feat/b", headRefOid: s.B, isCrossRepository: false, body: "" }, { number: 31, headRefName: "feat/x", headRefOid: X, isCrossRepository: false, body: "" }] } }));
+    const { code, json } = await run(t, s.dir, ["27"]);
+    assert.equal(code, 0, `${how}: ${JSON.stringify(json)}`);
+    assert.deepEqual(json.landed[0].rebased, [], how);
+    assert.equal(git(s.dir, "ls-remote", "upstream", "refs/heads/feat/b").split("\t")[0], s.B, how);
+    assert.equal(git(s.dir, "ls-remote", "upstream", "refs/heads/feat/x").split("\t")[0], X, how);
+  }
 });
 
 test("the delete: each path segment encoded, and only when the branch is still at the merged head", async (t) => {
