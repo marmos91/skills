@@ -9,6 +9,7 @@ import { WHOLE_PR_LENSES, applyEffort, loadUserConfig, lowerEffort, pickEffort, 
 import { frame as realFrame, git, readTree, cleanupWorktree, HeadMoved, DiffTooLarge } from "./frame.mjs";
 import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.mjs";
 import { tally } from "./tally.mjs";
+import { validate } from "./schema.mjs";
 import { allowedSeverities, filterNew, fingerprint } from "./convergence.mjs";
 import { diffLine, parseHunks, place } from "./hunks.mjs";
 import { verdict } from "./verdict.mjs";
@@ -18,7 +19,7 @@ import { limiter } from "./limit.mjs";
 import { decide as realDecide } from "./decider.mjs";
 import { linkFix } from "./reply.mjs";
 import { appliedAnswer, pendingAnswers, queueQuestion } from "./questions.mjs";
-import { applyProof, checkFix, directionOnly, isProven, mutantFindings, proofLine, runMutants, scopePatch, suggestionOf, uncheckedNote, UNPROVEN } from "./proof.mjs";
+import { applyProof, checkFix, directionOnly, isProven, markUnproven, mutantFindings, proofLine, runMutants, scopePatch, suggestionOf, uncheckedNote } from "./proof.mjs";
 import { cherryPicked, coreCandidates, depthLine, pickDepth, queueCoreQuestion, readCorePaths, runSetup, settleCoreQuestions } from "./setup.mjs";
 import { FINAL_STAGE, VERSION, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, usageByStage, writeAtomic } from "./state.mjs";
 
@@ -108,7 +109,11 @@ async function child(ctx, stage, key, { seat, prompt, schema, tools = "read", le
   const council = stage === "round1" || stage === "round2";
   if (council && ctx.dropped(seat)) return null;
   const dir = join(ctx.runDir, stage), outFile = join(dir, `${key}.json`);
-  if (done(ctx.runDir, stage, key)) return readJson(outFile);
+  if (done(ctx.runDir, stage, key)) {
+    const v = readJson(outFile);
+    // votes and proof join on the merge ids: a merge cached by an older engine meets today's schema, or runs again
+    if (stage !== "merge" || !validate(schema, v).length) return v;
+  }
   mkdirSync(dir, { recursive: true });
   const promptFile = join(dir, `${key}.prompt`);
   const limited = withLimits(ctx.config, seat, lens, stage);
@@ -427,22 +432,25 @@ async function once(o, restart) {
     return true;
   };
   const take = (q, c) => {
-    answers.delete(q.fingerprint);
-    applied.push(q.id);
+    if (!applied.includes(q.id)) applied.push(q.id);
     if (q.answer === "drop") rejected.push(c);
     else agreed.push({ ...c, ask_author: q.answer === "ask-author", answered: q.answer });
   };
+  // the question is per fingerprint, so its answer settles every cluster with that fp (the fp has no line)
+  const used = new Set();
   for (const { c, votes, status } of tallied) {
     if (answers.has(c.fp)) {
       const q = answers.get(c.fp);
-      if (!moved(q)) { take(q, c); continue; }
+      if (!moved(q)) { take(q, c); used.add(c.fp); continue; }
       // The answer was about other code: close it now, and let the tally (and jev or a fresh question) decide again.
       answers.delete(q.fingerprint);
       appliedAnswer(repoState, q.id);
     }
     if (status === "agreed") { agreed.push({ ...c, ask_author: c.found.length === 1 }); continue; }
     if (status === "rejected") { rejected.push(c); continue; }
-    const dfile = join(runDir, "decide", `${c.fp}.json`);
+    // by id too (2 clusters can share one fp, as in applyProof); hashed, because the id is judge output and a cached
+    // merge.json from an older run is never validated again
+    const dfile = join(runDir, "decide", `${sha1(`${c.id}\0${c.fp}`)}.json`);
     if (!existsSync(dfile)) {
       const snippet = hunk(f, c);
       const r = await o.decide(view(c), votes, snippet, config);
@@ -465,6 +473,7 @@ async function once(o, restart) {
     else if (d.decision === "rejected") rejected.push(c);
     else open.push(d.question);
   }
+  for (const fp of used) answers.delete(fp);
   // An answered finding that this run did not find again is posted from the question record.
   // A held comment that was not found again has no text to post: its answer is closed.
   for (const q of [...answers.values()].filter((x) => x.finding?.secret)) { answers.delete(q.fingerprint); applied.push(q.id); }
@@ -494,7 +503,9 @@ async function once(o, restart) {
   const forced = agreed.filter((c) => c.answered);
   const ranked = agreed.filter((c) => !c.answered && allowed.has(c.severity) && floor.has(c.severity)).sort((a, b) => RANK[a.severity] - RANK[b.severity]);
   const posted = [...forced, ...ranked.slice(0, Math.max(0, (config.post.maxFindings ?? Infinity) - forced.length))];
-  const leftOut = agreed.length - posted.length;
+  // below the floor here is only a must that proof lowered: a higher effort would not post it
+  const belowFloor = agreed.filter((c) => !c.answered && !floor.has(c.severity)).length;
+  const leftOut = agreed.length - posted.length - belowFloor;
   // Hygiene obeys the same severity floor and settled list as council findings (spec 7.5).
   const hygNew = filterNew(hyg.findings.map((h) => ({ ...h, file: "", line: null })), { reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: new Map() }).keep;
   const hygItems = hygNew.filter((h) => allowed.has(h.severity)).map((h, i) => ({ ...h, id: `h${i + 1}`, fp: fingerprint(h) }));
@@ -536,7 +547,7 @@ async function once(o, restart) {
   }
   const folded = posted.filter((c) => hostOf.has(c.id));
   // Full depth: an unproven finding says so in its body (engine text).
-  const mark = (c, b) => (depth === "full" && !c.proven ? `${b}\n\n${UNPROVEN}` : b);
+  const mark = (c, b) => (depth === "full" && !c.proven ? markUnproven(b, offDiff(c)) : b);
   const items = posted.filter((c) => !hostOf.has(c.id)).map((c) => ({
     ...c, fps: [c.fp, ...folded.filter((o) => hostOf.get(o.id) === c.id).map((o) => o.fp)],
     body: mark(c, text.get(c.id) ?? `**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}`),
@@ -602,6 +613,7 @@ async function once(o, restart) {
     outside.length ? `Outside the diff:\n${outside.map((l) => `- ${l}`).join("\n")}` : "",
     open.length ? `${open.length} ${open.length === 1 ? "point is" : "points are"} still open with the reviewer.` : "",
     leftOut ? `${leftOut} ${leftOut === 1 ? "finding was" : "findings were"} left out by the effort limit.` : "",
+    belowFloor ? `${belowFloor} unproven ${belowFloor === 1 ? "finding was" : "findings were"} left out: review ${f.reviewNumber} posts only must findings.` : "",
     run.missing?.length ? `Lenses not run: ${run.missing.join(", ")}.` : "",
     // Dropped seats and missed parts stay out of the body: they are in run.json and the run log.
     ci.line ?? "", marker(runId, f.headSha, key),
@@ -757,23 +769,23 @@ async function followUp(o, head, pst, answered) {
   // one fetch: an answered finding already posted inline at this head (an earlier follow-up that crashed
   // before appliedAnswer, or a later full run) is not posted again
   const seen = await gh.markerKeys(repo, n);
+  const runId = pst.lastRunId ?? "followup";
+  const diff = join(repoState, "pr", String(n), "runs", runId, "ctx", "diff.patch");
+  const hunks = parseHunks(existsSync(diff) ? readFileSync(diff, "utf8") : "");
   for (const q of answered.filter((x) => x.answer !== "drop")) {
     if (seen.has(sha1(`inline\0${head}\0${q.fingerprint}`))) { already.push(q.fingerprint); continue; }
     if (codeMoved(o.repoDir ?? process.cwd(), q, head)) { o.log(`question ${q.id}: the code at ${q.finding?.file}:${q.finding?.line} changed since ${q.sha}; its answer is dropped`); continue; }
     const f = q.finding;
     // full depth (proven is set): a suggestion the follow-up cannot test says so, like one the time cap cut
     const fix = f.fix && f.proven !== undefined && suggestionOf(f.fix) ? uncheckedNote(f.fix, "a follow-up runs no test") : f.fix;
-    const text = f.secret ? heldText(repoState, n, pst.lastRunId, q.fingerprint)
-      : `**${f.severity}:** ${f.title}\n\n${f.case}${fix ? `\n\n${fix}` : ""}${q.answer === "ask-author" ? "\n\nCan you confirm this case?" : ""}${f.proven === false ? `\n\n${UNPROVEN}` : ""}`;
+    const base = `**${f.severity}:** ${f.title}\n\n${f.case}${fix ? `\n\n${fix}` : ""}${q.answer === "ask-author" ? "\n\nCan you confirm this case?" : ""}`;
+    const text = f.secret ? heldText(repoState, n, pst.lastRunId, q.fingerprint) : f.proven === false ? markUnproven(base, !diffLine(hunks, f.file, f.line)) : base;
     if (text && scanOutbound(text).ok) items.push({ q, text });
   }
   let url = null;
   if (items.length) {
     const fps = items.map((x) => x.q.fingerprint).sort();
     const key = sha1(`followup\0${head}\0${fps.join(",")}`);
-    const runId = pst.lastRunId ?? "followup";
-    const diff = join(repoState, "pr", String(n), "runs", runId, "ctx", "diff.patch");
-    const hunks = parseHunks(existsSync(diff) ? readFileSync(diff, "utf8") : "");
     const p = place(items.map(({ q, text }) => ({ file: q.finding.file, line: q.finding.line, body: `${text}\n\n${marker(runId, head, sha1(`inline\0${head}\0${q.fingerprint}`), q.fingerprint)}` })), hunks, `https://github.com/${repo}/blob/${head}`);
     const body = [`Follow-up on the review of ${head}: points settled by the maintainer.`, p.body.length ? p.body.map((l) => `- ${l}`).join("\n") : "", marker(runId, head, key)].filter(Boolean).join("\n\n");
     if (!scanOutbound(body).ok) return { exit: 4, skipped: true, summary: "follow-up blocked by the secret scan" };

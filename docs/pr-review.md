@@ -566,16 +566,23 @@ command, or no mutant and no fix check runs.
 **Proof.** Run evidence is one of these:
 
 - a round-1 finding with `evidence_run` from a seat with a shell, that the
-  merge put in the cluster (`members`);
+  merge put in the cluster (`members`). A member counts when it is a
+  round-1 finding of the same lens, file and seat; its line may differ,
+  because one root cause can show at several lines of a file. A member id
+  that matches no such finding adds no proof: with no other run evidence
+  below, the finding is unproven;
 - a keep vote with `evidence_run` that the tally counts (an eligible seat,
   its first vote);
 - a surviving mutant.
 
 A finding with no run evidence gets the engine line "Unproven: no run in
-this review shows this case." in its comment. It is never dropped. Findings
+this review shows this case." in its comment. Outside the diff, where only
+the first line is posted, that line ends with "(unproven)". It is never dropped. Findings
 with and without run evidence are never put in one comment. An unproven
 `must` stays `must` only when the tally agreed with no drop, or when you
-answered it. Otherwise it is posted as `should`. The summary gets an engine
+answered it. Otherwise it is posted as `should`. From review 3, which posts
+only `must`, it is left out: the summary says how many, and the review does
+not approve. The summary gets an engine
 line, for example `Proof: 2 proven, 1 unproven.`
 
 **Checked fixes.** Before the post, the engine applies the first

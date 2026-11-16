@@ -243,10 +243,12 @@ export const isProven = (c, t, fids) => c.proven === true
   // the tally, in its lens and file: a wrong id from the judge proves nothing
   || (Array.isArray(c.members) ? c.members : []).some((id) => { const x = fids.get(id); return x?.evidence_run === true && x.lens === c.lens && x.file === c.file && ((t?.cluster ?? c).found ?? []).includes(x.seat); });
 
+// The fingerprint has no line: 2 clusters can share one, so the tally is found by id and fp.
+const tallyKey = (c) => `${c.id}\0${c.fp}`;
 export function applyProof(agreed, tallied, fids) {
-  const byFp = new Map(tallied.map((t) => [t.cluster.fp, t]));
+  const byKey = new Map(tallied.map((t) => [tallyKey(t.cluster), t]));
   for (const c of agreed) {
-    const t = byFp.get(c.fp);
+    const t = byKey.get(tallyKey(c));
     c.proven = isProven(c, t, fids);
     if (!c.proven && c.severity === "must" && !c.answered && t?.status !== "agreed") c.severity = "should";
   }
@@ -296,6 +298,9 @@ export async function checkFix(f, config, runDir, item, mutants, deadline) {
     return null; // best effort: a failed reset or read checks nothing
   }
 }
+
+/** The Unproven engine mark. Off the diff only the first line of a comment is posted, so the mark goes there. */
+export const markUnproven = (body, offDiff) => (offDiff ? body.replace(/^.*/, (h) => `${h} (unproven)`) : `${body}\n\n${UNPROVEN}`);
 
 /** A fix the time cap left unchecked keeps its code, with a short engine note. */
 export const uncheckedNote = (body, why) => `${body}\n\nEngine note: this fix was not checked, because ${why}.`;

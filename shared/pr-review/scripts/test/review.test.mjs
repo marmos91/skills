@@ -1880,7 +1880,8 @@ test("full depth: at review 3 an unproven must lowered to should does not post",
   assert.equal(r.exit, 0, r.summary);
   assert.equal(posts(fx)[0].threads.length, 0);
   assert.equal(posts(fx)[0].event, "COMMENT", "the lowered finding still counts: no APPROVE");
-  assert.match(posts(fx)[0].body, /1 finding was left out/);
+  assert.match(posts(fx)[0].body, /1 unproven finding was left out: review 3 posts only must findings\./);
+  assert.doesNotMatch(posts(fx)[0].body, /effort limit/, "a higher effort would not post it");
 });
 
 test("full depth: a `proven` the judge copies into a merge cluster proves nothing", async () => {
@@ -1929,4 +1930,66 @@ test("full depth: an answered finding posted by a follow-up says its suggestion 
   const again = await go(fx, answers, { depth: "full" });
   assert.equal(again.r.exit, 0, again.r.summary);
   assert.match(posts(fx)[1].threads[0].body, /const b = 99;\n```\n\nEngine note: this fix was not checked, because a follow-up runs no test\./);
+});
+
+test("full depth: an unproven finding off the diff keeps its mark in the summary line", async () => {
+  const fx = fixture(); routes(fx); trusted(fx);
+  const { r } = await go(fx, happy({ merge: [C("c1"), C("c2", { line: 99, title: "Off diff" })], "v~2": [keep("c1"), keep("c2")],
+    compose: { body: "Changes a.", comments: [{ id: "c1", body: "**must:** one" }, { id: "c2", body: "**must:** two\n\nmore" }] } }), { depth: "full" });
+  assert.equal(r.exit, 0, r.summary);
+  assert.match(posts(fx)[0].body, /`a\.js:99` — \*\*must:\*\* two \(unproven\) \(https:/);
+});
+
+test("full depth: an unproven finding off the diff keeps its mark in a follow-up", async () => {
+  const fx = fixture(); routes(fx); trusted(fx);
+  const answers = split({ merge: [C("c1", { found: [S0], line: 99 })] });
+  await go(fx, answers, { mode: "loop", depth: "full", decide: async () => ({ decision: "unsure", raw: null }) });
+  const [q] = openQuestions(fx.state);
+  answer(fx.state, q.id, "post");
+  const again = await go(fx, answers, { depth: "full" });
+  assert.equal(again.r.exit, 0, again.r.summary);
+  assert.match(posts(fx)[1].body, /`a\.js:99` — \*\*must:\*\* Off by one \(unproven\) \(https:/);
+});
+
+test("2 split clusters with one fingerprint get a decision each", async () => {
+  const fx = fixture(); routes(fx);
+  // the fingerprint has no line: the same title at lines 2 and 3 gives 2 clusters with one fp
+  let calls = 0;
+  const decide = async () => ({ decision: calls++ ? "rejected" : "agreed", raw: null });
+  const { r, run } = await go(fx, split({ merge: [C("c1", { found: [S0] }), C("c2", { found: [S0], line: 3 })], "v~1": [keep("c1"), keep("c2")], "v~2": [drop("c1"), drop("c2")] }), { decide });
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(calls, 2, "c2 is not given c1's decision");
+  assert.deepEqual(agreedInCompose(run).map((x) => x.id), ["c1"]);
+  // the judge's id never reaches the file name: a cached merge.json from an older run is not validated again
+  assert.ok(readdirSync(join(r.runDir, "decide")).every((n) => /^[0-9a-f]{40}\.json$/.test(n)));
+});
+
+test("a cached merge output that fails the schema runs the merge again", async () => {
+  const fx = fixture(); routes(fx);
+  let composed = 0;
+  const answers = happy({ compose: () => { if (!composed++) throw new ChildFailed("judge timeout"); return { body: "Summary.", comments: [{ id: "c1", body: "**must:** off by one" }] }; } });
+  const first = await go(fx, answers);
+  assert.equal(first.r.exit, 4, first.r.summary);
+  // a merge.json from before the duplicate-id check: 2 clusters named c1
+  const runs = join(fx.state, "pr", String(N), "runs");
+  writeFileSync(join(runs, readdirSync(runs)[0], "merge", "merge.json"), JSON.stringify([C("c1"), C("c1", { line: 3 })]));
+  const { r, run } = await go(fx, answers);
+  assert.equal(r.exit, 0, r.summary);
+  assert.ok(run.calls.some((c) => c.k === "merge"), "the merge ran again");
+  assert.equal(posts(fx)[0].threads.length, 1);
+});
+
+test("one answer settles every split cluster that shares its fingerprint", async () => {
+  const fx = fixture(); routes(fx);
+  // the fingerprint has no line: the same title at lines 2 and 3 gives 2 clusters with one fp, and one question
+  const answers = split({ merge: [C("c1", { found: [S0] }), C("c2", { found: [S0], line: 3 })], "v~1": [keep("c1"), keep("c2")], "v~2": [drop("c1"), drop("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c1", body: "**must:** one" }, { id: "c2", body: "**must:** two" }] } });
+  const first = await go(fx, answers);
+  assert.equal(first.r.exit, 3, first.r.summary);
+  const qs = openQuestions(fx.state);
+  assert.equal(qs.length, 1);
+  answer(fx.state, qs[0].id, "post");
+  const { r } = await go(fx, answers);
+  assert.equal(r.exit, 0, r.summary);
+  assert.deepEqual(posts(fx)[0].threads.map((t) => t.line).sort(), [2, 3]);
 });
