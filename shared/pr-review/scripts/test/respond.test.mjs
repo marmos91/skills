@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GitError, NotOnHead, Q, RoundCap, approve, gitReaders, decide, decline, findings, fixed, recordedPoints, summary, summaryText } from "../lib/respond.mjs";
 import { loadConfig } from "../lib/config.mjs";
-import { stateRoot } from "../lib/state.mjs";
+import { prState, savePrState, stateRoot } from "../lib/state.mjs";
 import { learn } from "../lib/learnings.mjs";
 
 const REPO = "o/r", N = 7, ME = "marmos91", SHA = "abcdef1234567890abcdef1234567890abcdef12";
@@ -286,6 +286,18 @@ test("summary: a rerun at the same head keeps the points of the posted comment",
   const again = await summary({ repo: REPO, n: N, points: [{ n: 1, status: "done", sha: SHA, text: "done." }], gh: fakeGh([], { marker: true }) });
   assert.equal(again.action, "skipped");
   assert.deepEqual([again.points[0].status, recordedPoints(REPO, N, "h1")[0].status], ["open", "open"]);
+});
+
+test("summary: a step that answers a newer review at the same head gets its own summary and points", async () => {
+  freshState();
+  const rs = stateRoot(REPO);
+  savePrState(rs, N, { ...prState(rs, N), lastReviewedSha: "h0" });
+  const gh = fakeGh([]);
+  await summary({ repo: REPO, n: N, points: [{ n: 1, status: "done", sha: SHA, text: "fixed." }], gh });
+  savePrState(rs, N, { ...prState(rs, N), lastReviewedSha: "h1" }); // the review of h1; nothing pushed since
+  assert.equal((await summary({ repo: REPO, n: N, points: [{ n: 1, status: "open", text: "declined." }], gh })).action, "posted");
+  assert.equal(gh.calls.comment.length, 2);
+  assert.deepEqual([recordedPoints(REPO, N, "h1", "h0")[0].status, recordedPoints(REPO, N, "h1", "h1")[0].status], ["done", "open"]);
 });
 
 test("git readers: a failed git throws; only exit 1 of merge-base means not in the head", () => {

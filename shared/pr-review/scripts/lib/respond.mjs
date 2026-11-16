@@ -7,7 +7,7 @@ import { scanOutbound } from "./secrets.mjs";
 import { prData } from "./prompts.mjs";
 import { linkFix } from "./reply.mjs";
 import { canDrive } from "./trust.mjs";
-import { stateRoot, writeAtomic } from "./state.mjs";
+import { prState, stateRoot, writeAtomic } from "./state.mjs";
 import { learn, parseMarker } from "./learnings.mjs";
 
 export const Q = {
@@ -237,9 +237,10 @@ export function summaryText(repo, points) {
 }
 
 /**
- * Posts the summary once per head (a marker key). A point that names its thread (the finding's id) gets the
- * fingerprints of that thread's findings (fps), recorded per head for pr-converge. The first summary at a head wins:
- * the recorded points stay those of the posted comment. -> { action: "posted"|"skipped", points }
+ * Posts the summary once per head and review it answers (a marker key): a respond step that pushes nothing answers a
+ * newer review at the same head and gets its own summary. A point that names its thread (the finding's id) gets the
+ * fingerprints of that thread's findings (fps), recorded for pr-converge. The first summary of a step wins: the
+ * recorded points stay those of the posted comment. -> { action: "posted"|"skipped", points }
  */
 export async function summary({ repo, n, points: given, gh }) {
   const { headSha } = await gh.pr(repo, n);
@@ -250,16 +251,20 @@ export async function summary({ repo, n, points: given, gh }) {
     if (!t) throw new Error(`point ${p.n}: thread ${p.thread} not found on ${repo}#${n}`);
     return { ...p, fps: fpsOf(t, named[0]) };
   });
-  const key = sha1(`respond-summary\0${headSha}`);
+  // the newest pr-review review (null with none): the review this step answers
+  const reviewed = prState(stateRoot(repo), n).lastReviewedSha;
+  const at = pointsKey(headSha, reviewed);
+  const key = sha1(`respond-summary\0${headSha}\0${reviewed ?? ""}`);
   const body = `${summaryText(repo, points)}\n\n<!-- pr-review sha=${headSha} key=${key} -->`;
   if (!scanOutbound(body, { repo }).ok) throw new Error("the secret scan holds the summary");
-  if (await gh.findMarker(repo, n, key)) return { action: "skipped", points: recordedPoints(repo, n, headSha) ?? points };
+  if (await gh.findMarker(repo, n, key)) return { action: "skipped", points: load(repo, n).points[at] ?? points };
   // recorded before the post: a crash between them leaves no marker, so the rerun records and posts again
   const st = load(repo, n);
-  save(repo, n, { ...st, points: { ...st.points, [headSha]: points } });
+  save(repo, n, { ...st, points: { ...st.points, [at]: points } });
   await gh.comment(repo, n, body);
   return { action: "posted", points };
 }
 
-/** The points pr-respond summary recorded at a head, with their fps; null when it recorded none there. */
-export const recordedPoints = (repo, n, head) => load(repo, n).points[head] ?? null;
+const pointsKey = (head, reviewed) => `${head} ${reviewed ?? ""}`;
+/** The points pr-respond summary recorded at a head for the review of reviewed, with their fps; null when none. */
+export const recordedPoints = (repo, n, head, reviewed) => load(repo, n).points[pointsKey(head, reviewed)] ?? null;
