@@ -52,7 +52,7 @@ test("round1: adversarial variant follows frame.shellOk", () => {
 });
 
 test("round1: allowed severities follow the review number", () => {
-  assert.match(round1Prompt(frame(), ["correctness"]), /Allowed severities: must, should, nit\./);
+  assert.match(round1Prompt(frame(), ["correctness"]), /Allowed severities: must, should, nit, pre-existing\./);
   assert.match(round1Prompt(frame({ reviewNumber: 2 }), ["correctness"]), /Allowed severities: must, should\./);
   assert.match(round1Prompt(frame({ reviewNumber: 3 }), ["correctness"]), /Allowed severities: must\./);
 });
@@ -113,7 +113,7 @@ test("data tags carry a random nonce; each closing tag appears once", () => {
 
 test("reviewNumber: missing -> 1; not an integer >= 1 -> throws", () => {
   const { reviewNumber, ...noNumber } = frame();
-  assert.match(round1Prompt(noNumber, ["correctness"]), /Allowed severities: must, should, nit\./);
+  assert.match(round1Prompt(noNumber, ["correctness"]), /Allowed severities: must, should, nit, pre-existing\./);
   for (const n of [0, 1.5, "2", -1]) assert.throws(() => round1Prompt(frame({ reviewNumber: n }), ["correctness"]), /reviewNumber/);
 });
 
@@ -220,4 +220,9 @@ test("compose: the author's questions and retracted findings are data blocks; no
 test("reply: the draft block uses the frame nonce", () => {
   const r = replyPrompt(frame({ nonce: "feedbeef" }), { id: "t1", comments: [{ body: "x" }] }, "challenge", { position: "accept", body: "ok" });
   assert.ok(r.includes("<<<SEAT-DATA-feedbeef\n") && r.includes("<<<PR-DATA-feedbeef\n"));
+});
+
+test("merge: pre-existing is offered on review 1 only", () => {
+  assert.match(mergePrompt(frame(), {}), /"severity": "must\|should\|nit\|pre-existing"/);
+  assert.doesNotMatch(mergePrompt(frame({ reviewNumber: 2 }), {}), /pre-existing/);
 });

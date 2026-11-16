@@ -80,7 +80,8 @@
   <text x="476" y="102" class="b">1. Scope shrinks</text>
   <text x="476" y="119" class="s">new findings only on the delta since your last review</text>
   <text x="476" y="160" class="b">2. Severity rises</text>
-  <text x="476" y="177" class="s">review 1: must, should, nit. 2: must, should. 3+: must</text>
+  <text x="476" y="177" class="s">review 1: must, should, nit, pre-existing (never blocks)</text>
+  <text x="476" y="194" class="s">review 2: must, should. 3+: must</text>
   <text x="476" y="218" class="b">3. Settled stays settled</text>
   <text x="476" y="235" class="s">fingerprint = lens, file, symbol, normalized title</text>
   <text x="476" y="276" class="b">4. No contradiction</text>

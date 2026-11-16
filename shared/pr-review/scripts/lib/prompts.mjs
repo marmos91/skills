@@ -127,6 +127,7 @@ export function round1Prompt(frame, lenses, maxTurns, part) {
     "## Rules",
     `- Allowed severities: ${sev.join(", ")}. Do not report a finding at another severity.`,
     "- must: a bug, a security hole, data loss, or a break at the expected load. should: risky code with no test, real slowness, code that should not exist. nit: a small, clear gain.",
+    ...(sev.includes("pre-existing") ? ["- pre-existing: a real problem in code the PR touches whose cause is in lines the PR did not change. It never blocks. Use it instead of must, should or nit for such a finding."] : []),
     isAncestor && base
       ? `- This is a delta review. Only the delta can get new findings: the lines that \`git -C ${frame.worktree} diff ${base}..${frame.headSha}\` changes. The council reviewed the other lines before. Report them only when the delta changes their behavior.`
       : "- Review each line that the diff adds or changes. Read other code only to judge those lines.",
@@ -186,6 +187,7 @@ const capFindings = (bySeat) => Object.fromEntries(Object.entries(bySeat).map(([
 
 // earlierAgreed: agreed findings of earlier reviews of this PR (spec 7.5 rule 4).
 export function mergePrompt(frame, findingsBySeat, earlierAgreed = [], maxTurns) {
+  const sev = [...allowedSeverities(frame.reviewNumber ?? 1)];
   return [
     context(frame),
     "",
@@ -202,7 +204,7 @@ export function mergePrompt(frame, findingsBySeat, earlierAgreed = [], maxTurns)
     "- A cluster holds the findings that share one root cause. A cluster never crosses lenses: findings of 2 lenses stay in 2 clusters, also on the same line.",
     "- `found` lists each seat id whose finding is in the cluster, one time each.",
     "- Keep the clearest title, the best case, the best evidence (a run beats a trace), and the smallest fix. Check them against the code in the worktree.",
-    "- `severity`: the severity that the best case supports. When the seats disagree and the case does not decide, take the lower one.",
+    `- \`severity\`: one of ${sev.join(", ")}, the severity that the best case supports. When the seats disagree and the case does not decide, take the lower one.`,
     "- Mark each cluster that reverses an earlier agreed finding: it asks for the opposite of that finding, for example to add back what it asked to remove. Keep the cluster, and set `reverses` to the id of the earlier finding. The engine drops and records it. Leave `reverses` out on other clusters.",
     "- Do not add findings. Do not judge if a finding is real; the vote does that.",
     "- `members` lists the `fid` of each finding in the cluster.",
@@ -212,7 +214,7 @@ export function mergePrompt(frame, findingsBySeat, earlierAgreed = [], maxTurns)
     "",
     "## Output",
     OUT,
-    '[{"id": "c1", "lens": "<lens>", "severity": "must|should|nit", "file": "path", "line": 42, "symbol": "optional", "title": "...", "case": "...", "evidence": "...", "fix": "...", "found": ["<seat id>"], "members": ["f1"], "reverses": "<earlier id>"}]',
+    `[{"id": "c1", "lens": "<lens>", "severity": "${sev.join("|")}", "file": "path", "line": 42, "symbol": "optional", "title": "...", "case": "...", "evidence": "...", "fix": "...", "found": ["<seat id>"], "members": ["f1"], "reverses": "<earlier id>"}]`,
   ].join("\n");
 }
 

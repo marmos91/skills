@@ -1,4 +1,4 @@
-const SEV = ["must", "should", "nit"];
+const SEV = ["must", "should", "nit", "pre-existing"];
 const str = (v) => typeof v === "string" && v.length > 0;
 // digits only: the line names question ids (1e21 or -3 would not)
 const line = (v) => Number.isSafeInteger(v) && v > 0;

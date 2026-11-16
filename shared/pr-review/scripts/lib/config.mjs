@@ -306,9 +306,9 @@ export function resolveHarness(s, routerUp) {
 const RANK = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const PROFILES = {
   low: { n: 2, round1: "per-seat", cap: "low", post: { severities: ["must", "should"], maxFindings: 5 } },
-  medium: { n: 3, round1: "per-seat", cap: "medium", post: { severities: ["must", "should", "nit"], maxFindings: 10 } },
-  high: { n: 3, round1: "per-lens", cap: "high", post: { severities: ["must", "should", "nit"], maxFindings: 20 } },
-  max: { n: Infinity, round1: "per-lens", cap: null, post: { severities: ["must", "should", "nit"], maxFindings: null } },
+  medium: { n: 3, round1: "per-seat", cap: "medium", post: { severities: ["must", "should", "nit", "pre-existing"], maxFindings: 10 } },
+  high: { n: 3, round1: "per-lens", cap: "high", post: { severities: ["must", "should", "nit", "pre-existing"], maxFindings: 20 } },
+  max: { n: Infinity, round1: "per-lens", cap: null, post: { severities: ["must", "should", "nit", "pre-existing"], maxFindings: null } },
 };
 
 function checkEffort(e) {

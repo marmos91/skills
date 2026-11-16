@@ -25,7 +25,7 @@ import { cherryPicked, coreCandidates, depthLine, pickDepth, queueCoreQuestion, 
 import { FINAL_STAGE, VERSION, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, commitStatus, summaryMarker, usageByStage, writeAtomic } from "./state.mjs";
 
 export const STAGES = ["frame", "setup", "round1", "merge", "round2", "tally", "decide", "compose", "post"];
-const RANK = { must: 0, should: 1, nit: 2 };
+const RANK = { must: 0, should: 1, nit: 2, "pre-existing": 3 };
 const sha1 = (s) => createHash("sha1").update(s).digest("hex");
 const readJson = (f) => JSON.parse(readFileSync(f, "utf8"));
 const save = (f, v) => writeAtomic(f, JSON.stringify(v, null, 2) + "\n");
@@ -391,7 +391,8 @@ async function once(o, restart) {
     }
   }
   const noTracking = outs.some((x) => x.v.no_tracking === true);
-  const unanimousZero = outs.every((x) => x.v.findings.length === 0);
+  // a pre-existing finding never blocks (#69), so it does not break a unanimous zero
+  const unanimousZero = outs.every((x) => x.v.findings.every((g) => g.severity === "pre-existing"));
   if (o.until === "round1") return finish("round1");
 
   // Merge (spec 6.4, 7.5 rule 4): a cluster that reverses an earlier agreed finding is dropped and recorded.
@@ -415,7 +416,11 @@ async function once(o, restart) {
   const all = raw.filter((c) => run.lenses.includes(c.lens)).map((c) => {
     const seats = [...new Set(seatsForLens(config, c.lens).map(seatId))].filter((id) => !isDropped(id));
     // proof comes from engine data only: a `proven` the judge copied into a cluster is dropped
-    return { ...c, found: [...new Set(c.found)].filter((s) => seats.includes(s)), seats, fp: fingerprint(c), proven: undefined };
+    // pre-existing never blocks (#69), so it holds only when most member findings say so; else the highest level raised
+    const sevs = (c.members ?? []).map((m) => fids.get(m)?.severity).filter(Boolean);
+    const severity = c.severity !== "pre-existing" || sevs.filter((s) => s === "pre-existing").length * 2 > sevs.length ? c.severity
+      : sevs.filter((s) => s !== "pre-existing").sort((a, b) => RANK[a] - RANK[b])[0] ?? "should";
+    return { ...c, severity, found: [...new Set(c.found)].filter((s) => seats.includes(s)), seats, fp: fingerprint(c), proven: undefined };
   });
   const reversed = all.filter((c) => c.reverses), linked = all.filter((c) => !c.reverses && resolvedThread(c));
   const { keep: clusters, dropped } = filterNew(all.filter((c) => !c.reverses && !resolvedThread(c)), {
@@ -475,6 +480,8 @@ async function once(o, restart) {
     }
     if (status === "agreed") { agreed.push({ ...c, ask_author: c.found.length === 1 }); continue; }
     if (status === "rejected") { rejected.push(c); continue; }
+    // A split pre-existing finding (#69) is dropped: it never blocks, so it gets no jev call and no question.
+    if (c.severity === "pre-existing") { rejected.push(c); continue; }
     // by id too (2 clusters can share one fp, as in applyProof); hashed, because the id is judge output and a cached
     // merge.json from an older run is never validated again
     const dfile = join(runDir, "decide", `${sha1(`${c.id}\0${c.fp}`)}.json`);
@@ -529,10 +536,13 @@ async function once(o, restart) {
   const floor = allowedSeverities(f.reviewNumber);
   const forced = agreed.filter((c) => c.answered);
   const ranked = agreed.filter((c) => !c.answered && allowed.has(c.severity) && floor.has(c.severity)).sort((a, b) => RANK[a.severity] - RANK[b.severity]);
-  const posted = [...forced, ...ranked.slice(0, Math.max(0, (config.post.maxFindings ?? Infinity) - forced.length))];
+  const chosen = [...forced, ...ranked.slice(0, Math.max(0, (config.post.maxFindings ?? Infinity) - forced.length))];
+  // A pre-existing finding (#69) posts once, collapsed in the summary, never inline; it never counts for the verdict.
+  const pre = (c) => c.severity === "pre-existing";
+  const posted = chosen.filter((c) => !pre(c)), older = chosen.filter(pre);
   // below the floor here is only a must that proof lowered: a higher effort would not post it
   const belowFloor = agreed.filter((c) => !c.answered && !floor.has(c.severity)).length;
-  const leftOut = agreed.length - posted.length - belowFloor;
+  const leftOut = agreed.length - chosen.length - belowFloor;
   // Hygiene obeys the same severity floor and settled list as council findings (spec 7.5).
   const hygNew = filterNew(hyg.findings.map((h) => ({ ...h, file: "", line: null })), { reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: new Map(), learned }).keep;
   const hygItems = hygNew.filter((h) => allowed.has(h.severity)).map((h, i) => ({ ...h, id: `h${i + 1}`, fp: fingerprint(h) }));
@@ -596,14 +606,14 @@ async function once(o, restart) {
   const missedNow = run.missed.filter((m) => !done(runDir, "round1", m.key) && !isDropped(m.seat));
   let ci = ciOf(f);
   const v = () => verdict({
-    agreed: [...agreed, ...hygItems], earlierMustOpen: blocking.length,
+    agreed: [...agreed, ...hygItems].filter((c) => !pre(c)), earlierMustOpen: blocking.length,
     openQuestions: open.length, failedLenses: run.missing?.length ?? 0, droppedSeats: run.dropped.length + missedNow.length, ci: ci.state, mode, trustedAuthor: f.shellOk, unanimousZero, ownPr: f.ownPr,
   });
   // The verdict's inputs, for pr-land: open musts (earlier, inline, off-diff), questions waiting, lenses and seats missing.
   // A function, like v(): the post step still queues the questions the secret scan holds, so the marker reads the final count.
   const counts = () => ({ must: blocking.length + [...agreed, ...hygItems].filter((x) => x.severity === "must").length, questions: waitingQuestions(repoState, n).length, gaps: (run.missing?.length ?? 0) + run.dropped.length + missedNow.length });
   // "No new findings." over a posted finding contradicts itself: drop it whatever compose wrote
-  const said = refs(composed.body.trim()), anyFinding = posted.length + hygItems.length > 0;
+  const said = refs(composed.body.trim()), anyFinding = posted.length + older.length + hygItems.length > 0;
   // Engine layout of the body (spec 6.8): pass line, corrections, verdict, checks, answers, thread index, praise.
   // The index lists only ids whose thread went inline (inline: the posted items on diff lines), at their real line.
   const one = (t) => refs(String(t ?? "").replace(/\s+/g, " ").trim());
@@ -650,7 +660,9 @@ async function once(o, restart) {
     belowFloor ? `${belowFloor} unproven ${belowFloor === 1 ? "finding was" : "findings were"} left out: review ${f.reviewNumber} posts only must findings.` : "",
     run.missing?.length ? `Lenses not run: ${run.missing.join(", ")}.` : "",
     // Dropped seats and missed parts stay out of the body: they are in run.json and the run log.
-    ci.line ?? "", summaryMarker(runId, f.headSha, key, counts()),
+    ci.line ?? "",
+    older.length ? `<details><summary>${older.length} pre-existing ${older.length === 1 ? "finding" : "findings"}: in code this PR touches, not caused by it. Not blocking.</summary>\n\n${older.map((c) => `- ${one(c.title)} ${at(c.file, c.line)}: ${one(c.case)}`).join("\n")}\n</details>` : "",
+    summaryMarker(runId, f.headSha, key, counts()),
   ].filter(Boolean).join("\n\n");
 
   const warnings = (hyg.warnings ?? []).map((w) => `warning: ${w}`);
@@ -755,7 +767,7 @@ async function once(o, restart) {
   const recorded = [...clean, ...folded.filter((c) => clean.some((h) => h.id === hostOf.get(c.id)))];
   let st = prState(repoState, n);
   if (st.lastRunId !== runId) { // a rerun after a crash here must not count the review twice
-    const fps = [...recorded, ...rejected, ...hygItems].map((c) => settledKey(c.fp, c.line, anchor(c.file, c.line)));
+    const fps = [...recorded, ...older, ...rejected, ...hygItems].map((c) => settledKey(c.fp, c.line, anchor(c.file, c.line)));
     Object.assign(st, {
       reviews: st.reviews + 1, lastReviewedSha: f.headSha, lastRunId: runId, settled: [...new Set([...st.settled, ...fps])],
       counts: { sha: f.headSha, ...counts() }, // a follow-up at this head starts from these
