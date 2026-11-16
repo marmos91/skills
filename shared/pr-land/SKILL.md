@@ -45,7 +45,9 @@ sh $SKILL_DIR/scripts/pr-land <pr>... [--dry-run]
      title. Title and message get the AI-mention check (with the `allow`
      list of `.pr-open.json`, as `pr-open` uses it) and the secret scan
      (`secret-scan` when installed, else the `pr-review` scan;
-     `PR_LAND_SECRET_SCAN` names another scanner binary, mainly for tests).
+     `PR_LAND_SECRET_SCAN` names another scanner binary, mainly for tests),
+     with `--repo` for the PR's repo and for each repo a push to its remote
+     reaches (as `pr-open`), so the private-repos opt-out can apply.
    - **merge** through `merge-async` (squash, pinned to the checked head SHA:
      a push after the check cancels it). A failed merge changes nothing else.
    - **retarget children**: every open PR based on this branch (up to 1000;

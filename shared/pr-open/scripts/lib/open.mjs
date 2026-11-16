@@ -46,10 +46,10 @@ const openPrOf = (dir, branch) => JSON.parse(gh(dir, ["pr", "list", "--head", br
 // owner/repo of a github.com URL (https, ssh:// or scp form); null for any other host.
 const ghSlug = (url) => /^(?:https:\/\/(?:[^@/]+@)?github\.com\/|ssh:\/\/git@github\.com(?::22)?\/|git@github\.com:)([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(url)?.[1] ?? null;
 
-/** The repos a push to origin really reaches (pushurl and insteadOf applied); [null] (strict scan) unless all are on GitHub. */
-export function pushRepos(dir) {
+/** The repos a push to remote really reaches (pushurl and insteadOf applied); [null] (strict scan) unless all are on GitHub. */
+export function pushRepos(dir, remote = "origin") {
   let urls = [];
-  try { urls = git(dir, "remote", "get-url", "--push", "--all", "origin").split("\n").filter(Boolean); } catch { return [null]; }
+  try { urls = git(dir, "remote", "get-url", "--push", "--all", remote).split("\n").filter(Boolean); } catch { return [null]; }
   const slugs = urls.map(ghSlug);
   return slugs.length && slugs.every(Boolean) ? [...new Set(slugs)] : [null];
 }
