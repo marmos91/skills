@@ -9,6 +9,7 @@ import { budgetLeft } from "./convergence.mjs";
 import { withLimits } from "./config.mjs";
 import { prData, replyPrompt, seatData } from "./prompts.mjs";
 import { scanOutbound } from "./secrets.mjs";
+import { noMarkup } from "./learnings.mjs";
 import { canDrive } from "./trust.mjs";
 import { prState, savePrState, stateRoot } from "./state.mjs";
 
@@ -108,7 +109,7 @@ export async function reply({ repo, n, threadId, mode, frame, config, runDir, gh
   }
 
   const key = `key=${createHash("sha1").update(`reply\0${threadId}\0${last.id}`).digest("hex")}`;
-  const full = `${body}\n\n<!-- pr-review run=${basename(runDir)} sha=${frame.headSha} ${key} -->`;
+  const full = `${noMarkup(body)}\n\n<!-- pr-review run=${basename(runDir)} sha=${frame.headSha} ${key} -->`;
   const scan = scanOutbound(full, { repo });
   if (!scan.ok) return enqueue("secret", { hits: scan.hits });
 

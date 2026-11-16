@@ -1,6 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
 import { readSummaryMarker } from "./state.mjs";
-import { outsideCode } from "./learnings.mjs";
 
 const GH_URL = /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/;
 /** owner/repo of each GitHub remote of the current folder, origin first. */
@@ -96,14 +95,23 @@ export async function pendingReview(repo, n) {
 
 // Every marker key in the viewer's reviews, review comments and PR comments, fully paged (REST --paginate),
 // so one post phase checks all its keys in memory and no window of "last 100" can miss one.
+// By position, never by Markdown: the engine's marker is the last line of the body, or is followed only by the
+// linkFix amend (reply.mjs): a blank line, "Fixed in [`sha`](commit url).", and maybe a sha/key marker. A marker
+// right after another marker, or text after the marker, gives no key.
+const MARK = String.raw`<!-- pr-review [^\n<>]*?\bkey=([0-9a-f]{40})\b[^\n<>]*-->`;
+const OWN = new RegExp(String.raw`(?:^|\n)${MARK}(?:\n\nFixed in \[\`[0-9a-f]{7}\`\]\(https://github\.com/[\w.-]+/[\w.-]+/commit/[0-9a-f]{7,40}\)\.(?:\n\n<!-- pr-review sha=[0-9a-f]+ key=([0-9a-f]{40}) -->)?)?$`);
+export function ownKeys(body) {
+  const b = String(body ?? "").trimEnd(), m = OWN.exec(b);
+  if (!m || new RegExp(`(?:^|\\n)${MARK}$`).test(b.slice(0, m.index).trimEnd())) return [];
+  return [m[1], m[2]].filter(Boolean);
+}
+
 export async function markerKeys(repo, n) {
   const me = await viewer(), keys = new Set();
   for (const path of [`repos/${repo}/pulls/${n}/reviews`, `repos/${repo}/pulls/${n}/comments`, `repos/${repo}/issues/${n}/comments`]) {
     for (const r of (await json(["api", "--paginate", "--slurp", path])).flat()) {
       if (r?.user?.login !== me) continue;
-      // the last marker outside code: the engine appends it after the model text, and linkFix appends after it
-      const m = [...outsideCode(r.body).matchAll(/<!-- pr-review [^>]*?\bkey=([0-9a-f]{40})\b[^>]*-->/g)].at(-1);
-      if (m) keys.add(m[1]);
+      for (const k of ownKeys(r.body)) keys.add(k);
     }
   }
   return keys;
