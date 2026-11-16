@@ -333,11 +333,11 @@ const answered = (rs, pr, option, over = {}) => {
   return id;
 };
 
-async function approveAnswered(ci, over = {}, verdict) {
+async function approveAnswered(ci, over = {}, verdict, reasons) {
   const rs = fresh();
   withBaseline(rs);
   if (verdict) savePrState(rs, 1, { ...prState(rs, 1), verdict });
-  const id = queueQuestion(rs, { pr: 1, sha: "sha1", fingerprint: "a".repeat(40), file: "(whole PR)", line: 0, snippet: "", finding: { kind: "approve", title: "Approve this PR?", case: "c" }, sides: { keep: "k", drop: "d" }, failure: "" });
+  const id = queueQuestion(rs, { pr: 1, sha: "sha1", fingerprint: "a".repeat(40), file: "(whole PR)", line: 0, snippet: "", finding: { kind: "approve", title: "Approve this PR?", case: "c", reasons }, sides: { keep: "k", drop: "d" }, failure: "" });
   answer(rs, id, "post");
   const gh = Object.assign(fakeGh({ ci }), over);
   const lines = [];
@@ -367,6 +367,16 @@ test("approve? post is dropped when the latest review at that head does not queu
   assert.ok(lines.some((l) => /later review .* blocks/.test(l)), lines.join("\n"));
   const ok = await approveAnswered({ state: "green", items: [] }, {}, { sha: "sha1", queueApprove: true });
   assert.equal(ok.gh.calls.postReview.length, 1, "the latest verdict still queues it");
+});
+
+test("approve? the owner's own post outlives a later review at that head without a must; a must drops it (#100)", async () => {
+  const green = { state: "green", items: [] }, manual = ["loop: untrusted author"];
+  const kept = await approveAnswered(green, {}, { sha: "sha1", queueApprove: false, must: false }, manual);
+  assert.equal(kept.gh.calls.postReview.length, 1, "kept");
+  const must = await approveAnswered(green, {}, { sha: "sha1", queueApprove: false, must: true }, manual);
+  assert.deepEqual(must.gh.calls.postReview, [], "a must drops it");
+  const auto = await approveAnswered(green, {}, { sha: "sha1", queueApprove: false, must: false }, ["ci pending"]);
+  assert.deepEqual(auto.gh.calls.postReview, [], "the auto answer for CI pending is dropped");
 });
 
 test("approve? post with no checks counts as green", async () => {

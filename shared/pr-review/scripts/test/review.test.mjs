@@ -1239,7 +1239,7 @@ test("CI is read again at post time: none at frame, red at post -> no APPROVE", 
 
 test("CI pending is the only reason: COMMENT, the approve is queued and the body says why (#82)", async () => {
   // interactive: CI alone, no human needed (answered post); loop with an untrusted author: the question stays open
-  for (const [mode, ask, why] of [["interactive", false, "CI is still running. pr-review-loop approves it when CI passes."], ["loop", true, "CI is still running and the loop approves only a trusted author. It is approved when CI passes and you answer post to the approve question."]]) {
+  for (const [mode, ask, why] of [["interactive", false, "CI is still running. Run pr-review again once CI passes to approve it, or let pr-review-loop do it."], ["loop", true, "CI is still running and the loop approves only a trusted author. It is approved when CI passes and you answer post to the approve question."]]) {
     const fx = fixture(); routes(fx);
     const gh = { ...github, checks: async () => ({ state: "pending", since: null, items: [] }) };
     const { r } = await go(fx, { all: { findings: [] }, compose: { verdict: "Nothing blocks.", body: "Fine.", comments: [] } }, { gh, mode });
@@ -1275,7 +1275,52 @@ test("a later review at the same head that blocks withdraws the auto-answered ap
   assert.equal(r.exit, 0, r.summary);
   assert.equal(posts(fx).at(-1).event, "REQUEST_CHANGES");
   assert.equal(pendingAnswers(fx.state).filter((q) => q.finding.kind === "approve").length, 0, "withdrawn");
-  assert.deepEqual(prState(fx.state, N).verdict, { sha: fx.head, queueApprove: false });
+  assert.deepEqual(prState(fx.state, N).verdict, { sha: fx.head, queueApprove: false, must: true });
+});
+
+const CLEAN = { all: { findings: [] }, compose: { body: "Fine.", comments: [] } };
+const approvals = (fx) => pendingAnswers(fx.state).filter((q) => q.finding.kind === "approve");
+
+test("an interactive rerun at the same head posts the queued approval once CI is green (#100)", async () => {
+  const fx = fixture(); routes(fx);
+  let state = "pending";
+  const gh = { ...github, checks: async () => ({ state, since: null, items: [] }) };
+  await go(fx, CLEAN, { gh });
+  const { r: wait } = await go(fx, CLEAN, { gh });
+  assert.match(wait.summary, /CI pending/);
+  assert.equal(approvals(fx).length, 1, "still queued");
+  state = "green";
+  const { r, run } = await go(fx, CLEAN, { gh });
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(run.calls.length, 0, "no review runs");
+  assert.deepEqual(posts(fx).map((p) => p.event), ["COMMENT", "APPROVE"]);
+  assert.equal(approvals(fx).length, 0);
+});
+
+test("an answer-only follow-up that posts a must withdraws the queued approval (#100)", async () => {
+  const fx = fixture(); routes(fx);
+  const gh = { ...github, checks: async () => ({ state: "pending", since: null, items: [] }) };
+  await go(fx, CLEAN, { gh });
+  const { queueQuestion } = await import("../lib/questions.mjs");
+  answer(fx.state, queueQuestion(fx.state, { pr: N, sha: fx.head, fingerprint: fingerprint(F()), file: "a.js", line: 2, snippet: "", finding: F(), sides: { keep: "k", drop: "d" }, failure: "" }), "post");
+  const { r } = await go(fx, CLEAN, { gh });
+  assert.match(r.summary, /follow-up posted/);
+  assert.equal(approvals(fx).length, 0, "withdrawn");
+  assert.deepEqual(prState(fx.state, N).verdict, { sha: fx.head, queueApprove: false, must: true });
+});
+
+test("a later review without a must keeps the owner's post answer to the approve question; a must withdraws it (#100)", async () => {
+  const should = happy({ all: { findings: [F({ severity: "should" })] }, merge: [C("c1", { severity: "should" })], compose: { body: "One should item.", comments: [{ id: "c1", body: "**should:** off by one" }] } });
+  for (const [answers, kept] of [[should, 1], [happy(), 0]]) {
+    const fx = fixture(); routes(fx);
+    const { queueQuestion } = await import("../lib/questions.mjs");
+    const fp = createHash("sha1").update(`approve:${N}:${fx.head}`).digest("hex");
+    answer(fx.state, queueQuestion(fx.state, { pr: N, sha: fx.head, fingerprint: fp, file: "(whole PR)", line: 0, snippet: "", finding: { kind: "approve", title: "Approve this PR?", case: "c", reasons: ["loop: untrusted author"] }, sides: { keep: "k", drop: "d" }, failure: "" }), "post");
+    const { r } = await go(fx, answers);
+    assert.equal(r.exit, 0, r.summary);
+    assert.equal(r.queueApprove, false);
+    assert.equal(approvals(fx).length, kept, `kept ${kept}`);
+  }
 });
 
 test("a CI read that fails at post time counts as unknown: no APPROVE", async () => {
@@ -1788,6 +1833,7 @@ test("split PR: the why-not line counts distinct seats, and a resume records eac
   assert.equal(r2.runDir, r.runDir, "resumed");
   assert.equal(runJson(r2).missed.length, 4);
   assert.match(posts(fx)[0].body, /Not approved: 2 seats did not finish\./);
+  assert.equal(counts(posts(fx)[0].body).gaps, 2, "gaps counts seats, not missed parts (#100)");
 });
 
 test("the next review removes the worktree of a finished run and keeps its ctx", async () => {

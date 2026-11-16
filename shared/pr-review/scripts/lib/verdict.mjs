@@ -43,7 +43,14 @@ export function whyNotApproved({ event, queueApprove, reasons }, counts) {
   const why = reasons.map((r) => WHY[r]?.(counts) ?? (r.startsWith("ci ") ? "the CI state is unknown" : r));
   const list = why.length > 1 ? `${why.slice(0, -1).join(", ")} and ${why.at(-1)}` : why[0];
   if (!queueApprove) return `Not approved: ${list}.`;
-  // only the loop's tick posts the queued approval
-  if (reasons.join() === "ci pending") return counts.mode === "loop" ? `Not approved yet: ${list}. It is approved when CI passes.` : `Not approved yet: ${list}. pr-review-loop approves it when CI passes.`;
+  // the loop's tick, or a pr-review rerun at this head, posts the queued approval
+  if (reasons.join() === "ci pending") return counts.mode === "loop" ? `Not approved yet: ${list}. It is approved when CI passes.` : `Not approved yet: ${list}. Run pr-review again once CI passes to approve it, or let pr-review-loop do it.`;
   return `Not approved yet: ${list}. It is approved when ${reasons.includes("ci pending") ? "CI passes and " : ""}you answer post to the approve question.`;
+}
+
+// Whether the latest verdict at q's head ({ sha, queueApprove, must }) withdraws the approve question q. The owner's
+// own "post" (to a question that needed one: not CI pending alone) outlives a later review without a must (#100).
+export function withdraws(last, q) {
+  if (last?.sha !== q.sha || last.queueApprove) return false;
+  return !!last.must || q.answer !== "post" || (q.finding?.reasons ?? ["ci pending"]).join() === "ci pending";
 }

@@ -13,7 +13,8 @@ import { validate } from "./schema.mjs";
 import { allowedSeverities, filterNew, findingKey, fingerprint, learnKey, settledKey } from "./convergence.mjs";
 import { learn, learnedKeys, noMarkup, parseMarker, suggestion } from "./learnings.mjs";
 import { codeLink, diffLine, linkRefs, parseHunks, place } from "./hunks.mjs";
-import { verdict, whyNotApproved } from "./verdict.mjs";
+import { verdict, whyNotApproved, withdraws } from "./verdict.mjs";
+import { postApproval } from "./tick.mjs";
 import { redact, scanOutbound } from "./secrets.mjs";
 import { hygiene as realHygiene } from "./hygiene.mjs";
 import { limiter } from "./limit.mjs";
@@ -261,6 +262,13 @@ async function once(o, restart) {
   if (skip) {
     const answered = pendingAnswers(repoState).filter((q) => q.pr === n && !q.finding?.kind);
     if (answered.length) return followUp(o, head, pst0, answered);
+    // A queued approval posts here once CI is green at this head, as the tick would (#100).
+    const q = pendingAnswers(repoState).find((x) => x.pr === n && x.sha === head && x.finding?.kind === "approve" && x.answer === "post");
+    if (q) {
+      const r = await postApproval({ repo, gh, rs: repoState, q, runId: pst0.lastRunId ?? runId });
+      if (r.done) appliedAnswer(repoState, q.id);
+      return { exit: 0, runDir, skipped: true, summary: r.note };
+    }
     return { exit: 0, runDir, skipped: true, summary: `already reviewed ${head}; use --restart to review it again` };
   }
   const f = await o.frame({ repo, n, repoDir: o.repoDir ?? process.cwd(), runDir, config, gh, prState: prState(repoState, n) });
@@ -635,7 +643,9 @@ async function once(o, restart) {
   // The verdict's inputs, for pr-land: open musts (earlier, inline, off-diff), questions waiting, lenses and seats missing.
   // A function, like v(): the post step still queues the questions the secret scan holds, so the marker reads the final count.
   // A question whose answer this run applies at the end is settled already: the marker and the status leave it out.
-  const counts = () => ({ must: blocking.length + [...agreed, ...hygItems].filter((x) => x.severity === "must").length, questions: waitingQuestions(repoState, n).filter((q) => !applied.includes(q.id)).length, gaps: (run.missing?.length ?? 0) + run.dropped.length + missedNow.length });
+  // Seats, not parts: one seat that missed two parts is one gap.
+  const seatsShort = new Set([...run.dropped, ...missedNow].map((x) => x.seat)).size;
+  const counts = () => ({ must: blocking.length + [...agreed, ...hygItems].filter((x) => x.severity === "must").length, questions: waitingQuestions(repoState, n).filter((q) => !applied.includes(q.id)).length, gaps: (run.missing?.length ?? 0) + seatsShort });
   // "No new findings." over a posted finding contradicts itself: drop it whatever compose wrote
   const said = refs(composed.body.trim()), anyFinding = posted.length + older.length + hygItems.length > 0;
   // Engine layout of the body (spec 6.8): pass line, corrections, verdict, checks, answers, thread index, praise.
@@ -687,7 +697,7 @@ async function once(o, restart) {
     ...retracted.map((e) => `Correction: ${one(composed.corrections?.find((x) => x.thread_id === e.threadId)?.text) || "our earlier finding here was wrong."} ${at(e.path, e.line ?? e.originalLine, threadUrl(e))}`),
     // The first line holds the decision: a bare "Nothing blocks." repeats it; any "nothing ... blocks" contradicts a block.
     /^nothing blocks\.?$/i.test(plain(composed.verdict)) || (commitStatus(counts()).state !== "success" && /\bnothing\b[^.]*\bblock/i.test(plain(composed.verdict))) ? "" : one(composed.verdict),
-    whyNotApproved(v(), { questions: open.length, lenses: run.missing?.length ?? 0, seats: new Set([...run.dropped, ...missedNow].map((x) => x.seat)).size, mode }),
+    whyNotApproved(v(), { questions: open.length, lenses: run.missing?.length ?? 0, seats: seatsShort, mode }),
     // The setup stage (#38) sets f.checked: the depth and the checks run.
     f.checked ? `What was checked: ${one(f.checked)}` : "",
     depth === "full" ? proofLine(posted) : "",
@@ -782,6 +792,7 @@ async function once(o, restart) {
     return { exit: 4, runDir, planned, summary: `review summary blocked by the secret scan (${ruleIds(scan.hits)}), try ${tries}` };
   }
   const { event, queueApprove, reasons } = v();
+  const rec = { sha: f.headSha, queueApprove, must: counts().must > 0 };
   let url = null;
   // Step 6: GitHub is the source of truth; a marker hit means an earlier, interrupted run posted.
   if (!seen.has(key)) {
@@ -803,20 +814,14 @@ async function once(o, restart) {
   if (queueApprove) {
     const id = queueQuestion(repoState, {
       pr: n, sha: f.headSha, fingerprint: sha1(`approve:${n}:${f.headSha}`), file: "(whole PR)", line: 0, snippet: "",
-      finding: { kind: "approve", title: "Approve this PR?", case: `The review at ${f.headSha} has no agreed finding. The loop approves only a trusted author with a unanimous zero-finding vote. Reasons: ${reasons.join("; ")}.` },
+      finding: { kind: "approve", title: "Approve this PR?", case: `The review at ${f.headSha} has no agreed finding. The loop approves only a trusted author with a unanimous zero-finding vote. Reasons: ${reasons.join("; ")}.`, reasons },
       sides: { keep: "post: approve the PR at this commit.", drop: "drop: keep the review as a comment." },
       failure: "The PR waits for a human approval.",
     });
     // Pending CI alone needs no human: answered here, the tick approves once CI is green at this head.
     // never over an answer already given: the owner's drop stands
     if (reasons.join() === "ci pending" && openQuestions(repoState).some((q) => q.id === id)) answer(repoState, id, "post");
-  } else {
-    // A review at this head that does not queue withdraws an approval queued earlier, answered or not.
-    for (const q of [...openQuestions(repoState), ...pendingAnswers(repoState)].filter((q) => q.pr === n && q.sha === f.headSha && q.finding?.kind === "approve")) {
-      if (q.answer === null) answer(repoState, q.id, "drop");
-      appliedAnswer(repoState, q.id);
-    }
-  }
+  } else withdrawApprovals(repoState, n, rec, log);
 
   // A folded finding counts as posted when its host comment is.
   const recorded = [...clean, ...folded.filter((c) => clean.some((h) => h.id === hostOf.get(c.id)))];
@@ -827,7 +832,7 @@ async function once(o, restart) {
     Object.assign(st, {
       reviews: st.reviews + 1, lastReviewedSha: f.headSha, lastRunId: runId, settled: [...new Set([...st.settled, ...fps])],
       counts: { sha: f.headSha, ...counts() }, // a follow-up at this head starts from these
-      verdict: { sha: f.headSha, queueApprove }, // the tick approves only while the latest verdict at this head queues it
+      verdict: rec, // the tick approves only while the latest verdict at this head allows it (withdraws)
       agreed: [...(st.agreed ?? []), ...recorded.map((c) => ({ id: c.fp, lens: c.lens, severity: c.severity, file: c.file, line: c.line, title: c.title }))],
     });
     savePrState(repoState, n, st);
@@ -870,6 +875,16 @@ async function once(o, restart) {
       ...warnings,
     ].join("\n"),
   };
+}
+
+// A review at this head that does not queue withdraws an approval queued earlier, answered or not, except the
+// owner's own "post" when no must blocks (verdict.mjs withdraws): that one is kept, and the log says so.
+function withdrawApprovals(repoState, n, rec, log) {
+  for (const q of [...openQuestions(repoState), ...pendingAnswers(repoState)].filter((q) => q.pr === n && q.sha === rec.sha && q.finding?.kind === "approve")) {
+    if (!withdraws(rec, q)) { log(`approve (${q.id}): your post answer stands; no must blocks at ${rec.sha}`); continue; }
+    if (q.answer === null) answer(repoState, q.id, "drop");
+    appliedAnswer(repoState, q.id);
+  }
 }
 
 // On the reviewed sha, never the current head. A failed status (a token without the scope) does not undo the posted review.
@@ -967,7 +982,14 @@ async function followUp(o, head, pst, answered) {
     // posted findings join agreed too, so a reworded repeat on the same line still links (same lens)
     st.agreed = [...(st.agreed ?? []), ...items.map(({ q }) => ({ id: q.fingerprint, lens: q.finding.lens, severity: q.finding.severity, file: q.finding.file, line: q.finding.line, title: q.finding.title }))];
     savePrState(repoState, n, st);
-  } else await syncMarker(gh, repo, n, head, counts, o.log); // nothing posted: the newest marker at this head takes the new counts
+  }
+  // A posted finding (an agreed finding) or a held one (an open question) is a verdict at this head that queues no approval.
+  if (items.length || held.length) {
+    const rec = { sha: head, queueApprove: false, must: counts.must > 0 };
+    savePrState(repoState, n, { ...prState(repoState, n), verdict: rec });
+    withdrawApprovals(repoState, n, rec, o.log);
+  }
+  if (!items.length) await syncMarker(gh, repo, n, head, counts, o.log); // nothing posted: the newest marker at this head takes the new counts
   if (already.length) {
     const st = prState(repoState, n);
     st.settled = [...new Set([...st.settled, ...already.map(doneKey)])];
