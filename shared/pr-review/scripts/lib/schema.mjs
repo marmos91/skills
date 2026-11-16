@@ -36,6 +36,8 @@ const stages = {
   merge(v, errs) {
     const ids = new Set(); // votes and proof join on the id
     list(v, "merge", errs, (x, p) => {
+      // the id names files (decide/<id>-<fp>.json): judge output, so no path characters
+      if (str(x?.id) && !/^[A-Za-z0-9_-]{1,64}$/.test(x.id)) errs.push(`${p}.id: letters, digits, _ and - only`);
       if (str(x?.id) && ids.has(x.id)) errs.push(`${p}.id: duplicate ${x.id}`);
       ids.add(x?.id);
       for (const k of ["id", "lens", "file", "title"]) if (!str(x?.[k])) errs.push(`${p}.${k}: required`);
