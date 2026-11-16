@@ -1,4 +1,5 @@
 import test from "node:test";
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { fingerprint, findingKey, settledKey, allowedSeverities, filterNew, budgetLeft, learnKey } from "../lib/convergence.mjs";
@@ -39,9 +40,20 @@ test("a learned finding does not drop one whose title differs only in digits", (
 });
 test("learnKey drops a line number from the title, so moved code keeps its key", () => {
   const k = learnKey(f({ title: "Missing null check at line 3" }));
-  for (const t of ["Missing null check at line 40", "Missing null check at L42", "Missing null check at lines 3-5"]) assert.equal(learnKey(f({ title: t })), k, t);
+  for (const t of ["Missing null check at line 40", "Missing null check at L42", "Missing null check at lines 3-5", "Missing null check at #L7-L9"]) assert.equal(learnKey(f({ title: t })), k, t);
   assert.equal(learnKey(f({ title: "Null check in a.js:42" })), learnKey(f({ title: "Null check in a.js:7" })));
-  assert.notEqual(learnKey(f({ title: "Missing null check at line 3 in 2 places" })), k, "other digits stay");
+});
+test("learnKey keeps digits that are not a line number: no collision", () => {
+  for (const [a, b] of [["Missing null check at line 3 in 2 places", "Missing null check at line 3 in 5 places"], ["L2 cache is never flushed", "L3 cache is never flushed"],
+    ["Aspect ratio 16:9 is hard-coded", "Aspect ratio 4:3 is hard-coded"], ["Retries 3 times", "Retries 30 times"], ["Pipeline 2 skips the check", "Pipeline 3 skips the check"], ["Version 1.2:3 tag", "Version 1.2:4 tag"]])
+    assert.notEqual(learnKey(f({ title: a })), learnKey(f({ title: b })), `${a} / ${b}`);
+});
+test("a key learned by an older engine (line number kept in the title) still drops its finding", () => {
+  const x = f({ title: "Missing null check at line 3" });
+  const old = createHash("sha1").update(["learn", x.lens, x.file, "", "missing null check at line 3"].join("\u0000")).digest("hex");
+  assert.notEqual(old, learnKey(x));
+  const r = filterNew([x], { reviewNumber: 1, settled: new Set(), changedLines: new Map(), learned: new Set([old]) });
+  assert.equal(r.dropped[0]?.reason, "learned");
 });
 test("learnKey ignores case and punctuation in the title", () => {
   assert.equal(learnKey(f({ title: "Null deref in parse()." })), learnKey(f({ title: "null deref in Parse" })));
