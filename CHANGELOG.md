@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.0](https://github.com/marmos91/skills/compare/v0.2.1...v0.3.0) (2026-11-16)
+
+
+### Features
+
+* **pr-land:** merge a converged PR and clean up ([#62](https://github.com/marmos91/skills/issues/62)) ([68df9da](https://github.com/marmos91/skills/commit/68df9dadb7233d91ac20cc39e962babd68aba4fb))
+* **secret-scan:** one shared check before any push or post ([#63](https://github.com/marmos91/skills/issues/63)) ([82235b9](https://github.com/marmos91/skills/commit/82235b95fbd9807c5efb6763146f0c9d538640cc))
+
+
+### Bug Fixes
+
+* **pr-review:** keep seat drops out of the posted summary ([#66](https://github.com/marmos91/skills/issues/66)) ([8f58cb8](https://github.com/marmos91/skills/commit/8f58cb8f14af430034177dc61f4a0144c4b34f60))
+* **pr-review:** proof-logic audit ([#64](https://github.com/marmos91/skills/issues/64)) ([1048e51](https://github.com/marmos91/skills/commit/1048e5156a1b544bf2e488ddd457f7fa00e188ae))
+
 ## [0.2.1](https://github.com/marmos91/skills/compare/v0.2.0...v0.2.1) (2026-11-14)
 
 
