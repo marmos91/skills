@@ -49,7 +49,8 @@ export function realDeps(repo, n, { review = realReview } = {}) {
       // pr-review's own result: the questions this run queued (not the loop's reply or approve questions), and a stop for
       // unset core paths (depth auto) that reviewed nothing
       const st = prState(rs, n), questions = (r.questions ?? []).length;
-      const skipped = r.skipped || r.corePaths ? r.summary : null;
+      // fail closed: an exit 3 with no question of its own reviewed nothing we can count
+      const skipped = r.skipped || r.corePaths || (r.exit === 3 && !questions) ? r.summary : null;
       return {
         // only a call that posted recorded its sha; else the loop keeps the head it called on
         sha: r.exit === 0 && !skipped ? st.lastReviewedSha : null, skipped,

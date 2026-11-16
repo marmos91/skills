@@ -313,3 +313,13 @@ test("a must with no point, or a done point but no new commit, is not fixed", as
     });
   }
 });
+
+test("an exit 3 with no question and no core paths fails closed: it pauses, never a clean round", async (t) => {
+  const { last } = setup(t);
+  const f = fakes([]);
+  delete f.deps.review;
+  const e = engine([() => ({ exit: 3, summary: "held again" })]);
+  assert.equal(await main(["run", "7", "--repo", REPO, "--merge"], { deps: f.deps, review: e.review }), 3);
+  assert.equal(last().pause.kind, "review-skipped");
+  assert.equal(f.calls.land, 0);
+});
