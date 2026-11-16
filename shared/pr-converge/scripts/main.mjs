@@ -10,6 +10,8 @@ import { parseArgs } from "node:util";
 import { loadUserConfig } from "../../pr-review/scripts/lib/config.mjs";
 import * as github from "../../pr-review/scripts/lib/github.mjs";
 import { openQuestions } from "../../pr-review/scripts/lib/questions.mjs";
+import { summaryText as checkPoints } from "../../pr-review/scripts/lib/respond.mjs";
+import { review as realReview } from "../../pr-review/scripts/lib/review.mjs";
 import { scanOutbound } from "../../pr-review/scripts/lib/secrets.mjs";
 import { Locked, acquireLock, prState, stateRoot } from "../../pr-review/scripts/lib/state.mjs";
 import { converge, convergeDir, loadState, saveState, summaryText } from "./lib/converge.mjs";
@@ -36,35 +38,30 @@ function secretHits(text) {
   return r.status === 0 ? [] : [String(r.stderr || "secret-scan: hit").trim()];
 }
 
-/** The real steps: pr-review and pr-land as child processes, GitHub through pr-review's gh helpers. */
-export function realDeps(repo, n, v) {
+/** The real steps: pr-review's engine in process (its result says when it skipped), pr-land as a child, GitHub through pr-review's gh helpers. */
+export function realDeps(repo, n, { review = realReview } = {}) {
   const rs = stateRoot(repo);
-  // the child's stdout goes to our stderr: our stdout is the JSON
-  const child = (bin, args) => spawnSync(bin, args, { stdio: ["ignore", 2, 2] });
   return {
     head: async () => (await github.pr(repo, n)).headSha,
-    review: async () => {
+    review: async ({ restart } = {}) => {
       const before = (prState(rs, n).agreed ?? []).length;
-      const r = child(sibling("pr-review", "pr-review"), ["review", String(n), "--repo", repo]);
-      if (r.status !== 0 && r.status !== 3) throw new Error(`pr-review review exited ${r.status ?? r.signal}`);
+      const r = await review({ repo, n, restart, log: (l) => console.error(l) });
+      if (r.exit !== 0 && r.exit !== 3) throw new Error(`pr-review: ${r.summary}`);
       const st = prState(rs, n);
       return {
-        sha: st.lastReviewedSha,
-        findings: (st.agreed ?? []).slice(before).map((f) => ({ fp: f.id, severity: f.severity, title: f.title })),
+        sha: st.lastReviewedSha, skipped: r.skipped ? r.summary : null,
+        findings: r.skipped ? [] : (st.agreed ?? []).slice(before).map((f) => ({ fp: f.id, severity: f.severity, title: f.title })),
         questions: openQuestions(rs).filter((q) => q.pr === n).length,
       };
     },
-    respond: async () => {
-      if (!v.pushed) return { handoff: true };
-      let points = [];
-      if (v.points) try { points = JSON.parse(readFileSync(v.points, "utf8")); } catch (e) { throw new Usage(`cannot read --points: ${e.message}`); }
-      return { sha: v.pushed, points };
-    },
+    // the agent's push, recorded by --pushed for one respond step; without it, the agent's turn
+    respond: async (s) => { const p = s.pushed; delete s.pushed; return p ?? { handoff: true }; },
     checks: async (sha) => { const s = (await github.checks(repo, n, sha)).state; return s === "none" ? "green" : s; },
     land: async () => {
       const bin = sibling("pr-land", "pr-land");
       if (!existsSync(bin)) return { blocked: "pr-land is not installed next to pr-converge" };
       const r = spawnSync(bin, [String(n)], { encoding: "utf8", stdio: ["ignore", "pipe", 2] });
+      // pr-land exits 0 landed, 1 usage, 2 blocked (not ready, a scan hit, a conflict), 4 a step failed
       if (r.status === 2) { let j = {}; try { j = JSON.parse(r.stdout); } catch {} return { blocked: [j.blocked, ...(j.why ?? [])].filter(Boolean).join("; ") || "not ready" }; }
       if (r.status !== 0) throw new Error(`pr-land exited ${r.status ?? r.signal}: ${r.stdout.trim()}`);
       const commit = JSON.parse(execFileSync(process.env.GH_BIN || "gh", ["pr", "view", String(n), "-R", repo, "--json", "mergeCommit"], { encoding: "utf8" })).mergeCommit?.oid ?? null;
@@ -79,21 +76,34 @@ export function realDeps(repo, n, v) {
   };
 }
 
+/** --points as pr-respond summary takes it: an array of { n, status: done|open, text, sha for done }. */
+function readPoints(file) {
+  let points;
+  try { points = JSON.parse(readFileSync(file, "utf8")); } catch (e) { throw new Usage(`cannot read --points: ${e.message}`); }
+  if (!Array.isArray(points)) throw new Usage("--points must hold a JSON array of points");
+  if (points.length) try { checkPoints("o/r", points); } catch (e) { throw new Usage(`--points: ${e.message}`); }
+  return points;
+}
+
 /** Applies the flags of a rerun to the saved state. */
 export function applyFlags(s, v) {
   if (v.merge) s.merge = true; // the opt-in holds for every rerun
+  // a run that converged without the opt-in lands on a rerun with it
+  if (v.merge && s.phase === "done" && s.result === "converged") { s.phase = "land"; s.result = null; s.summaryPosted = false; }
   for (const k of ["pushed", "rebased"]) if (v[k] !== undefined && !SHA.test(v[k])) throw new Usage(`--${k} needs the full 40-character sha`);
   if (v.pushed && s.phase !== "respond") throw new Usage(`--pushed is for the end of a respond step; the loop is at ${s.phase}`);
   if (v.points && !v.pushed) throw new Usage("--points goes with --pushed");
+  if (v.pushed) s.pushed = { sha: v.pushed, points: v.points ? readPoints(v.points) : [] };
   if (v.rebased) { s.head = v.rebased; s.pause = null; } // a rebase that only resolves conflicts: same round, no review
   if (v.resume && s.pause) {
     if (s.pause.kind === "foreign-push") s.head = null; // the user took the push: the next round reviews it
+    if (s.pause.kind === "review-skipped") s.restart = true; // the user asked for the head to be reviewed again
     s.pause = null;
   }
   return s;
 }
 
-export async function main(argv, { deps } = {}) {
+export async function main(argv, { deps, review } = {}) {
   try {
     const { values: v, positionals: [cmd, num, ...extra] } = parseArgs({ args: argv, options: OPTIONS, allowPositionals: true });
     if (v.help) { console.log(USAGE); return 0; }
@@ -109,7 +119,7 @@ export async function main(argv, { deps } = {}) {
     // its own lock beside the review lock: the pr-review child takes that one, and a manual review waits for it
     const release = acquireLock(convergeDir(repo, n), ` (pr-converge) of PR #${n}`);
     try {
-      const d = { ...realDeps(repo, n, v), ...deps }; // tests replace any step
+      const d = { ...realDeps(repo, n, { review }), ...deps }; // tests replace any step
       const state = applyFlags(loadState(repo, n), v);
       saveState(repo, n, state);
       const { status, state: s } = await converge(state, { deps: d, save: (x) => saveState(repo, n, x), maxRounds: config.converge.max_rounds });

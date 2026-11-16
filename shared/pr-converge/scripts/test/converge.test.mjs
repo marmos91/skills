@@ -85,9 +85,10 @@ test("no progress: the same fingerprints two rounds in a row stop the loop", asy
   assert.deepEqual([f.calls.review, f.calls.respond, f.calls.land], [2, 1, 0]);
 });
 
-test("a user question pauses the loop; --resume reviews the same round again", async (t) => {
+test("a user question pauses the loop; --resume reviews the same round again and keeps its findings", async (t) => {
   const { last } = setup(t);
-  const f = fakes([{ findings: [finding("a1")], questions: 1 }, { findings: [] }]);
+  // the rerun after the answer adds nothing: round 1's finding still needs a respond step
+  const f = fakes([{ findings: [finding("a1")], questions: 1 }, { findings: [] }, { findings: [] }]);
   assert.equal(await run(f.deps, "--merge"), 3);
   assert.equal(last().pause.kind, "question");
   // without --resume the pause holds and nothing runs
@@ -95,7 +96,58 @@ test("a user question pauses the loop; --resume reviews the same round again", a
   assert.equal(f.calls.review, 1);
   assert.equal(await run(f.deps, "--resume"), 0);
   assert.equal(last().status, "merged");
-  assert.deepEqual([f.calls.review, f.calls.respond, last().round], [2, 0, 1]);
+  assert.deepEqual(last().rounds.map((r) => r.fps), [["a1"], []]);
+  assert.deepEqual([f.calls.review, f.calls.respond, f.calls.land], [3, 1, 1]);
+});
+
+test("a round pr-review skips is not a clean round: it pauses, and --resume reviews again with restart", async (t) => {
+  const { last } = setup(t);
+  const f = fakes([]);
+  delete f.deps.review; // the real step, around a fake pr-review engine
+  const asked = [];
+  const review = async (o) => { asked.push(!!o.restart); return asked.length === 1 ? { exit: 0, skipped: true, summary: "already reviewed it" } : { exit: 0, summary: "posted" }; };
+  assert.equal(await main(["run", "7", "--repo", REPO, "--merge"], { deps: f.deps, review }), 3);
+  assert.equal(last().pause.kind, "review-skipped");
+  assert.equal(f.calls.land, 0);
+  assert.equal(await main(["run", "7", "--repo", REPO, "--resume"], { deps: f.deps, review }), 0);
+  assert.deepEqual(asked, [false, true]);
+  assert.equal(f.calls.land, 1);
+});
+
+test("red checks pause before land; a pushed fix is reviewed as a new round, then lands", async (t) => {
+  const { last } = setup(t);
+  const f = fakes([{ findings: [] }, { findings: [] }]);
+  f.deps.checks = async (s) => (s === sha("c") ? "green" : "red");
+  assert.equal(await run(f.deps, "--merge"), 3);
+  assert.equal(last().pause.kind, "checks");
+  assert.equal(f.calls.land, 0);
+  f.moveHead(sha("c")); // the agent pushes a fix for CI
+  assert.equal(await run(f.deps, "--resume"), 0);
+  assert.deepEqual([f.calls.review, f.calls.land, last().head], [2, 1, sha("c")]);
+});
+
+test("--merge after a converged run lands it", async (t) => {
+  const { last } = setup(t);
+  const f = fakes([{ findings: [] }]);
+  assert.equal(await run(f.deps), 0);
+  assert.equal(last().status, "converged");
+  assert.equal(await run(f.deps, "--merge"), 0);
+  assert.equal(last().status, "merged");
+  assert.deepEqual([f.calls.review, f.calls.land], [1, 1]);
+});
+
+test("--points that is not a list of points is refused and not saved", async (t) => {
+  const { dir } = setup(t);
+  const f = fakes([{ findings: [finding("a1")] }, { findings: [] }]);
+  delete f.deps.respond;
+  assert.equal(await run(f.deps), 2);
+  const bad = join(dir, "bad.json");
+  for (const v of [{ n: 1 }, [{ n: 1, status: "done", text: "x" }], [{ n: 1, status: "maybe", text: "x" }]]) {
+    writeFileSync(bad, JSON.stringify(v));
+    assert.equal(await run(f.deps, "--pushed", sha("b"), "--points", bad), 1);
+  }
+  assert.equal(loadState(REPO, 7).phase, "respond");
+  assert.equal(loadState(REPO, 7).pushed, undefined);
 });
 
 test("a push not from the loop pauses it; --resume reviews the new head", async (t) => {
@@ -118,16 +170,20 @@ test("without --merge a converged PR is reported and not merged", async (t) => {
   assert.match(f.calls.posts[0], /not merged/);
 });
 
-test("the respond step hands over to the agent; --pushed continues the loop", async (t) => {
+test("the respond step hands over to the agent; --pushed counts for one step only", async (t) => {
   const { dir, last } = setup(t);
-  const f = fakes([{ findings: [finding("a1")] }, { findings: [] }]);
+  const f = fakes([{ findings: [finding("a1")] }, { findings: [finding("c1")] }, { findings: [] }]);
   delete f.deps.respond; // the real step: the agent runs pr-respond
   assert.equal(await run(f.deps), 2);
   assert.equal(last().status, "respond");
   const points = join(dir, "points.json");
   writeFileSync(points, JSON.stringify([{ n: 1, status: "open", text: "out of scope: the caller checks it." }]));
   f.moveHead(sha("b"));
-  assert.equal(await run(f.deps, "--pushed", sha("b"), "--points", points), 0);
+  // round 2 raises a new finding: the agent's turn again, not the round-1 push replayed
+  assert.equal(await run(f.deps, "--pushed", sha("b"), "--points", points), 2);
+  assert.equal(last().round, 2);
+  f.moveHead(sha("c"));
+  assert.equal(await run(f.deps, "--pushed", sha("c")), 0);
   assert.match(f.calls.posts[0], /Declined:\n- out of scope/);
 });
 
@@ -137,6 +193,7 @@ test("a land that is not ready pauses; --rebased after a conflict lands without 
   assert.equal(await run(f.deps, "--merge"), 3);
   assert.equal(last().pause.kind, "land");
   f.deps.land = async () => ({ merged: true, commit: sha("f") });
+  f.moveHead(sha("c")); // the conflict-only rebase, pushed
   assert.equal(await run(f.deps, "--rebased", sha("c")), 0);
   assert.deepEqual([f.calls.review, last().head], [1, sha("c")]);
 });

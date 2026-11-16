@@ -31,7 +31,8 @@ sh $SKILL_DIR/scripts/pr-converge run <n> [--merge]
 
 1. **Merge gate.** Merge only when the user said so (`--merge`, or a yes
    when you start). Ask at the start when they did not say. Without it,
-   the loop stops at `converged`. The opt-in is kept for every rerun.
+   the loop stops at `converged`. The opt-in is kept for every rerun, and
+   `run <n> --merge` after a `converged` stop lands the PR.
 2. **Run** `pr-converge run <n> [--merge]`. It runs a `pr-review` round on
    the PR head. A round with no new agreed finding and no `must` goes to
    the checks and, with `--merge`, to `pr-land`.
@@ -40,8 +41,9 @@ sh $SKILL_DIR/scripts/pr-converge run <n> [--merge]
    `fixed`, and post the point-by-point summary. Then run
    `pr-converge run <n> --pushed <sha> --points <points.json>` with the
    full sha of the head you pushed (`git rev-parse HEAD`) and the same
-   points file you gave `pr-respond summary`. Every finding declined and
-   nothing pushed: pass the current head.
+   points file you gave `pr-respond summary` (checked the same way). The
+   push counts for this one step; the next round's findings are your turn
+   again. Every finding declined and nothing pushed: pass the current head.
 4. The loop starts the next round. Go to step 2.
 
 ## Stop rules
@@ -60,10 +62,15 @@ A pause holds until you run again with `--resume`. Tell the user why.
 
 - `question`: a split finding or a comment held by the secret scan waits
   for the user. They answer with `pr-review answer`; then `--resume`
-  reviews the same round again.
+  reviews the same round again. The round keeps the findings it raised.
+- `review-skipped`: `pr-review` did not review (the head was reviewed
+  before, or you have a pending review on GitHub). Submit or delete the
+  pending review, or confirm a new review of the same head; then
+  `--resume` reviews it again (`--restart`).
 - `foreign-push`: someone else pushed to the PR. Show the user the new
   commits. On a yes, `--resume` reviews the new head as a new round.
-- `checks`: CI is pending or red. Wait or fix, then `--resume`.
+- `checks`: CI is pending or red. Wait, or push a fix; then `--resume`.
+  A pushed fix is reviewed as a new round before it lands.
 - `land`: `pr-land` says the PR is not ready. When it is a conflict,
   rebase on the base so that only the conflicts are resolved, run the full
   test suite, push, and run `pr-converge run <n> --rebased <sha>`. That

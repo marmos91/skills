@@ -20,7 +20,8 @@ export const saveState = (repo, n, s) => writeAtomic(join(convergeDir(repo, n), 
  * Runs the loop from the saved state until it ends, pauses or hands a respond step to the agent.
  * deps (all async):
  *   head() -> sha of the PR head on GitHub
- *   review() -> { sha, findings: [{ fp, severity, title }], questions }: one pr-review round; findings are the new agreed ones
+ *   review({ restart }) -> { sha, findings: [{ fp, severity, title }], questions, skipped }: one pr-review round; findings are
+ *     the new agreed ones; skipped: why pr-review did not review (an already reviewed head, a pending review)
  *   respond(state) -> { handoff: true } | { question } | { sha, points }: points as pr-respond summary takes them
  *   checks(sha) -> "green" | "pending" | "red"
  *   land() -> { merged: true, commit } | { blocked: why }
@@ -37,11 +38,17 @@ export async function converge(state, { deps, save, maxRounds = 4 }) {
     if (s.phase === "review") {
       const head = await deps.head();
       if (s.head && head !== s.head) return pause("foreign-push", `the head moved to ${head.slice(0, 7)}, not a push of this loop (expected ${s.head.slice(0, 7)})`);
-      const r = await deps.review();
+      const r = await deps.review({ restart: !!s.restart });
+      delete s.restart;
+      // a rerun of the round (after a question) adds to its findings: the ones it raised first still need a respond step
+      const old = s.rounds.find((x) => x.round === s.round);
+      // a skipped review is not a clean round: with no record of this round, the user decides
+      if (r.skipped && !old) return pause("review-skipped", `pr-review did not review: ${r.skipped}`);
       s.head = r.sha ?? head;
-      const fps = [...new Set(r.findings.map((f) => f.fp))];
-      const must = r.findings.filter((f) => f.severity === "must").length;
-      s.rounds = [...s.rounds.filter((x) => x.round !== s.round), { round: s.round, sha: s.head, fps, must, findings: r.findings }];
+      const all = [...(old?.findings ?? []), ...r.findings.filter((f) => !old?.fps.includes(f.fp))];
+      const fps = [...new Set(all.map((f) => f.fp))];
+      const must = all.filter((f) => f.severity === "must").length;
+      s.rounds = [...s.rounds.filter((x) => x.round !== s.round), { round: s.round, sha: s.head, fps, must, findings: all }];
       save(s);
       // a question waits for the user; the rerun after the answer reviews the same round again
       if (r.questions) return pause("question", `${r.questions} pr-review question(s) wait for an answer (pr-review answer)`);
@@ -62,6 +69,9 @@ export async function converge(state, { deps, save, maxRounds = 4 }) {
     }
 
     if (s.phase === "land") {
+      // a push since the round (a fix for red checks) is code nobody reviewed: a new round
+      const head = await deps.head();
+      if (head !== s.head) { s.head = head; s.round += 1; s.phase = "review"; save(s); continue; }
       const ci = await deps.checks(s.head);
       if (ci !== "green") return pause("checks", `checks are ${ci} on ${s.head.slice(0, 7)}`);
       if (!s.merge) return end("converged");
