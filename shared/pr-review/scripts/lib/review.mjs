@@ -214,9 +214,10 @@ function anchors(dir, sha) {
   };
 }
 
+// The lines changed since the review, whitespace edits left out: they unsettle a settled finding.
 function changedLines(f) {
-  const out = new Map();
-  for (const [file, h] of parseHunks(readFileSync(scopePatch(f), "utf8"))) out.set(file, new Set([...h.right].filter(([, k]) => k === "add").map(([l]) => l)));
+  const out = new Map(), w = join(f.ctxDir, "delta-w.patch");
+  for (const [file, h] of parseHunks(readFileSync(existsSync(w) ? w : scopePatch(f), "utf8"))) out.set(file, new Set([...h.right].filter(([, k]) => k === "add").map(([l]) => l)));
   return out;
 }
 

@@ -2532,6 +2532,18 @@ test("#92: a finding still settled by an fp:line entry of an older engine gets i
   assert.ok(prState(fx.state, N).settled.includes(keyOf(fingerprint(PRE), 1, "const b = open();")), "the line can move now and stay settled");
 });
 
+test("#92: a commit that only reindents a settled line keeps its finding settled", async () => {
+  const fx = fixture(); routes(fx);
+  await go(fx, happy());
+  git(fx.seed, "checkout", "-q", "feat");
+  const b = commit(fx.seed, { "a.js": "const a = 2;\n  const  b = 3;\nconst c = 4;\nconst d = 5;\n" }, "style: indent b");
+  git(fx.seed, "push", "-qf", fx.origin, "HEAD:refs/pull/5/head");
+  routes(fx, { head: b });
+  const { r } = await go(fx, { ...happy(), compose: { body: "No new findings.", comments: [] } });
+  assert.equal(r.exit, 0, r.summary);
+  assert.deepEqual(JSON.parse(readFileSync(join(r.runDir, "clusters.json"), "utf8")).dropped.map((d) => d.reason), ["settled"]);
+});
+
 test("#92: a finding on a line past the end of its file is dropped at the merge step", async () => {
   const fx = fixture(); routes(fx);
   const { r } = await go(fx, { ...happy(), merge: [C("c1", { line: 5 })], compose: { body: "No new findings.", comments: [] } });

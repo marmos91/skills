@@ -407,7 +407,8 @@ They apply to a manual `review` and to the loop.
    or resolved is not raised again unless the code at that place changed.
    The settled list records the fingerprint with its code anchor: the
    text of the finding's line with its whitespace collapsed, so a reindent
-   keeps it settled. A finding whose line text matches a settled entry stays
+   keeps it settled (the changed lines that unsettle a finding come from a
+   whitespace-blind diff). A finding whose line text matches a settled entry stays
    settled wherever the line moved; another instance on other code is new.
    Two lines that read exactly the same share one entry: settling one settles
    both. With no anchor (a blank line), and for entries an older engine

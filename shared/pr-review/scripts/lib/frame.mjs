@@ -259,6 +259,8 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
   writeFileSync(join(ctxDir, "diff.patch"), diff);
   const chunks = writeChunks(repoDir, range, lines, config.review.chunk_lines, ctxDir);
   if (delta.base) writeFileSync(join(ctxDir, "delta.patch"), git(repoDir, ["-c", "core.quotePath=false", "diff", "--no-color", `${delta.base}..${head}`]));
+  // whitespace-blind: a reindent of a settled line does not unsettle it (#92); the seats still see it in delta.patch
+  if (delta.base) writeFileSync(join(ctxDir, "delta-w.patch"), git(repoDir, ["-c", "core.quotePath=false", "diff", "--no-color", "-w", `${delta.base}..${head}`]));
 
   const commits = git(repoDir, ["log", "--format=%H %s", `${base}..${head}`]).split("\n").filter(Boolean)
     .map((l) => ({ sha: l.slice(0, l.indexOf(" ")), subject: wrap(l.slice(l.indexOf(" ") + 1)) }));
