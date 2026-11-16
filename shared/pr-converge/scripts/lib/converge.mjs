@@ -22,19 +22,23 @@ export const saveState = (repo, n, s) => writeAtomic(join(convergeDir(repo, n), 
  *   head() -> sha of the PR head on GitHub
  *   review({ restart }) -> { sha, findings: [{ fp, severity, title }], questions, skipped }: one pr-review round; findings are
  *     the new agreed ones; skipped: why pr-review did not review (an already reviewed head, a pending review)
- *   respond(state) -> { handoff: true } | { question } | { sha, points }: points as pr-respond summary takes them, plus
- *     fp: the fingerprint of the finding a point answers
+ *   respond(state) -> { handoff: true } | { question } | { sha, points }: points as pr-respond summary records them, with
+ *     fps: the fingerprints of the findings a point answers (fp: one, written by hand)
  *   checks(sha) -> "green" | "pending" | "red"
  *   land() -> { merged: true, commit } | { blocked: why }
  * save(state) persists after every step. -> { status, state }; status: converged|merged|capped|stalled|declined|paused|respond
  */
-// The musts still open. A must is fixed only when a done point names its fingerprint (fp) and a commit was pushed
-// after the round's head; a declined, unnamed or unpushed must stays open.
+// The musts still open. A must is fixed only when a done point names its fingerprint and a commit was pushed after
+// the round's head, in that round's respond step or a later one (a resumed declined run); else it stays open.
+// The newest step that answers a fingerprint decides it; within one step an open point beats a done one.
+const fpsOf = (p) => p.fps ?? (p.fp ? [p.fp] : []);
+const openLast = (points) => [...points].sort((a, b) => (a.status === "open") - (b.status === "open"));
 export const openMusts = (s) => s.rounds.flatMap((r) => {
-  const resp = s.responses.find((x) => x.round === r.round);
-  const pushed = resp && resp.sha !== r.sha;
-  const fixed = new Set(pushed ? resp.points.filter((p) => p.status === "done" && p.fp && p.sha !== r.sha).map((p) => p.fp) : []);
-  return r.findings.filter((f) => f.severity === "must" && !fixed.has(f.fp));
+  const fixed = new Map();
+  for (const x of s.responses.filter((x) => x.round >= r.round && x.sha !== r.sha)) {
+    for (const p of openLast(x.points)) for (const fp of fpsOf(p)) fixed.set(fp, p.status === "done" && p.sha !== r.sha);
+  }
+  return r.findings.filter((f) => f.severity === "must" && !fixed.get(f.fp));
 });
 
 export async function converge(state, { deps, save, maxRounds = 4 }) {
@@ -103,8 +107,11 @@ const plural = (k, one, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
 
 /** The one end comment: rounds run, fixed, declined (with reasons), still open, and the merge commit. */
 export function summaryText(repo, s) {
-  const done = s.responses.flatMap((r) => r.points.filter((p) => p.status === "done"));
-  const kept = s.responses.flatMap((r) => r.points.filter((p) => p.status === "open"));
+  // one line per finding: a later answer (a resumed declined run that fixed it) replaces the earlier one
+  const byFp = new Map();
+  s.responses.forEach((r, i) => openLast(r.points).forEach((p, j) => byFp.set(fpsOf(p).join(",") || `${i}.${j}`, p)));
+  const done = [...byFp.values()].filter((p) => p.status === "done");
+  const kept = [...byFp.values()].filter((p) => p.status === "open");
   const last = s.rounds.at(-1);
   const open = ["capped", "stalled"].includes(s.result) ? last?.findings ?? [] : s.result === "declined" ? openMusts(s) : [];
   const how = {

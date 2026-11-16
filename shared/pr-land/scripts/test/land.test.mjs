@@ -600,6 +600,20 @@ test("--dry-run prints the plan and changes nothing", async (t) => {
   assert.deepEqual(mutations(gh), []);
 });
 
+test("--repo names the repo: gh repo view gets it, gh pr commands get GH_REPO, whatever the clone's default remote", async (t) => {
+  const s = stack();
+  const old = process.env.GH_REPO;
+  t.after(() => { if (old === undefined) delete process.env.GH_REPO; else process.env.GH_REPO = old; });
+  // the clone's own default is another repo: only the named one lands
+  const gh = ghStub(routes(s, { "repo view": { stdout: { nameWithOwner: "x/other", url: "https://github.com/x/other", defaultBranchRef: { name: "main" } } }, "repo view o/r": { stdout: { nameWithOwner: "o/r", url: "https://github.com/o/r", defaultBranchRef: { name: "main" } } } }));
+  const { code, json } = await run(t, s.dir, ["27", "--repo", "o/r", "--dry-run"]);
+  assert.equal(code, 0, JSON.stringify(json));
+  assert.equal(process.env.GH_REPO, "o/r");
+  assert.ok(gh.calls().some((c) => c.key.startsWith("repo view o/r ")));
+  t.mock.method(console, "error", () => {});
+  assert.equal(await main(["27", "--repo", "not-a-repo"]), 1);
+});
+
 test("usage: a PR number is required", async (t) => {
   t.mock.method(console, "error", () => {});
   assert.equal(await main([]), 1);

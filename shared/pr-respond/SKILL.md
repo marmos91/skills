@@ -23,7 +23,8 @@ the full command each time: zsh does not split a variable into words.
 
 1. Run `$P findings`. It lists each open thread that we did not answer yet:
    council, Copilot or human. Each one has an `id`, `path`, `line` and the
-   comments.
+   comments, and `fps`: the fingerprints of the council findings the thread
+   carries (empty for Copilot or a person).
    - `"converged": true`: no finding is left. Go to "Done".
    - Exit `5`: the round cap (`respond.max_rounds`, default 5) stops the
      loop. Report the open findings to the user and stop.
@@ -88,13 +89,18 @@ order):
 
 ```json
 [
-  { "n": 1, "status": "done", "sha": "<fixing commit>", "text": "as you wrote it." },
-  { "n": 2, "status": "done", "sha": "<fixing commit>", "text": "a guard instead of the rewrite: the caller already checks." },
-  { "n": 3, "status": "open", "text": "(read src/a.js:10) the API is public; the options are to deprecate it or keep it." }
+  { "n": 1, "status": "done", "sha": "<fixing commit>", "thread": "<id>", "text": "as you wrote it." },
+  { "n": 2, "status": "done", "sha": "<fixing commit>", "thread": "<id>", "text": "a guard instead of the rewrite: the caller already checks." },
+  { "n": 3, "status": "open", "thread": "<id>", "text": "(read src/a.js:10) the API is public; the options are to deprecate it or keep it." }
 ]
 ```
 
-For a done point, say what changed from the suggestion and why. For an open
+Give each point the `thread` it answers (the `id` from `findings`): the
+summary then records the point with the thread's first fingerprint, which
+`pr-converge` reads. A thread with several `fps` holds folded findings: give
+each one its own point with `"fps": ["<fp>"]`, or list them all in one
+point. A finding that one point marks done and another keeps open stays
+open. For a done point, say what changed from the suggestion and why. For an open
 point, give the reason and the options it leaves. Then run
 `$P summary <file>`. It posts one comment that opens with the count ("2
 points are in; point 3 is kept open.") and links each commit. It posts once

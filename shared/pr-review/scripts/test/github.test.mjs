@@ -71,6 +71,13 @@ test("findMarker: the viewer's reviews, review comments and PR comments only", a
   assert.equal(await gh.findMarker("o/r", 5, `key=${K("d")}`), false);
 });
 
+test("issueComments pages every PR comment; editIssueComment patches one", async () => {
+  const d = stubDir({ ...lists({ "issues/5/comments": [[mk(K("a"))], [mk(K("b"))]] }), "api -X PATCH repos/o/r/issues/comments/9": { stdout: {} } });
+  assert.equal((await gh.issueComments("o/r", 5)).length, 2);
+  await gh.editIssueComment("o/r", 9, "new body");
+  assert.deepEqual(muts(d).map((m) => [m.key, m.input.body]), [["api -X PATCH repos/o/r/issues/comments/9 --input -", "new body"]]);
+});
+
 test("a review with more than 100 comments: a marker on the second page is found", async () => {
   // One review's 150 inline comments come back as two REST pages; GraphQL's comments(first: 100) never saw the last 50.
   const comments = Array.from({ length: 150 }, (_, i) => mk(i.toString(16).padStart(40, "0")));

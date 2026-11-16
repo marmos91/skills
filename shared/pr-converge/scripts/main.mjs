@@ -7,19 +7,20 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { loadUserConfig } from "../../pr-review/scripts/lib/config.mjs";
+import { EFFORTS, loadUserConfig } from "../../pr-review/scripts/lib/config.mjs";
 import * as github from "../../pr-review/scripts/lib/github.mjs";
-import { summaryText as checkPoints } from "../../pr-review/scripts/lib/respond.mjs";
+import { summaryText as checkPoints, recordedPoints } from "../../pr-review/scripts/lib/respond.mjs";
 import { review as realReview } from "../../pr-review/scripts/lib/review.mjs";
 import { scanOutbound } from "../../pr-review/scripts/lib/secrets.mjs";
 import { Locked, acquireLock, prState, stateRoot } from "../../pr-review/scripts/lib/state.mjs";
 import { converge, convergeDir, loadState, saveState, summaryText } from "./lib/converge.mjs";
 
 const USAGE = `usage: pr-converge run <n> [--repo owner/repo] [--merge] [--resume] [--pushed <sha> [--points <file>]] [--rebased <sha>]
+                       [--config <file>] [--effort low|medium|high|max|auto]
        pr-converge status <n> [--repo owner/repo]`;
 const OPTIONS = {
   repo: { type: "string" }, merge: { type: "boolean" }, resume: { type: "boolean" }, pushed: { type: "string" },
-  points: { type: "string" }, rebased: { type: "string" }, config: { type: "string" }, help: { type: "boolean", short: "h" },
+  points: { type: "string" }, rebased: { type: "string" }, config: { type: "string" }, effort: { type: "string" }, help: { type: "boolean", short: "h" },
 };
 const EXIT = { converged: 0, merged: 0, respond: 2, paused: 3, capped: 5, stalled: 5, declined: 5 };
 const HERE = dirname(realpathSync(fileURLToPath(import.meta.url)));
@@ -37,14 +38,19 @@ function secretHits(text) {
   return r.status === 0 ? [] : [String(r.stderr || "secret-scan: hit").trim()];
 }
 
-/** The real steps: pr-review's engine in process (its result says when it skipped), pr-land as a child, GitHub through pr-review's gh helpers. */
-export function realDeps(repo, n, { review = realReview } = {}) {
+const ghIssues = { viewer: github.viewer, comment: github.comment, comments: github.issueComments, edit: github.editIssueComment };
+
+/**
+ * The real steps: pr-review's engine in process (its result says when it skipped), pr-land as a child, GitHub through
+ * pr-review's gh helpers. reviewOpts (configPath, effort) go to every review round.
+ */
+export function realDeps(repo, n, { review = realReview, reviewOpts = {}, landBin = sibling("pr-land", "pr-land"), gh = ghIssues } = {}) {
   const rs = stateRoot(repo);
   return {
     head: async () => (await github.pr(repo, n)).headSha,
     review: async ({ restart } = {}) => {
       const before = (prState(rs, n).agreed ?? []).length;
-      const r = await review({ repo, n, restart, log: (l) => console.error(l) });
+      const r = await review({ ...reviewOpts, repo, n, restart, log: (l) => console.error(l) });
       if (r.exit !== 0 && r.exit !== 3) throw new Error(`pr-review: ${r.summary}`);
       // pr-review's own result: the questions this run queued (not the loop's reply or approve questions), and a stop for
       // unset core paths (depth auto) that reviewed nothing
@@ -62,24 +68,24 @@ export function realDeps(repo, n, { review = realReview } = {}) {
     respond: async (s) => { const p = s.pushed; delete s.pushed; return p ?? { handoff: true }; },
     checks: async (sha) => { const s = (await github.checks(repo, n, sha)).state; return s === "none" ? "green" : s; },
     land: async () => {
-      // pr-land merges the PR of the clone's repo: it must be the one the loop reviewed
-      let here = null;
-      try { here = JSON.parse(execFileSync(process.env.GH_BIN || "gh", ["repo", "view", "--json", "nameWithOwner"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })).nameWithOwner; } catch {}
-      if (here?.toLowerCase() !== repo.toLowerCase()) return { blocked: `this clone is ${here ?? "not a GitHub repo"}, not ${repo}: run pr-converge in a clone of ${repo}` };
-      const bin = sibling("pr-land", "pr-land");
-      if (!existsSync(bin)) return { blocked: "pr-land is not installed next to pr-converge" };
-      const r = spawnSync(bin, [String(n)], { encoding: "utf8", stdio: ["ignore", "pipe", 2] });
+      if (!existsSync(landBin)) return { blocked: "pr-land is not installed next to pr-converge" };
+      // --repo: pr-land merges the PR the loop reviewed, and blocks when this clone has no remote for it
+      const r = spawnSync(landBin, [String(n), "--repo", repo], { encoding: "utf8", stdio: ["ignore", "pipe", 2] });
       // pr-land exits 0 landed, 1 usage, 2 blocked (not ready, a scan hit, a conflict), 4 a step failed
       if (r.status === 2) { let j = {}; try { j = JSON.parse(r.stdout); } catch {} return { blocked: [j.blocked, ...(j.why ?? [])].filter(Boolean).join("; ") || "not ready" }; }
       if (r.status !== 0) throw new Error(`pr-land exited ${r.status ?? r.signal}: ${r.stdout.trim()}`);
       const commit = JSON.parse(execFileSync(process.env.GH_BIN || "gh", ["pr", "view", String(n), "-R", repo, "--json", "mergeCommit"], { encoding: "utf8" })).mergeCommit?.oid ?? null;
       return { merged: true, commit };
     },
+    // one summary per PR: the key names the PR, not the body, so a rerun edits the same comment
     post: async (body) => {
-      const key = createHash("sha1").update(`converge-summary\0${n}\0${body}`).digest("hex");
+      const key = createHash("sha1").update(`converge-summary\0${n}`).digest("hex");
       const hits = secretHits(body);
       if (hits.length) throw new Error(`the secret scan holds the summary: ${hits.join(", ")}`);
-      if (!(await github.findMarker(repo, n, key))) await github.comment(repo, n, `${body}\n\n<!-- pr-review key=${key} -->`);
+      const full = `${body}\n\n<!-- pr-review key=${key} -->`, me = await gh.viewer();
+      const old = (await gh.comments(repo, n)).find((c) => c.user?.login === me && String(c.body).includes(`key=${key} -->`));
+      if (!old) await gh.comment(repo, n, full);
+      else if (old.body !== full) await gh.edit(repo, old.id, full);
     },
   };
 }
@@ -94,15 +100,22 @@ function readPoints(file) {
   return points;
 }
 
-/** Applies the flags of a rerun to the saved state. */
-export function applyFlags(s, v) {
+/**
+ * Applies the flags of a rerun to the saved state. recorded(sha, reviewed): the points pr-respond summary recorded at
+ * that head in answer to the review of reviewed (the round's head).
+ */
+export function applyFlags(s, v, recorded = () => null) {
   if (v.merge) s.merge = true; // the opt-in holds for every rerun
+  // a declined stop resumes at the respond step: the push that fixes the must comes with --pushed
+  if (v.resume && s.phase === "done" && s.result === "declined") { s.phase = "respond"; s.result = null; s.summaryPosted = false; }
   // a run that converged without the opt-in lands on a rerun with it
   if (v.merge && s.phase === "done" && s.result === "converged") { s.phase = "land"; s.result = null; s.summaryPosted = false; }
   for (const k of ["pushed", "rebased"]) if (v[k] !== undefined && !SHA.test(v[k])) throw new Usage(`--${k} needs the full 40-character sha`);
   if (v.pushed && s.phase !== "respond") throw new Usage(`--pushed is for the end of a respond step; the loop is at ${s.phase}`);
   if (v.points && !v.pushed) throw new Usage("--points goes with --pushed");
-  if (v.pushed) s.pushed = { sha: v.pushed, points: v.points ? readPoints(v.points) : [] };
+  const saved = v.pushed && !v.points ? recorded(v.pushed, s.rounds.at(-1)?.sha) : null;
+  if (v.pushed && !v.points && !saved) console.error(`pr-converge: no pr-respond summary was recorded at ${v.pushed.slice(0, 7)} for this round's review, so no point counts and a must stays open: run pr-respond summary at that head, or pass --points`);
+  if (v.pushed) s.pushed = { sha: v.pushed, points: v.points ? readPoints(v.points) : saved ?? [] };
   if (v.rebased) { s.head = v.rebased; s.pause = null; } // a rebase that only resolves conflicts: same round, no review
   if (v.resume && s.pause) {
     if (s.pause.kind === "foreign-push") s.head = null; // the user took the push: the next round reviews it
@@ -125,11 +138,12 @@ export async function main(argv, { deps, review } = {}) {
 
     let config;
     try { config = loadUserConfig({ cliPath: v.config }); } catch (e) { throw new Usage(e.message); }
+    if (v.effort && ![...EFFORTS, "auto"].includes(v.effort)) throw new Usage(`--effort must be ${[...EFFORTS, "auto"].join("|")}`);
     // its own lock beside the review lock: the pr-review child takes that one, and a manual review waits for it
     const release = acquireLock(convergeDir(repo, n), ` (pr-converge) of PR #${n}`);
     try {
-      const d = { ...realDeps(repo, n, { review }), ...deps }; // tests replace any step
-      const state = applyFlags(loadState(repo, n), v);
+      const d = { ...realDeps(repo, n, { review, reviewOpts: { configPath: v.config, effort: v.effort } }), ...deps }; // tests replace any step
+      const state = applyFlags(loadState(repo, n), v, (sha, reviewed) => recordedPoints(repo, n, sha, reviewed));
       saveState(repo, n, state);
       const { status, state: s } = await converge(state, { deps: d, save: (x) => saveState(repo, n, x), maxRounds: config.converge.max_rounds });
       if (status in { converged: 1, merged: 1, capped: 1, stalled: 1, declined: 1 } && !s.summaryPosted) {

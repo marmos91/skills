@@ -7,7 +7,7 @@ import { scanOutbound } from "./secrets.mjs";
 import { prData } from "./prompts.mjs";
 import { linkFix } from "./reply.mjs";
 import { canDrive } from "./trust.mjs";
-import { stateRoot, writeAtomic } from "./state.mjs";
+import { prState, stateRoot, writeAtomic } from "./state.mjs";
 import { learn, parseMarker } from "./learnings.mjs";
 
 export const Q = {
@@ -50,7 +50,7 @@ const threadText = (t) => prData(JSON.stringify(t.comments.map((c) => ({ author:
 
 // Own file, not state.json: the loop and pr-review rewrite state.json whole, under a lock pr-respond does not take.
 const file = (repo, n) => join(stateRoot(repo), "pr", String(n), "respond.json");
-const load = (repo, n) => { const f = file(repo, n); return { heads: [], handled: {}, approved: {}, ...(existsSync(f) ? JSON.parse(readFileSync(f, "utf8")) : {}) }; };
+const load = (repo, n) => { const f = file(repo, n); return { heads: [], handled: {}, approved: {}, points: {}, ...(existsSync(f) ? JSON.parse(readFileSync(f, "utf8")) : {}) }; };
 const save = (repo, n, s) => writeAtomic(file(repo, n), JSON.stringify(s, null, 2) + "\n");
 
 // A page of 100 comments may miss the newest: such a thread is never "answered".
@@ -61,6 +61,8 @@ const lastOther = (t, me) => t.comments.findLast((c) => c.author !== me)?.id ?? 
 const handledNow = (t, me, handled) => whole(t) && t.id in handled && handled[t.id] === lastOther(t, me);
 const open = (t, me, handled) => !t.isResolved && !handledNow(t, me, handled);
 const markHandled = (repo, n, t, me) => { const s = load(repo, n); s.handled[t.id] = lastOther(t, me); save(repo, n, s); };
+// The fingerprints of the findings a council thread carries: only our own comment's marker, never a pasted one.
+const fpsOf = (t, me) => (t.comments[0]?.author === me ? parseMarker(t.comments[0].body).fps : []);
 
 // The agent edits and runs code on what a thread says: every author must pass canDrive (trust.mjs), or be a
 // review bot: a bot comment in a review thread is a finding on the diff (Copilot), not text relayed from others.
@@ -100,7 +102,7 @@ export async function findings({ repo, n, gh, config }) {
   const list = [];
   for (const t of all.filter((x) => open(x, me, st.handled))) {
     list.push({
-      id: t.id, path: t.path, line: t.line ?? t.originalLine, outdated: t.isOutdated, trusted: await trusted(gh, repo, n, t, me),
+      id: t.id, path: t.path, line: t.line ?? t.originalLine, outdated: t.isOutdated, trusted: await trusted(gh, repo, n, t, me), fps: fpsOf(t, me),
       comments: t.comments.map((c) => ({ id: c.id, author: c.author, body: c.body })),
     });
   }
@@ -214,7 +216,7 @@ const listOf = (xs) => (xs.length === 1 ? `${xs[0]}` : `${xs.slice(0, -1).join("
 
 /**
  * One PR comment that answers a review point by point, in its numbering.
- * points: [{ n, status: "done"|"open", sha?, text }]. Done points need the sha of the fixing commit.
+ * points: [{ n, status: "done"|"open", sha?, text, thread? }]. Done points need the sha of the fixing commit.
  */
 export function summaryText(repo, points) {
   if (!points.length) throw new Error("summary needs at least one point");
@@ -234,13 +236,39 @@ export function summaryText(repo, points) {
   return [head, "", ...points.map(line)].join("\n");
 }
 
-/** Posts the summary once per head (a marker key). -> { action: "posted"|"skipped" } */
-export async function summary({ repo, n, points, gh }) {
+/**
+ * Posts the summary once per head and review it answers (a marker key): a respond step that pushes nothing answers a
+ * newer review at the same head and gets its own summary. A point that names its thread (the finding's id) gets the
+ * fingerprints of that thread's findings (fps), recorded for pr-converge. The first summary of a step wins: the
+ * recorded points stay those of the posted comment. -> { action: "posted"|"skipped", points }
+ */
+export async function summary({ repo, n, points: given, gh }) {
   const { headSha } = await gh.pr(repo, n);
-  const key = sha1(`respond-summary\0${headSha}`);
+  const named = given.some((p) => p.thread) ? [await gh.viewer(), await gh.threads(repo, n)] : [];
+  const points = given.map((p) => {
+    if (!p.thread) return p;
+    const t = named[1].find((x) => x.id === p.thread);
+    if (!t) throw new Error(`point ${p.n}: thread ${p.thread} not found on ${repo}#${n}`);
+    // a thread can carry folded findings: a point answers only the ones it names, else the host (the first)
+    const all = fpsOf(t, named[0]), want = p.fps ?? (p.fp ? [p.fp] : null);
+    const bad = (want ?? []).find((f) => !all.includes(f));
+    if (bad) throw new Error(`point ${p.n}: ${bad} is not a finding of thread ${p.thread}`);
+    return { ...p, fps: want ?? all.slice(0, 1) };
+  });
+  // the newest pr-review review (null with none): the review this step answers
+  const reviewed = prState(stateRoot(repo), n).lastReviewedSha;
+  const at = pointsKey(headSha, reviewed);
+  const key = sha1(`respond-summary\0${headSha}\0${reviewed ?? ""}`);
   const body = `${summaryText(repo, points)}\n\n<!-- pr-review sha=${headSha} key=${key} -->`;
   if (!scanOutbound(body, { repo }).ok) throw new Error("the secret scan holds the summary");
-  if (await gh.findMarker(repo, n, key)) return { action: "skipped" };
+  if (await gh.findMarker(repo, n, key)) return { action: "skipped", points: load(repo, n).points[at] ?? points };
+  // recorded before the post: a crash between them leaves no marker, so the rerun records and posts again
+  const st = load(repo, n);
+  save(repo, n, { ...st, points: { ...st.points, [at]: points } });
   await gh.comment(repo, n, body);
-  return { action: "posted" };
+  return { action: "posted", points };
 }
+
+const pointsKey = (head, reviewed) => `${head} ${reviewed ?? ""}`;
+/** The points pr-respond summary recorded at a head for the review of reviewed, with their fps; null when none. */
+export const recordedPoints = (repo, n, head, reviewed) => load(repo, n).points[pointsKey(head, reviewed)] ?? null;

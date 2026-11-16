@@ -189,7 +189,8 @@ export async function land(dir, n, { dryRun = false } = {}) {
       throw e;
     }
   };
-  const { nameWithOwner: repo, url, defaultBranchRef: { name: def } } = ghJson(dir, ["repo", "view", "--json", "nameWithOwner,url,defaultBranchRef"]);
+  // gh repo view ignores GH_REPO: name it, or a clone with another default remote merges the wrong repo's PR
+  const { nameWithOwner: repo, url, defaultBranchRef: { name: def } } = ghJson(dir, ["repo", "view", ...(process.env.GH_REPO ? [process.env.GH_REPO] : []), "--json", "nameWithOwner,url,defaultBranchRef"]);
   const host = new URL(url).hostname;
   process.env.GH_HOST = host; // every gh call goes to the clone's host, not github.com or an exported GH_HOST
   await step("check", async () => {
