@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/marmos91/skills/compare/v0.3.0...v0.4.0) (2026-11-16)
+
+
+### Features
+
+* **pr-converge:** drive a PR from open to merged ([#73](https://github.com/marmos91/skills/issues/73)) ([365924e](https://github.com/marmos91/skills/commit/365924e024b8de171709d53fc3b71b9b51888a6a))
+* **pr-review:** link threads, code and RFCs in posted reviews ([#75](https://github.com/marmos91/skills/issues/75)) ([8bd3fec](https://github.com/marmos91/skills/commit/8bd3fec88762c926abb8b69c6c5f6825ac876449))
+
 ## [0.3.0](https://github.com/marmos91/skills/compare/v0.2.1...v0.3.0) (2026-11-16)
 
 
