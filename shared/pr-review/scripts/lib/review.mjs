@@ -13,7 +13,7 @@ import { validate } from "./schema.mjs";
 import { allowedSeverities, filterNew, findingKey, fingerprint, learnKey, settledKey } from "./convergence.mjs";
 import { learn, learnedKeys, parseMarker, suggestion } from "./learnings.mjs";
 import { codeLink, diffLine, linkRefs, parseHunks, place } from "./hunks.mjs";
-import { verdict } from "./verdict.mjs";
+import { verdict, whyNotApproved } from "./verdict.mjs";
 import { redact, scanOutbound } from "./secrets.mjs";
 import { hygiene as realHygiene } from "./hygiene.mjs";
 import { limiter } from "./limit.mjs";
@@ -602,8 +602,11 @@ async function once(o, restart) {
     return r?.ok === false ? { ...x, body: directionOnly(x.body, r.why) } : r?.unchecked ? { ...x, body: uncheckedNote(x.body, r.unchecked) } : x;
   };
   for (const [i, x] of items.entries()) items[i] = await checked(x);
-  // Misses of this run's final round 1: a resume that finished the part clears it.
-  const missedNow = run.missed.filter((m) => !done(runDir, "round1", m.key) && !isDropped(m.seat));
+  // Misses of this run's final round 1: a resume that finished the part clears it. A miss counts only when fewer
+  // than 2 seats finished one of its lenses on that part, the rule of a lens.
+  const part = (k) => k.slice(k.lastIndexOf("@"));
+  const short = (m) => (jobs.find((j) => j.key === m.key)?.lenses ?? [null]).some((l) => new Set(jobs.filter((j) => part(j.key) === part(m.key) && j.lenses.includes(l) && !isDropped(j.seat) && done(runDir, "round1", j.key)).map((j) => seatId(j.seat))).size < 2);
+  const missedNow = run.missed.filter((m) => !done(runDir, "round1", m.key) && !isDropped(m.seat) && short(m));
   let ci = ciOf(f);
   const v = () => verdict({
     agreed: [...agreed, ...hygItems].filter((c) => !pre(c)), earlierMustOpen: blocking.length,
@@ -646,6 +649,7 @@ async function once(o, restart) {
         ? `${blocking.length} earlier must ${blocking.length === 1 ? "finding is" : "findings are"} still open, so the PR is blocked.`
         : "The must findings block the merge.")
       : one(composed.verdict),
+    whyNotApproved(v(), { questions: open.length, lenses: run.missing?.length ?? 0, seats: run.dropped.length + missedNow.length }),
     // The setup stage (#38) sets f.checked: the depth and the checks run.
     f.checked ? `What was checked: ${one(f.checked)}` : "",
     depth === "full" ? proofLine(posted) : "",

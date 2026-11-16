@@ -1096,6 +1096,20 @@ test("CI is read again at post time: none at frame, red at post -> no APPROVE", 
   assert.match(p.body, /Failed checks: build\./);
 });
 
+test("CI pending is the only reason: COMMENT, the approve question is queued and the body says why (#82)", async () => {
+  for (const mode of ["interactive", "loop"]) {
+    const fx = fixture(); routes(fx);
+    const gh = { ...github, checks: async () => ({ state: "pending", since: null, items: [] }) };
+    const { r } = await go(fx, { all: { findings: [] }, compose: { verdict: "Nothing blocks.", body: "Fine.", comments: [] } }, { gh, mode });
+    assert.equal(r.exit, 0, r.summary);
+    const p = posts(fx)[0];
+    assert.equal(p.event, "COMMENT", mode);
+    assert.equal(r.queueApprove, true, mode);
+    assert.match(p.body, /Nothing blocks\.\n\nNot approved yet: CI is still running[^\n]*\. It is approved when CI passes and you answer post to the approve question\./, mode);
+    assert.equal(openQuestions(fx.state).filter((q) => q.finding.kind === "approve").length, 1, mode);
+  }
+});
+
 test("a CI read that fails at post time counts as unknown: no APPROVE", async () => {
   const fx = fixture(); routes(fx);
   let k = 0;
@@ -1566,6 +1580,20 @@ test("split PR: a seat that misses one part keeps its other parts and its vote; 
   const p = posts(fx)[0];
   assert.doesNotMatch(p.body, /Seat /);
   assert.notEqual(p.event, "APPROVE");
+});
+
+test("split PR: a missed part blocks APPROVE only when fewer than 2 seats finished it (#82)", async () => {
+  const clean = { all: { findings: [] }, compose: { body: "Fine.", comments: [] } };
+  const fx = splitFixture({});
+  const { r } = await go(fx, { ...clean, "all~2@1": dropOf("turn limit") });
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(posts(fx)[0].event, "APPROVE", "2 seats finished part 1");
+  const fx2 = splitFixture({});
+  const { r: r2 } = await go(fx2, { ...clean, "all~1@1": dropOf("turn limit"), "all~2@1": dropOf("timeout") });
+  assert.equal(r2.exit, 0, r2.summary);
+  const p = posts(fx2)[0];
+  assert.equal(p.event, "COMMENT");
+  assert.match(p.body, /Not approved: 2 seats did not finish\./);
 });
 
 test("the next review removes the worktree of a finished run and keeps its ctx", async () => {

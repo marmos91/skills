@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { verdict } from "../lib/verdict.mjs";
+import { verdict, whyNotApproved } from "../lib/verdict.mjs";
 
 const base = {
   agreed: [], openQuestions: 0, failedLenses: 0, earlierMustOpen: 0,
@@ -84,4 +84,21 @@ test("a dropped seat blocks APPROVE but not REQUEST_CHANGES", () => {
   assert.deepEqual([v.event, v.queueApprove], ["COMMENT", false]);
   assert.ok(v.reasons.includes("dropped seats"));
   assert.equal(verdict({ ...base, droppedSeats: 1, agreed: [{ severity: "must" }] }).event, "REQUEST_CHANGES");
+});
+
+test("CI pending alone -> COMMENT and queueApprove, interactive and loop; with another reason it does not queue (#82)", () => {
+  for (const mode of ["interactive", "loop"]) assert.deepEqual(v({ ci: "pending", mode }), { event: "COMMENT", queueApprove: true, reasons: ["ci pending"] });
+  assert.equal(v({ ci: "pending", openQuestions: 1 }).queueApprove, false);
+  assert.equal(v({ ci: "red" }).queueApprove, false);
+});
+
+test("whyNotApproved: one plain line from the reasons, none when a must blocks (#82)", () => {
+  const c = { questions: 2, lenses: 1, seats: 1 };
+  assert.equal(whyNotApproved(v({ ci: "pending" }), c), "Not approved yet: CI is still running. It is approved when CI passes and you answer post to the approve question.");
+  assert.equal(whyNotApproved(v({ failedLenses: 1, droppedSeats: 1 }), c), "Not approved: 1 lens did not run and 1 seat did not finish.");
+  assert.equal(whyNotApproved(v({ ci: "red", openQuestions: 2 }), c), "Not approved: 2 questions are still open and CI failed.");
+  assert.equal(whyNotApproved(v({ mode: "loop", trustedAuthor: false }), c), "Not approved yet: the loop approves only a trusted author. It is approved when you answer post to the approve question.");
+  assert.equal(whyNotApproved(v({}), c), "");
+  assert.equal(whyNotApproved(v({ agreed: [f("must")] }), c), "");
+  assert.equal(whyNotApproved(v({ ownPr: true, agreed: [f("must")] }), c), "");
 });

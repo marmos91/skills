@@ -99,8 +99,9 @@ is about design across parts, so it reviews the whole PR once per seat.
 Merge then removes the duplicates across parts. Votes and the judge see the
 whole PR. A seat that hits its turn limit or its timeout in one part loses that
 part only: it keeps its other parts and its vote. The run log and
-`run.json` record the missed parts (the posted summary does not), and a
-missed part blocks APPROVE, as a dropped seat does.
+`run.json` record the missed parts (the posted summary does not). A missed
+part blocks APPROVE only when fewer than 2 seats finished that part for one of
+its lenses, the same rule as a lens.
 
 Each part adds a full set of round-1 children. When the run needs more than
 `review.max_children` (default 60), an effort that the config chose steps
@@ -282,8 +283,14 @@ text (`scripts/lib/verdict.mjs`). The first row that matches wins.
 |---|---|
 | Your own PR | `COMMENT` (GitHub does not allow more) |
 | 1 or more agreed `must`, or an earlier `must` of yours still open | `REQUEST_CHANGES` |
-| An open question, a split, a failed lens, a dropped seat, any agreed finding, or red or pending CI | `COMMENT` |
+| An open question, a split, a failed lens, a dropped seat, any agreed finding, or red or unknown CI | `COMMENT` |
+| Pending CI and nothing else above | `COMMENT`, and an "approve?" question for you |
 | Loop run, and the shell rule (Trust and isolation, item 3) does not hold or not every seat found zero | `COMMENT`, and an "approve?" question for you |
+
+When the event is `COMMENT` and no `must` blocks, the body has one engine line
+that says why it is not an approval, for example "Not approved yet: CI is still
+running. It is approved when CI passes and you answer post to the approve
+question." The loop posts the approval only at the same head with green CI.
 | None of the above | `APPROVE` |
 
 ### 9. Post
@@ -642,7 +649,8 @@ The engine reads the checks of the head SHA (`statusCheckRollup`).
 - **Context**: `ctx/ci.json` lists each check (name, state, URL). For a
   failed check it adds the last 80 lines of the failed job log, with secrets
   redacted. The correctness and adversarial lenses use it as evidence.
-- **Verdict**: red or pending CI never gives `APPROVE`. Red CI with no agreed
+- **Verdict**: red or pending CI never gives `APPROVE`. Pending CI alone
+  queues an "approve?" question, posted once CI is green at the same head. Red CI with no agreed
   `must` gives `COMMENT`, and the summary names the failed checks. The engine
   reads CI again just before it posts; a stale or failed read counts as
   unknown and blocks `APPROVE`.
