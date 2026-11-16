@@ -35,10 +35,11 @@ function fakes(reviews, { landResult = { merged: true, commit: sha("f") } } = {}
   const deps = {
     head: async () => head,
     review: async () => { const r = reviews[calls.review++]; return { sha: head, findings: r.findings ?? [], questions: r.questions ?? 0 }; },
-    respond: async () => {
+    // fixes every finding of the round: one done point per fingerprint, on a new commit
+    respond: async (s) => {
       calls.respond++;
       head = sha("bcde"[pushes++]);
-      return { sha: head, points: [{ n: 1, status: "done", sha: head, text: "fixed it." }] };
+      return { sha: head, points: s.rounds.at(-1).findings.map((f, i) => ({ n: i + 1, status: "done", sha: head, fp: f.fp, text: `fixed ${f.fp}.` })) };
     },
     checks: async () => "green",
     land: async () => { calls.land++; return landResult; },
@@ -213,7 +214,9 @@ test("a pr-review stop with no question (core paths unset) is not a clean round"
   const { last } = setup(t);
   const f = fakes([]);
   delete f.deps.review;
-  const e = engine([() => ({ exit: 3, corePaths: [], summary: "which paths are core? run pr-review config core-paths" })]);
+  // a pr-review-loop question on the same PR is open: it must not hide the skip
+  queueQuestion(stateRoot(REPO), { pr: 7, sha: sha("a"), fingerprint: "e".repeat(40), file: "(whole PR)", line: 0, snippet: "", finding: { kind: "approve", title: "Approve?", case: "c" }, sides: { keep: "k", drop: "d" }, failure: "" });
+  const e = engine([() => ({ exit: 3, corePaths: { repo: REPO, candidates: [] }, summary: "core paths not set" })]);
   assert.equal(await main(["run", "7", "--repo", REPO, "--merge"], { deps: f.deps, review: e.review }), 3);
   assert.equal(last().pause.kind, "review-skipped");
   assert.equal(f.calls.land, 0);
@@ -227,7 +230,7 @@ test("a round that stops at a question keeps the head it was called on", async (
   const e = engine([
     () => { e.post(sha("a"), [{ id: "a1", severity: "should", title: "a1" }]); return { exit: 0, summary: "posted" }; },
     // round 2 on b: a split question stops it before lastReviewedSha is saved
-    () => { queueQuestion(rs(), { pr: 7, sha: sha("b"), fingerprint: "f".repeat(40), file: "x.js", line: 1, snippet: "", finding: { title: "t", case: "c" }, sides: { keep: "k", drop: "d" }, failure: "" }); return { exit: 3, summary: "a question waits" }; },
+    () => { queueQuestion(rs(), { pr: 7, sha: sha("b"), fingerprint: "f".repeat(40), file: "x.js", line: 1, snippet: "", finding: { title: "t", case: "c" }, sides: { keep: "k", drop: "d" }, failure: "" }); return { exit: 3, questions: ["7-ffffffff.md"], summary: "a question waits" }; },
     () => { e.post(sha("b")); return { exit: 0, summary: "posted" }; },
   ]);
   assert.equal(await main(["run", "7", "--repo", REPO, "--merge"], { deps: f.deps, review: e.review }), 3);
@@ -266,4 +269,47 @@ test("a declined must stays open: the loop stops and never lands", async (t) => 
   assert.equal(last().status, "declined");
   assert.equal(f.calls.land, 0);
   assert.match(f.calls.posts[0], /Still open:\n- must: finding m1/);
+});
+
+test("a skipped rerun of a round that found nothing pauses, not lands", async (t) => {
+  const { last } = setup(t);
+  const f = fakes([]);
+  delete f.deps.review;
+  const e = engine([
+    () => ({ exit: 3, questions: ["7-x.md"], summary: "a question waits" }),
+    () => ({ exit: 0, skipped: true, summary: "already reviewed it" }),
+  ]);
+  assert.equal(await main(["run", "7", "--repo", REPO, "--merge"], { deps: f.deps, review: e.review }), 3);
+  assert.equal(last().pause.kind, "question");
+  assert.equal(await main(["run", "7", "--repo", REPO, "--resume"], { deps: f.deps, review: e.review }), 3);
+  assert.equal(last().pause.kind, "review-skipped");
+  assert.equal(f.calls.land, 0);
+});
+
+test("a fixed must and a declined should land: an open point blocks only its own finding", async (t) => {
+  const { last } = setup(t);
+  const f = fakes([{ findings: [finding("m1", "must"), finding("s1")] }, { findings: [] }]);
+  f.deps.respond = async () => { f.moveHead(sha("b")); return { sha: sha("b"), points: [
+    { n: 1, status: "done", sha: sha("b"), fp: "m1", text: "fixed m1." }, { n: 2, status: "open", fp: "s1", text: "declined s1." }] }; };
+  assert.equal(await run(f.deps, "--merge"), 0);
+  assert.equal(last().status, "merged");
+});
+
+test("a must with no point, or a done point but no new commit, is not fixed", async (t) => {
+  for (const [label, respond] of [
+    ["--pushed <head> and no points", async (s) => ({ sha: s.head, points: [] })],
+    ["a done point that names another finding", async () => ({ sha: sha("b"), points: [{ n: 1, status: "done", sha: sha("b"), fp: "zz", text: "x." }] })],
+    ["a done point on the round's own head", async (s) => ({ sha: s.head, points: [{ n: 1, status: "done", sha: s.head, fp: "m1", text: "x." }] })],
+    ["a push, but the done point's commit is the round's head", async (s) => ({ sha: sha("b"), points: [{ n: 1, status: "done", sha: s.head, fp: "m1", text: "x." }] })],
+    ["a done point but nothing pushed", async (s) => ({ sha: s.head, points: [{ n: 1, status: "done", sha: sha("d"), fp: "m1", text: "x." }] })],
+  ]) {
+    await t.test(label, async (t2) => {
+      const { last } = setup(t2);
+      const f = fakes([{ findings: [finding("m1", "must")] }, { findings: [] }]);
+      f.deps.respond = async (s) => { const r = await respond(s); f.moveHead(r.sha); return r; };
+      assert.equal(await run(f.deps, "--merge"), 5);
+      assert.equal(last().status, "declined");
+      assert.equal(f.calls.land, 0);
+    });
+  }
 });

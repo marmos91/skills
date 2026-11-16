@@ -43,7 +43,10 @@ sh $SKILL_DIR/scripts/pr-converge run <n> [--merge]
    `fixed`, and post the point-by-point summary. Then run
    `pr-converge run <n> --pushed <sha> --points <points.json>` with the
    full sha of the head you pushed (`git rev-parse HEAD`) and the same
-   points file you gave `pr-respond summary` (checked the same way). The
+   points file you gave `pr-respond summary` (checked the same way). Add
+   `"fp"` to each point: the fingerprint of the finding it answers, from
+   `rounds[].findings[].fp` in the JSON. A `must` counts as fixed only when
+   a `done` point names its `fp` and its commit is new since the round. The
    push counts for this one step; the next round's findings are your turn
    again. Every finding declined and nothing pushed: pass the current head;
    the loop then goes to the checks without another round.
@@ -58,9 +61,10 @@ sh $SKILL_DIR/scripts/pr-converge run <n> [--merge]
   merges.
 - **No progress:** a round that raises only the findings of the round
   before (same fingerprints) stops the loop (`stalled`).
-- **Declined must:** a round with a `must` whose respond step kept a point
-  open stops the loop before land (`declined`). It never merges; the user
-  decides.
+- **Open must:** a `must` that no `done` point with a new commit names
+  (declined, left out, or nothing pushed) stops the loop before land
+  (`declined`). It never merges; the user decides. A declined `should`
+  does not block.
 
 ## Pauses
 

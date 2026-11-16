@@ -9,7 +9,6 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { loadUserConfig } from "../../pr-review/scripts/lib/config.mjs";
 import * as github from "../../pr-review/scripts/lib/github.mjs";
-import { openQuestions } from "../../pr-review/scripts/lib/questions.mjs";
 import { summaryText as checkPoints } from "../../pr-review/scripts/lib/respond.mjs";
 import { review as realReview } from "../../pr-review/scripts/lib/review.mjs";
 import { scanOutbound } from "../../pr-review/scripts/lib/secrets.mjs";
@@ -47,9 +46,10 @@ export function realDeps(repo, n, { review = realReview } = {}) {
       const before = (prState(rs, n).agreed ?? []).length;
       const r = await review({ repo, n, restart, log: (l) => console.error(l) });
       if (r.exit !== 0 && r.exit !== 3) throw new Error(`pr-review: ${r.summary}`);
-      const st = prState(rs, n), questions = openQuestions(rs).filter((q) => q.pr === n).length;
-      // a stop with no question queued (no core paths at depth auto) reviewed nothing
-      const skipped = r.skipped || (r.exit === 3 && !questions) ? r.summary : null;
+      // pr-review's own result: the questions this run queued (not the loop's reply or approve questions), and a stop for
+      // unset core paths (depth auto) that reviewed nothing
+      const st = prState(rs, n), questions = (r.questions ?? []).length;
+      const skipped = r.skipped || r.corePaths ? r.summary : null;
       return {
         // only a call that posted recorded its sha; else the loop keeps the head it called on
         sha: r.exit === 0 && !skipped ? st.lastReviewedSha : null, skipped,
@@ -89,6 +89,7 @@ function readPoints(file) {
   try { points = JSON.parse(readFileSync(file, "utf8")); } catch (e) { throw new Usage(`cannot read --points: ${e.message}`); }
   if (!Array.isArray(points)) throw new Usage("--points must hold a JSON array of points");
   if (points.length) try { checkPoints("o/r", points); } catch (e) { throw new Usage(`--points: ${e.message}`); }
+  for (const p of points) if (p.fp !== undefined && (typeof p.fp !== "string" || !p.fp)) throw new Usage(`--points: point ${p.n}: fp must be the finding's fingerprint`);
   return points;
 }
 
@@ -135,7 +136,7 @@ export async function main(argv, { deps, review } = {}) {
         s.summaryPosted = true;
         saveState(repo, n, s);
       }
-      print({ status, round: s.round, head: s.head, pause: s.pause, rounds: s.rounds.map(({ findings, ...r }) => r), mergeCommit: s.mergeCommit ?? null });
+      print({ status, round: s.round, head: s.head, pause: s.pause, rounds: s.rounds, mergeCommit: s.mergeCommit ?? null });
       return EXIT[status];
     } finally { release(); }
   } catch (e) {

@@ -22,22 +22,27 @@ export const saveState = (repo, n, s) => writeAtomic(join(convergeDir(repo, n), 
  *   head() -> sha of the PR head on GitHub
  *   review({ restart }) -> { sha, findings: [{ fp, severity, title }], questions, skipped }: one pr-review round; findings are
  *     the new agreed ones; skipped: why pr-review did not review (an already reviewed head, a pending review)
- *   respond(state) -> { handoff: true } | { question } | { sha, points }: points as pr-respond summary takes them
+ *   respond(state) -> { handoff: true } | { question } | { sha, points }: points as pr-respond summary takes them, plus
+ *     fp: the fingerprint of the finding a point answers
  *   checks(sha) -> "green" | "pending" | "red"
  *   land() -> { merged: true, commit } | { blocked: why }
  * save(state) persists after every step. -> { status, state }; status: converged|merged|capped|stalled|declined|paused|respond
  */
-// The must findings of rounds whose respond step kept a point open (declined).
-// shortcut: points are not tied to fingerprints, so any open point in a round with a must keeps its musts open; tie them when pr-respond records fps.
-export const declinedMusts = (s) => s.rounds.filter((r) => s.responses.some((x) => x.round === r.round && x.points.some((p) => p.status === "open")))
-  .flatMap((r) => r.findings.filter((f) => f.severity === "must"));
+// The musts still open. A must is fixed only when a done point names its fingerprint (fp) and a commit was pushed
+// after the round's head; a declined, unnamed or unpushed must stays open.
+export const openMusts = (s) => s.rounds.flatMap((r) => {
+  const resp = s.responses.find((x) => x.round === r.round);
+  const pushed = resp && resp.sha !== r.sha;
+  const fixed = new Set(pushed ? resp.points.filter((p) => p.status === "done" && p.fp && p.sha !== r.sha).map((p) => p.fp) : []);
+  return r.findings.filter((f) => f.severity === "must" && !fixed.has(f.fp));
+});
 
 export async function converge(state, { deps, save, maxRounds = 4 }) {
   const s = state;
   const pause = (kind, why) => { s.pause = { kind, why }; save(s); return { status: "paused", state: s }; };
   const end = (status) => { s.phase = "done"; s.result = status; save(s); return { status, state: s }; };
-  // a declined must never lands
-  const toLand = () => { if (declinedMusts(s).length) return end("declined"); s.phase = "land"; save(s); return null; };
+  // an open must never lands
+  const toLand = () => { if (openMusts(s).length) return end("declined"); s.phase = "land"; save(s); return null; };
   for (;;) {
     if (s.phase === "done") return { status: s.result, state: s };
     if (s.pause) return { status: "paused", state: s };
@@ -50,7 +55,7 @@ export async function converge(state, { deps, save, maxRounds = 4 }) {
       // a rerun of the round (after a question) adds to its findings: the ones it raised first still need a respond step
       const old = s.rounds.find((x) => x.round === s.round);
       // a skipped review is not a clean round: with no record of this round, the user decides
-      if (r.skipped && !old) return pause("review-skipped", `pr-review did not review: ${r.skipped}`);
+      if (r.skipped && !old?.findings.length) return pause("review-skipped", `pr-review did not review: ${r.skipped}`);
       s.head = r.sha ?? head;
       const all = [...(old?.findings ?? []), ...r.findings.filter((f) => !old?.fps.includes(f.fp))];
       const fps = [...new Set(all.map((f) => f.fp))];
@@ -101,12 +106,12 @@ export function summaryText(repo, s) {
   const done = s.responses.flatMap((r) => r.points.filter((p) => p.status === "done"));
   const kept = s.responses.flatMap((r) => r.points.filter((p) => p.status === "open"));
   const last = s.rounds.at(-1);
-  const open = ["capped", "stalled"].includes(s.result) ? last?.findings ?? [] : s.result === "declined" ? declinedMusts(s) : [];
+  const open = ["capped", "stalled"].includes(s.result) ? last?.findings ?? [] : s.result === "declined" ? openMusts(s) : [];
   const how = {
     merged: "The PR converged and is merged.", converged: "The PR converged. It is not merged: merge was not asked for.",
     capped: `The round cap stopped the loop after ${plural(s.rounds.length, "round")}. Nothing is merged.`,
     stalled: "Two rounds in a row raised the same findings, so the loop stopped. Nothing is merged.",
-    declined: "A must finding was declined, so the loop stopped. Nothing is merged.",
+    declined: "A must finding is not fixed (declined, or no done point with a new commit names it), so the loop stopped. Nothing is merged.",
   }[s.result];
   const sha = (x) => `[\`${x.slice(0, 7)}\`](https://github.com/${repo}/commit/${x})`;
   return [
