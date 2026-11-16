@@ -21,12 +21,23 @@ export function parseMarker(body) {
   return { learn: m?.[1]?.split(",") ?? [], fps: m?.[2].split(",") ?? [] };
 }
 
-/** Model text of a posted comment with < and > escaped, so it renders as written but holds no markup or look-alike
- * marker. Code spans and fences keep theirs: an entity there shows as text, and a suggestion must stay valid code.
- * Only a fence at the start of a line, and an inline span on one line, count as code: a span across a newline could
- * hide a block of HTML. A backslash-escaped backtick is a literal, never a span delimiter.
- * shortcut: a span of 2+ backticks is escaped too (shows &lt; in code); match backtick runs if that matters. */
-export const noMarkup = (s) => String(s ?? "").split(/((?<![^\n])```[\s\S]*?```|(?<![\\`])`[^`\n]*`(?!`))/).map((x, i) => (i % 2 ? x : x.replace(/</g, "&lt;").replace(/>/g, "&gt;"))).join("");
+// Code in Markdown: a fence of 3+ ` or ~ after 0-3 spaces at line start, closed by the same char at least as long
+// (else it runs to the end; a ``` info string has no backtick), or an inline span on one line. A backslash-escaped backtick is a literal.
+// shortcut: a span of 2+ backticks is not code here (its < shows as &lt;); match backtick runs if that matters.
+const CODE = /(?<![^\n]) {0,3}((`|~)\2{2,})(?:(?<=`)[^\n`]*|(?<=~)[^\n]*)(?=\n|$)(?:\n[\s\S]*?)?(?:\n {0,3}\1\2*[ \t]*(?=\n|$)|$)|(?<![\\`])`[^`\n]*`(?!`)/g;
+const esc = (t) => t.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/** Model text of a posted comment with < and > escaped outside code, so it renders as written but holds no markup or
+ * look-alike marker. Code keeps them: an entity there shows as text, and a suggestion must stay valid code. */
+export function noMarkup(s) {
+  s = String(s ?? "");
+  let out = "", at = 0;
+  for (const m of s.matchAll(CODE)) { out += esc(s.slice(at, m.index)) + m[0]; at = m.index + m[0].length; }
+  return out + esc(s.slice(at));
+}
+
+/** The text with its code removed: a marker quoted in code is not a marker. */
+export const outsideCode = (s) => String(s ?? "").replace(CODE, "");
 
 /** Adds the keys to the local file. A reason the secret scan holds is left out. -> the new lines, to suggest for the base branch. */
 export function learn(repoState, keys, reason, repo) {

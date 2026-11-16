@@ -160,7 +160,12 @@ test("noMarkup: an escaped backtick is a literal; a span never crosses a newline
   assert.equal(noMarkup("hide \\`<img>\\` and <b>x</b>"), "hide \\`&lt;img&gt;\\` and &lt;b&gt;x&lt;/b&gt;");
   assert.equal(noMarkup("span `a\n<img src=x>` out"), "span `a\n&lt;img src=x&gt;` out");
   assert.equal(noMarkup("x ```<b>```"), "x ```&lt;b&gt;```");
-  assert.equal(noMarkup("```<img>`"), "```&lt;img&gt;`", "an unclosed run is literal, not a span");
+  assert.equal(noMarkup("    ```\n<b>"), "    ```\n&lt;b&gt;", "4 spaces is not a fence");
+  assert.equal(noMarkup("~~~\na < b\n~~~\n<i>"), "~~~\na < b\n~~~\n&lt;i&gt;", "a ~~~ fence is code");
+  assert.equal(noMarkup("x\n   ```suggestion\nif (a < b) {}\n   ```\n<i>"), "x\n   ```suggestion\nif (a < b) {}\n   ```\n&lt;i&gt;", "an indented fence is code");
+  assert.equal(noMarkup("````\n```\na < b\n````\n<i>"), "````\n```\na < b\n````\n&lt;i&gt;", "a shorter run does not close the fence");
+  assert.equal(noMarkup("```\na < b"), "```\na < b", "an unclosed fence runs to the end");
+  assert.equal(noMarkup("```<img>`"), "```&lt;img&gt;`", "a backtick in the info string: not a fence");
   assert.equal(noMarkup("`a < b`\n```js\nif (a < b) {}\n```"), "`a < b`\n```js\nif (a < b) {}\n```");
 });
 
