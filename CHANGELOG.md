@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.6.0](https://github.com/marmos91/skills/compare/v0.5.0...v0.6.0) (2026-11-16)
+
+
+### Features
+
+* **bench:** pr-review recall benchmark on past PRs with known bugs ([#90](https://github.com/marmos91/skills/issues/90)) ([6c18df5](https://github.com/marmos91/skills/commit/6c18df57abf736182194274e7fd27e9c4a7757c0))
+* **pr-review:** pre-existing level that posts once and never blocks ([#91](https://github.com/marmos91/skills/issues/91)) ([b89f19c](https://github.com/marmos91/skills/commit/b89f19c241b323525ef5d32266cca0c4b8435e28))
+
+
+### Bug Fixes
+
+* **pr-converge:** close the edges left after [#73](https://github.com/marmos91/skills/issues/73) ([#89](https://github.com/marmos91/skills/issues/89)) ([4f237bc](https://github.com/marmos91/skills/commit/4f237bce09a2655366472b8e698f7b9c4cfa6d3d))
+* **pr-land:** edges left after [#62](https://github.com/marmos91/skills/issues/62) ([#88](https://github.com/marmos91/skills/issues/88)) ([c5e0888](https://github.com/marmos91/skills/commit/c5e08883af00321b8452bf78da9c28f8e0ea2697))
+* **pr-review:** approve a clean review once CI passes, and say why not ([#85](https://github.com/marmos91/skills/issues/85)) ([6c80c43](https://github.com/marmos91/skills/commit/6c80c436352d5fa8a8a6641a1342564f8871f5d6))
+* **pr-review:** keep pre-existing off changed lines and allow it on every pass ([#97](https://github.com/marmos91/skills/issues/97)) ([b6d42dd](https://github.com/marmos91/skills/commit/b6d42dd84b28e2d9e105f8c43e8413b2d8da49f6))
+* **secret-scan:** real push repos for pr-land and pr-respond, gitleaks allow list, multi-line sops values ([#86](https://github.com/marmos91/skills/issues/86)) ([8d7a996](https://github.com/marmos91/skills/commit/8d7a996cc69b349d6152d25accdce41bed6308e3))
+
 ## [0.5.0](https://github.com/marmos91/skills/compare/v0.4.0...v0.5.0) (2026-11-16)
 
 
