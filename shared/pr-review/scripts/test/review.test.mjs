@@ -750,7 +750,7 @@ test("a symlink in the worktree to a file outside it gives jev no snippet", asyn
 test("a finding whose inline marker is already on GitHub is not posted again", async () => {
   const fx = fixture();
   const { createHash } = await import("node:crypto");
-  const key = createHash("sha1").update(`inline\0${fx.head}\0${fingerprint(F())}`).digest("hex");
+  const key = createHash("sha1").update(`inline\0${fx.head}\0${fingerprint(F())}\0a.js\0${2}`).digest("hex");
   // one review comment among many (past the old 100-per-review window)
   const many = Array.from({ length: 150 }, (_, i) => ({ body: `c${i}`, user: { login: ME } }));
   routes(fx, { reviewComments: [...many, { body: `x <!-- pr-review run=r sha=s key=${key} fp=${fingerprint(F())} -->`, user: { login: ME } }] });
@@ -870,7 +870,7 @@ test("answer-only rerun: a finding already posted inline at this head is not pos
   const [q] = openQuestions(fx.state);
   answer(fx.state, q.id, "post");
   // a later run already posted this finding inline at the same head
-  const key = createHash("sha1").update(`inline\0${fx.head}\0${q.fingerprint}`).digest("hex");
+  const key = createHash("sha1").update(`inline\0${fx.head}\0${q.fingerprint}\0${q.finding.file}\0${q.finding.line}`).digest("hex");
   routes(fx, { reviewComments: [{ body: `x\n\n<!-- pr-review run=r sha=${fx.head} key=${key} fp=${q.fingerprint} -->`, user: { login: ME } }] });
   const again = await go(fx, answers);
   assert.equal(again.r.exit, 0, again.r.summary);
@@ -1536,7 +1536,7 @@ test("the body index lists only threads that went inline, at their real line, Cr
 
 test("once posted, the body index links each thread to its inline comment, with no line number", async () => {
   const fx = fixture();
-  const key = createHash("sha1").update(`inline\0${fx.head}\0${fingerprint(F())}`).digest("hex");
+  const key = createHash("sha1").update(`inline\0${fx.head}\0${fingerprint(F())}\0a.js\0${2}`).digest("hex");
   routes(fx, { posted: [{ url: "https://github.com/o/r/pull/5#discussion_r900", body: `**must:** off by one\n\n<!-- pr-review run=x sha=${fx.head} key=${key} fp=y -->` }] });
   const compose = { verdict: "The off by one blocks.", body: "", index: [{ theme: "Totals", items: [{ id: "c1", text: "Fix the total." }] }], comments: [{ id: "c1", body: "**must:** off by one" }] };
   const { r } = await go(fx, happy({ compose }));
@@ -1545,6 +1545,19 @@ test("once posted, the body index links each thread to its inline comment, with 
   assert.equal(edit.id, "PRR_1");
   assert.match(edit.body, /\n- Fix the total\. \(\[thread\]\(https:\/\/github\.com\/o\/r\/pull\/5#discussion_r900\)\)\n/);
   assert.doesNotMatch(edit.body, /\bL\d|a\.js:\d/);
+});
+
+test("2 posted findings with one fingerprint each link their own thread in the index", async () => {
+  const fx = fixture();
+  const key = (line) => createHash("sha1").update(`inline\0${fx.head}\0${fingerprint(F())}\0a.js\0${line}`).digest("hex");
+  routes(fx, { posted: [2, 3].map((l) => ({ url: `https://github.com/o/r/pull/5#discussion_r${l}00`, body: `x\n\n<!-- pr-review run=x sha=${fx.head} key=${key(l)} fp=y -->` })) });
+  const compose = { verdict: "Two blocks.", body: "", index: [{ theme: "Totals", items: [{ id: "c1", text: "First." }, { id: "c2", text: "Second." }] }],
+    comments: [{ id: "c1", body: "**must:** one" }, { id: "c2", body: "**must:** two" }] };
+  const { r } = await go(fx, { all: { findings: [F()] }, merge: [C("c1"), C("c2", { line: 3 })], "v~2": [keep("c1"), keep("c2")], compose });
+  assert.equal(r.exit, 0, r.summary);
+  assert.deepEqual(posts(fx)[0].threads.map((t) => t.line).sort(), [2, 3]);
+  const edit = mutations(fx).find((m) => m.key === "graphql EditReview").input.variables.body;
+  assert.match(edit, /- First\. \(\[thread\]\(https:\/\/github\.com\/o\/r\/pull\/5#discussion_r200\)\)\n- Second\. \(\[thread\]\(https:\/\/github\.com\/o\/r\/pull\/5#discussion_r300\)\)/);
 });
 
 test("posted text links file:line and RFC references, and no section sign is left", async () => {

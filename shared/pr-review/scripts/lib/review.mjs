@@ -11,7 +11,7 @@ import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.
 import { tally } from "./tally.mjs";
 import { validate } from "./schema.mjs";
 import { allowedSeverities, filterNew, fingerprint } from "./convergence.mjs";
-import { diffLine, linkRefs, parseHunks, place } from "./hunks.mjs";
+import { codeLink, diffLine, linkRefs, parseHunks, place } from "./hunks.mjs";
 import { verdict } from "./verdict.mjs";
 import { redact, scanOutbound } from "./secrets.mjs";
 import { hygiene as realHygiene } from "./hygiene.mjs";
@@ -29,6 +29,8 @@ const sha1 = (s) => createHash("sha1").update(s).digest("hex");
 const readJson = (f) => JSON.parse(readFileSync(f, "utf8"));
 const save = (f, v) => writeAtomic(f, JSON.stringify(v, null, 2) + "\n");
 // fp= on inline comments lets a later run link a thread to its findings (spec 6.4), one fp per finding the comment covers; key= is the dedupe key.
+// The dedupe key of an inline comment: a fingerprint can post at 2 lines (split clusters), each its own thread.
+const inlineKeyOf = (sha, fp, file, line) => sha1(`inline\0${sha}\0${fp}\0${file}\0${line}`);
 const marker = (runId, sha, key, fp) => `<!-- pr-review run=${runId} sha=${sha} key=${key}${fp ? ` fp=${fp}` : ""} -->`;
 // Fields the seats and the judge see; engine bookkeeping stays out of prompts.
 const view = ({ seats, fp, answered, ...c }) => c;
@@ -585,7 +587,7 @@ async function once(o, restart) {
   const plain = (t) => one(t).replace(/[*_`]/g, "");
   const mustNow = [...agreed, ...hygItems].some((x) => x.severity === "must");
   // A thread is linked, never named by its line: the comment once posted, else the code at the head.
-  const at = (file, line, url) => `([${url ? "thread" : `\`${file}\``}](${url ?? `${permalink}/${encodeURI(file)}#L${line}`}))`;
+  const at = (file, line, url) => `(${url ? `[thread](${url})` : codeLink(permalink, file, line)})`;
   const indexOf = (inline, urls) => {
     const byThread = new Map(inline.map((x) => [x.id, x])), seen = new Set(), critical = [], groups = [];
     for (const g of composed.index ?? []) {
@@ -676,7 +678,7 @@ async function once(o, restart) {
     }));
   }
   // Step 6 per finding: a key per sha and finding, so a crash, a --restart or a re-frame never posts a finding twice.
-  const inlineKey = (x) => sha1(`inline\0${f.headSha}\0${x.fp}`);
+  const inlineKey = (x) => inlineKeyOf(f.headSha, x.fp, x.file, x.line);
   const fresh = [];
   const seen = await gh.markerKeys(repo, n); // one fetch for every check of this post phase
   for (const x of clean) if (!seen.has(inlineKey(x))) fresh.push(x);
@@ -795,7 +797,7 @@ async function followUp(o, head, pst, answered) {
   const diff = join(repoState, "pr", String(n), "runs", runId, "ctx", "diff.patch");
   const hunks = parseHunks(existsSync(diff) ? readFileSync(diff, "utf8") : "");
   for (const q of answered.filter((x) => x.answer !== "drop")) {
-    if (seen.has(sha1(`inline\0${head}\0${q.fingerprint}`))) { already.push(q.fingerprint); continue; }
+    if (seen.has(inlineKeyOf(head, q.fingerprint, q.finding?.file, q.finding?.line))) { already.push(q.fingerprint); continue; }
     if (codeMoved(o.repoDir ?? process.cwd(), q, head)) { o.log(`question ${q.id}: the code at ${q.finding?.file}:${q.finding?.line} changed since ${q.sha}; its answer is dropped`); continue; }
     const f = q.finding;
     // full depth (proven is set): a suggestion the follow-up cannot test says so, like one the time cap cut
@@ -811,7 +813,7 @@ async function followUp(o, head, pst, answered) {
   if (items.length) {
     const fps = items.map((x) => x.q.fingerprint).sort();
     const key = sha1(`followup\0${head}\0${fps.join(",")}`);
-    const p = place(items.map(({ q, text }) => ({ file: q.finding.file, line: q.finding.line, body: `${text}\n\n${marker(runId, head, sha1(`inline\0${head}\0${q.fingerprint}`), q.fingerprint)}` })), hunks, `https://github.com/${repo}/blob/${head}`);
+    const p = place(items.map(({ q, text }) => ({ file: q.finding.file, line: q.finding.line, body: `${text}\n\n${marker(runId, head, inlineKeyOf(head, q.fingerprint, q.finding.file, q.finding.line), q.fingerprint)}` })), hunks, `https://github.com/${repo}/blob/${head}`);
     // The follow-up's marker is the new state of the head for pr-land: the full review's counts, plus the musts posted
     // now, minus the questions answered now. Without the full review's counts here, gaps=1 holds the merge until a full review.
     const was = pst.counts?.sha === head ? pst.counts : null;

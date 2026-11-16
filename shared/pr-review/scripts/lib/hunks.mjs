@@ -61,6 +61,18 @@ export function fences(text) {
 /** The diff-line kind of a finding's RIGHT-side line (add or ctx); undefined off the diff. */
 export const diffLine = (hunks, file, line) => (line == null ? undefined : hunks.get(file)?.right.get(line));
 
+/**
+ * A markdown link to a file (and line) at the head. The label drops characters that end a code span or start
+ * markup; the path is percent-encoded per segment, so ( ) # ? stay in the path. A path that climbs out of the
+ * tree (a ".." segment) gets no link.
+ */
+export function codeLink(permalinkBase, file, line, end) {
+  const f = String(file), label = `\`${f.replace(/[`[\]<>@\n]/g, "")}\``;
+  if (f.split("/").includes("..")) return label;
+  const path = f.split("/").map((s) => encodeURIComponent(s).replace(/[()!*']/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)).join("/");
+  return `[${label}](${permalinkBase}/${path}${line == null ? "" : `#L${line}${end ? `-L${end}` : ""}`})`;
+}
+
 export function place(findings, hunks, permalinkBase) {
   const inline = [], body = [];
   for (const f of findings) {
@@ -69,16 +81,16 @@ export function place(findings, hunks, permalinkBase) {
       inline.push({ path: f.file, line: f.line, side: "RIGHT", body: f.body }); // right holds only add/ctx lines
     } else {
       const head = f.body.replace(FENCE, "$1").split("\n")[0];
-      body.push(`[\`${f.file}\`](${permalinkBase}/${encodeURI(f.file)}${f.line == null ? "" : `#L${f.line}`}): ${head}`);
+      body.push(`${codeLink(permalinkBase, f.file, f.line)}: ${head}`);
     }
   }
   return { inline, body };
 }
 
 const FILE_LINE = /`?((?:[\w.-]+\/)*[\w.-]+\.\w+):(\d+)(?:-(\d+))?`?/g;
-const SPAN = /(`+[^`]*`+|\[[^\]]*\]\([^)]*\))/;
+const SPAN = /((`+)[^]*?\2(?!`)|\[[^\]]*\]\([^)]*\))/;
 const PATH_SPAN = /^`(?:[\w.-]+\/)*[\w.-]+\.\w+:\d+(?:-\d+)?`$/;
-const RFC = /(?<![[\w/-])RFC ?(\d{3,5})(?:,? ?(?:§|section) ?(\d+(?:\.\d+)*))?/gi;
+const RFC = /(?<![[\w/-])RFC ?(\d{3,5})(?![\w])(?:,? ?(?:§|section) ?(\d+(?:\.\d+)*))?/gi;
 
 /**
  * Readable references for posted text (#65): `a.js:42` becomes a permalink at the head when isFile(path),
@@ -89,9 +101,10 @@ export function linkRefs(text, permalinkBase, isFile) {
   const lines = String(text).split("\n"), code = new Set();
   for (const b of fences(text)) for (let i = b.start; i <= b.end; i++) code.add(i);
   const plain = (s) => s
-    .replace(FILE_LINE, (m, p, a, b) => (isFile(p) ? `[\`${p}\`](${permalinkBase}/${encodeURI(p)}#L${a}${b ? `-L${b}` : ""})` : m))
+    .replace(FILE_LINE, (m, p, a, b) => (isFile(p) ? codeLink(permalinkBase, p, a, b) : m))
     .replace(RFC, (_, n, s) => `[RFC ${n}${s ? `, section ${s}` : ""}](https://www.rfc-editor.org/rfc/rfc${n}${s ? `#section-${s}` : ""})`)
     .replace(/§\s*/g, "section ");
+  // split keeps 2 groups per span (the span, its backtick run): parts go text, span, run, text, ...
   return lines.map((l, i) => code.has(i) ? l : l.split(SPAN)
-    .map((part, j) => (j % 2 === 0 || PATH_SPAN.test(part) ? plain(part) : part)).join("")).join("\n");
+    .map((part, j) => (j % 3 === 2 ? "" : j % 3 === 0 || PATH_SPAN.test(part) ? plain(part ?? "") : part)).join("")).join("\n");
 }

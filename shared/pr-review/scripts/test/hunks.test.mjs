@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { fences, linkRefs, parseHunks, place } from "../lib/hunks.mjs";
+import { codeLink, fences, linkRefs, parseHunks, place } from "../lib/hunks.mjs";
 
 const fx = (n) => parseHunks(readFileSync(new URL(`./fixtures/${n}`, import.meta.url), "utf8"));
 const base = "https://github.com/o/r/blob/abc";
@@ -98,4 +98,17 @@ test("linkRefs leaves inline code, links and ~~~ fences as they are, but links a
 
 test("fences: ~~~ opens a block that only ~~~ closes", () => {
   assert.deepEqual(fences("~~~\n```\nx\n~~~").map((b) => [b.start, b.end, b.closed]), [[0, 3, true]]);
+});
+
+test("linkRefs leaves an RFC name inside an identifier and a double-backtick code span as they are", () => {
+  const isFile = (p) => p === "a.js";
+  for (const t of ["format it with time.RFC3339Nano, not RFC1123Z", "see RFC 1234567", "``use `a.js:3` here``"]) assert.equal(linkRefs(t, base, isFile), t, t);
+  assert.match(linkRefs("see RFC 3339.", base, isFile), /^see \[RFC 3339\]\(https:\/\/www\.rfc-editor\.org\/rfc\/rfc3339\)\.$/);
+});
+
+test("an off-diff permalink escapes the file: ( ) # in the path, markup in the label, no link out of the tree", () => {
+  const r = place([{ file: "docs/Guide (v2).md", line: 3, body: "x" }, { file: "we#ird.md", line: 1, body: "y" }], new Map(), base);
+  assert.deepEqual(r.body, [`[\`docs/Guide (v2).md\`](${base}/docs/Guide%20%28v2%29.md#L3): x`, `[\`we#ird.md\`](${base}/we%23ird.md#L1): y`]);
+  assert.equal(codeLink(base, "x` [docs](https://evil.example) `y.js", 1), `[\`x docs(https://evil.example) y.js\`](${base}/x%60%20%5Bdocs%5D%28https%3A//evil.example%29%20%60y.js#L1)`);
+  assert.equal(codeLink(base, "../../../../evil/repo/blob/main/README.md", 1), "`../../../../evil/repo/blob/main/README.md`");
 });
