@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { composeGuidance, review } from "../lib/review.mjs";
 import { ChildFailed } from "../lib/child.mjs";
 import { decide as realDecide } from "../lib/decider.mjs";
-import { answer, openQuestions } from "../lib/questions.mjs";
+import { answer, openQuestions, pendingAnswers } from "../lib/questions.mjs";
 import { stateRoot, prState, readSummaryMarker, savePrState } from "../lib/state.mjs";
 import { fingerprint, learnKey, settledKey as keyOf } from "../lib/convergence.mjs";
 import { learn } from "../lib/learnings.mjs";
@@ -1096,6 +1096,47 @@ test("CI is read again at post time: none at frame, red at post -> no APPROVE", 
   assert.match(p.body, /Failed checks: build\./);
 });
 
+test("CI pending is the only reason: COMMENT, the approve is queued and the body says why (#82)", async () => {
+  // interactive: CI alone, no human needed (answered post); loop with an untrusted author: the question stays open
+  for (const [mode, ask, why] of [["interactive", false, "CI is still running. pr-review-loop approves it when CI passes."], ["loop", true, "CI is still running and the loop approves only a trusted author. It is approved when CI passes and you answer post to the approve question."]]) {
+    const fx = fixture(); routes(fx);
+    const gh = { ...github, checks: async () => ({ state: "pending", since: null, items: [] }) };
+    const { r } = await go(fx, { all: { findings: [] }, compose: { verdict: "Nothing blocks.", body: "Fine.", comments: [] } }, { gh, mode });
+    assert.equal(r.exit, 0, r.summary);
+    const p = posts(fx)[0];
+    assert.equal(p.event, "COMMENT", mode);
+    assert.equal(r.queueApprove, true, mode);
+    assert.ok(p.body.startsWith(`Nothing blocks.\n\nNot approved yet: ${why}\n`), `${mode}: ${p.body}`);
+    assert.equal(openQuestions(fx.state).filter((q) => q.finding.kind === "approve").length, ask ? 1 : 0, mode);
+    assert.equal(pendingAnswers(fx.state).filter((q) => q.finding.kind === "approve" && q.answer === "post").length, ask ? 0 : 1, mode);
+  }
+});
+
+test("CI pending alone never overwrites an answer already given to the approve question (#82)", async () => {
+  const fx = fixture(); routes(fx);
+  const { queueQuestion } = await import("../lib/questions.mjs");
+  const fp = createHash("sha1").update(`approve:${N}:${fx.head}`).digest("hex");
+  const id = queueQuestion(fx.state, { pr: N, sha: fx.head, fingerprint: fp, file: "(whole PR)", line: 0, snippet: "", finding: { kind: "approve", title: "Approve this PR?", case: "c" }, sides: { keep: "k", drop: "d" }, failure: "" });
+  answer(fx.state, id, "drop");
+  const gh = { ...github, checks: async () => ({ state: "pending", since: null, items: [] }) };
+  const { r } = await go(fx, { all: { findings: [] }, compose: { body: "Fine.", comments: [] } }, { gh });
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(r.queueApprove, true);
+  assert.equal(pendingAnswers(fx.state).find((q) => q.id === id)?.answer, "drop");
+});
+
+test("a later review at the same head that blocks withdraws the auto-answered approval (#82)", async () => {
+  const fx = fixture(); routes(fx);
+  const gh = { ...github, checks: async () => ({ state: "pending", since: null, items: [] }) };
+  await go(fx, { all: { findings: [] }, compose: { body: "Fine.", comments: [] } }, { gh });
+  assert.equal(pendingAnswers(fx.state).filter((q) => q.finding.kind === "approve").length, 1, "auto-answered post");
+  const { r } = await go(fx, happy(), { gh, restart: true });
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(posts(fx).at(-1).event, "REQUEST_CHANGES");
+  assert.equal(pendingAnswers(fx.state).filter((q) => q.finding.kind === "approve").length, 0, "withdrawn");
+  assert.deepEqual(prState(fx.state, N).verdict, { sha: fx.head, queueApprove: false });
+});
+
 test("a CI read that fails at post time counts as unknown: no APPROVE", async () => {
   const fx = fixture(); routes(fx);
   let k = 0;
@@ -1566,6 +1607,34 @@ test("split PR: a seat that misses one part keeps its other parts and its vote; 
   const p = posts(fx)[0];
   assert.doesNotMatch(p.body, /Seat /);
   assert.notEqual(p.event, "APPROVE");
+});
+
+test("split PR: a missed part blocks APPROVE only when fewer than 2 seats finished it (#82)", async () => {
+  const clean = { all: { findings: [] }, compose: { body: "Fine.", comments: [] } };
+  const fx = splitFixture({});
+  const { r } = await go(fx, { ...clean, "all~2@1": dropOf("turn limit") });
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(posts(fx)[0].event, "APPROVE", "2 seats finished part 1");
+  const fx2 = splitFixture({});
+  const { r: r2 } = await go(fx2, { ...clean, "all~1@1": dropOf("turn limit"), "all~2@1": dropOf("timeout") });
+  assert.equal(r2.exit, 0, r2.summary);
+  const p = posts(fx2)[0];
+  assert.equal(p.event, "COMMENT");
+  assert.match(p.body, /Not approved: 2 seats did not finish\./);
+});
+
+test("split PR: the why-not line counts distinct seats, and a resume records each miss once (#82)", async () => {
+  const misses = { "all~1@0": dropOf("turn limit"), "all~1@1": dropOf("turn limit"), "all~2@0": dropOf("timeout"), "all~2@1": dropOf("timeout") };
+  const clean = { all: { findings: [] }, compose: { body: "Fine.", comments: [] }, ...misses };
+  const fx = splitFixture({});
+  const { r } = await go(fx, clean, { until: "round1" });
+  assert.equal(r.exit, 0, r.summary);
+  rmSync(join(r.runDir, "post.done"), { force: true }); // crashed after round 1
+  const { r: r2 } = await go(fx, clean); // the resume runs the missed parts again, and they miss again
+  assert.equal(r2.exit, 0, r2.summary);
+  assert.equal(r2.runDir, r.runDir, "resumed");
+  assert.equal(runJson(r2).missed.length, 4);
+  assert.match(posts(fx)[0].body, /Not approved: 2 seats did not finish\./);
 });
 
 test("the next review removes the worktree of a finished run and keeps its ctx", async () => {

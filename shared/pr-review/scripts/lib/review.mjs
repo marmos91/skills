@@ -13,13 +13,13 @@ import { validate } from "./schema.mjs";
 import { allowedSeverities, filterNew, findingKey, fingerprint, learnKey, settledKey } from "./convergence.mjs";
 import { learn, learnedKeys, parseMarker, suggestion } from "./learnings.mjs";
 import { codeLink, diffLine, linkRefs, parseHunks, place } from "./hunks.mjs";
-import { verdict } from "./verdict.mjs";
+import { verdict, whyNotApproved } from "./verdict.mjs";
 import { redact, scanOutbound } from "./secrets.mjs";
 import { hygiene as realHygiene } from "./hygiene.mjs";
 import { limiter } from "./limit.mjs";
 import { decide as realDecide } from "./decider.mjs";
 import { linkFix } from "./reply.mjs";
-import { appliedAnswer, pendingAnswers, queueQuestion, waitingQuestions } from "./questions.mjs";
+import { answer, appliedAnswer, openQuestions, pendingAnswers, queueQuestion, waitingQuestions } from "./questions.mjs";
 import { applyProof, checkFix, directionOnly, isProven, markUnproven, mutantFindings, proofLine, runMutants, scopePatch, suggestionOf, uncheckedNote } from "./proof.mjs";
 import { cherryPicked, coreCandidates, depthLine, pickDepth, queueCoreQuestion, readCorePaths, runSetup, settleCoreQuestions } from "./setup.mjs";
 import { FINAL_STAGE, VERSION, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, commitStatus, summaryMarker, usageByStage, writeAtomic } from "./state.mjs";
@@ -345,6 +345,7 @@ async function once(o, restart) {
   // A part a seat could not finish (split PR): recorded, retried on resume, and it blocks APPROVE like a drop.
   run.missed ??= [];
   const miss = (s, key, reason) => {
+    if (run.missed.some((m) => m.seat === seatId(s) && m.key === key)) return; // a resume misses the same part again
     run.missed.push({ seat: seatId(s), key, reason });
     save(runFile, run);
     log(`seat ${seatId(s)} missed part ${key} (${reason})`);
@@ -604,8 +605,11 @@ async function once(o, restart) {
     return r?.ok === false ? { ...x, body: directionOnly(x.body, r.why) } : r?.unchecked ? { ...x, body: uncheckedNote(x.body, r.unchecked) } : x;
   };
   for (const [i, x] of items.entries()) items[i] = await checked(x);
-  // Misses of this run's final round 1: a resume that finished the part clears it.
-  const missedNow = run.missed.filter((m) => !done(runDir, "round1", m.key) && !isDropped(m.seat));
+  // Misses of this run's final round 1: a resume that finished the part clears it. A miss counts only when fewer
+  // than 2 seats finished one of its lenses on that part, the rule of a lens.
+  const part = (k) => k.slice(k.lastIndexOf("@"));
+  const short = (m) => (jobs.find((j) => j.key === m.key)?.lenses ?? [null]).some((l) => new Set(jobs.filter((j) => part(j.key) === part(m.key) && j.lenses.includes(l) && !isDropped(j.seat) && done(runDir, "round1", j.key)).map((j) => seatId(j.seat))).size < 2);
+  const missedNow = run.missed.filter((m) => !done(runDir, "round1", m.key) && !isDropped(m.seat) && short(m));
   let ci = ciOf(f);
   const v = () => verdict({
     agreed: [...agreed, ...hygItems].filter((c) => !pre(c)), earlierMustOpen: blocking.length,
@@ -648,6 +652,7 @@ async function once(o, restart) {
         ? `${blocking.length} earlier must ${blocking.length === 1 ? "finding is" : "findings are"} still open, so the PR is blocked.`
         : "The must findings block the merge.")
       : one(composed.verdict),
+    whyNotApproved(v(), { questions: open.length, lenses: run.missing?.length ?? 0, seats: new Set([...run.dropped, ...missedNow].map((x) => x.seat)).size, mode }),
     // The setup stage (#38) sets f.checked: the depth and the checks run.
     f.checked ? `What was checked: ${one(f.checked)}` : "",
     depth === "full" ? proofLine(posted) : "",
@@ -757,12 +762,21 @@ async function once(o, restart) {
   }
   // Same fingerprint and record as tick.mjs: a rerun (or the tick after it) finds the question and adds nothing.
   if (queueApprove) {
-    queueQuestion(repoState, {
+    const id = queueQuestion(repoState, {
       pr: n, sha: f.headSha, fingerprint: sha1(`approve:${n}:${f.headSha}`), file: "(whole PR)", line: 0, snippet: "",
       finding: { kind: "approve", title: "Approve this PR?", case: `The review at ${f.headSha} has no agreed finding. The loop approves only a trusted author with a unanimous zero-finding vote. Reasons: ${reasons.join("; ")}.` },
       sides: { keep: "post: approve the PR at this commit.", drop: "drop: keep the review as a comment." },
       failure: "The PR waits for a human approval.",
     });
+    // Pending CI alone needs no human: answered here, the tick approves once CI is green at this head.
+    // never over an answer already given: the owner's drop stands
+    if (reasons.join() === "ci pending" && openQuestions(repoState).some((q) => q.id === id)) answer(repoState, id, "post");
+  } else {
+    // A review at this head that does not queue withdraws an approval queued earlier, answered or not.
+    for (const q of [...openQuestions(repoState), ...pendingAnswers(repoState)].filter((q) => q.pr === n && q.sha === f.headSha && q.finding?.kind === "approve")) {
+      if (q.answer === null) answer(repoState, q.id, "drop");
+      appliedAnswer(repoState, q.id);
+    }
   }
 
   // A folded finding counts as posted when its host comment is.
@@ -773,6 +787,7 @@ async function once(o, restart) {
     Object.assign(st, {
       reviews: st.reviews + 1, lastReviewedSha: f.headSha, lastRunId: runId, settled: [...new Set([...st.settled, ...fps])],
       counts: { sha: f.headSha, ...counts() }, // a follow-up at this head starts from these
+      verdict: { sha: f.headSha, queueApprove }, // the tick approves only while the latest verdict at this head queues it
       agreed: [...(st.agreed ?? []), ...recorded.map((c) => ({ id: c.fp, lens: c.lens, severity: c.severity, file: c.file, line: c.line, title: c.title }))],
     });
     savePrState(repoState, n, st);
