@@ -155,6 +155,23 @@ test("doctor: a seat whose probe fails is named and the exit is 1", async (t) =>
   assert.ok(!out.includes("ghp_" + "a".repeat(36)), "child errors are redacted");
 });
 
+test("doctor: a token that cannot set the commit status is named", async (t) => {
+  const fx = fixture();
+  Object.assign(process.env, { XDG_STATE_HOME: fx.env.XDG_STATE_HOME, XDG_CONFIG_HOME: fx.env.XDG_CONFIG_HOME });
+  const gh = join(fx.root, "gh");
+  // auth ok; the status probe gets 404 (no permission); a 422 (unknown sha) would mean the token may write
+  writeFileSync(gh, `#!/bin/sh\ncase "$*" in *statuses/0000000000000000000000000000000000000000*) echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;; esac\nexit 0\n`);
+  chmodSync(gh, 0o755);
+  const oldGh = process.env.GH_BIN;
+  process.env.GH_BIN = gh;
+  t.after(() => { if (oldGh === undefined) delete process.env.GH_BIN; else process.env.GH_BIN = oldGh; });
+  const { main } = await import("../main.mjs");
+  const lines = [];
+  t.mock.method(console, "log", (l) => lines.push(l));
+  await main(["doctor"], { runChild: async () => ({ ok: true }), askJev: async () => ({ answer: "yes" }), findJev: () => "/x/jev", gitleaks: join(fx.root, "nope") });
+  assert.match(lines.join("\n"), /WARN\s+commit status: the token cannot set pr-review on \S+ \(gh: Not Found \(HTTP 404\)\)/);
+});
+
 test("status: a corrupt state.json and a young pid-less lock", () => {
   const fx = fixture();
   mkdirSync(join(fx.state, "lock"), { recursive: true });
