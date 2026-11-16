@@ -23,7 +23,7 @@ import { answer, appliedAnswer, openQuestions, pendingAnswers, queueQuestion, wa
 import { runSast, sastClusters, sastLine } from "./sast.mjs";
 import { applyProof, checkFix, directionOnly, isProven, markUnproven, mutantFindings, proofLine, runMutants, scopePatch, suggestionOf, uncheckedNote } from "./proof.mjs";
 import { cherryPicked, coreCandidates, depthLine, pickDepth, queueCoreQuestion, readCorePaths, runSetup, settleCoreQuestions } from "./setup.mjs";
-import { FINAL_STAGE, VERSION, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, commitStatus, summaryMarker, usageByStage, writeAtomic } from "./state.mjs";
+import { FINAL_STAGE, VERSION, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, commitStatus, decision, nextStep, summaryMarker, usageByStage, writeAtomic } from "./state.mjs";
 
 export const STAGES = ["frame", "setup", "round1", "merge", "round2", "tally", "decide", "compose", "post"];
 const RANK = { must: 0, should: 1, nit: 2, "pre-existing": 3 };
@@ -602,7 +602,9 @@ async function once(o, restart) {
   }
   const folded = posted.filter((c) => hostOf.has(c.id));
   // Full depth: an unproven finding says so in its body (engine text).
-  const mark = (c, b) => (depth === "full" && !c.proven ? markUnproven(b, offDiff(c)) : b);
+  // "Done when" (#65): the check that closes the finding, engine text so pr-respond and the next pass can rely on it.
+  const doneLine = (c, b) => (c.done_when ? `${b}\n\nDone when: ${String(c.done_when).replace(/\s+/g, " ").trim()}` : b);
+  const mark = (c, b0) => { const b = doneLine(c, b0); return depth === "full" && !c.proven ? markUnproven(b, offDiff(c)) : b; };
   const items = posted.filter((c) => !hostOf.has(c.id)).map((c) => ({
     ...c, fps: [c.fp, ...folded.filter((o) => hostOf.get(o.id) === c.id).map((o) => o.fp)], learns: [c, ...folded.filter((o) => hostOf.get(o.id) === c.id)].map(learnKey),
     body: mark(c, text.get(c.id) ?? refs(`**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}`)),
@@ -637,34 +639,51 @@ async function once(o, restart) {
   // The index lists only ids whose thread went inline (inline: the posted items on diff lines), at their real line.
   const one = (t) => refs(String(t ?? "").replace(/\s+/g, " ").trim());
   const plain = (t) => one(t).replace(/[*_`]/g, "");
-  const mustNow = [...agreed, ...hygItems].some((x) => x.severity === "must");
   // A thread is linked, never named by its line: the comment once posted, else the code at the head.
   const at = (file, line, url) => `(${url ? `[thread](${url})` : codeLink(permalink, file, line)})`;
   const indexOf = (inline, urls) => {
-    const byThread = new Map(inline.map((x) => [x.id, x])), seen = new Set(), critical = [], groups = [];
-    for (const g of composed.index ?? []) {
-      const lines = [];
-      for (const it of g.items ?? []) {
-        const x = byThread.get(hostOf.get(it.id) ?? it.id);
-        if (!x || seen.has(x.id) || !one(it.text)) continue;
-        seen.add(x.id);
-        (byId.get(it.id)?.severity === "must" || x.severity === "must" ? critical : lines).push(`- ${one(it.text)} ${at(x.file, x.line, urls.get(x.id))}`);
-      }
-      if (lines.length) groups.push(`${one(g.theme) || "Other"}:\n${lines.join("\n")}`);
+    const byThread = new Map(inline.map((x) => [x.id, x])), seen = new Set(), bySev = { must: [], should: [], nit: [] };
+    for (const it of (composed.index ?? []).flatMap((g) => g.items ?? [])) {
+      const x = byThread.get(hostOf.get(it.id) ?? it.id);
+      if (!x || seen.has(x.id) || !one(it.text)) continue;
+      seen.add(x.id);
+      bySev[byId.get(it.id)?.severity === "must" ? "must" : x.severity]?.push(`- ${one(it.text)} ${at(x.file, x.line, urls.get(x.id))}`);
     }
-    return [critical.length ? `Critical:\n${critical.join("\n")}` : "", ...groups];
+    return Object.entries(bySev).map(([k, l]) => (l.length ? `${k[0].toUpperCase()}${k.slice(1)}:\n${l.join("\n")}` : ""));
   };
   // Numbered before the filter: an empty answer must not move the later ones onto the wrong question.
   const replies = (composed.answers ?? []).slice(0, f.questions?.length ?? 0).map((a, i) => [i + 1, one(a)]).filter(([, a]) => a);
+  let heldIds = new Set(); // set at post time, once the secret scan ran on each comment
+  const threadUrl = (e) => `https://github.com/${repo}/pull/${n}#discussion_r${e.commentId}`;
+  const stillOpen = earlierAll.filter((e) => !fixed.includes(e) && !retracted.includes(e));
+  // First line (#65): the decision from the marker counts (what pr-land and the commit status read), then the delta.
+  const firstLine = () => {
+    const since = pst.lastReviewedSha ? `, since \`${pst.lastReviewedSha.slice(0, 7)}\`` : "";
+    // new: the comments that post (a folded finding rides on its host, a held one does not post)
+    const delta = f.reviewNumber > 1 ? ` Pass ${f.reviewNumber}${since}: ${fixed.length} fixed, ${items.filter((x) => !heldIds.has(x.id)).length} new, ${stillOpen.length} still open${retracted.length ? `, ${retracted.length} retracted` : ""}.` : "";
+    return `${decision(counts())}${delta}`;
+  };
+  // Earlier threads that only check out go in one collapsed list, each linked: the fixed ones, in the judge's words
+  // when it confirmed the reply. A thread the seats still find open stays open, whatever compose says.
+  const confirmed = new Map((composed.confirmed ?? []).map((x) => [x.thread_id, one(x.text)]));
+  const checks = fixed
+    .map((e) => `- ${confirmed.get(e.threadId) || `Fixed: ${plain(String(e.body ?? "").split("\n")[0])}`} ([thread](${threadUrl(e)}))`);
+  // State for agents (#65), in the marker: the open items, each with its thread and its "done when".
+  // A finding the secret scan holds stays out: its done_when may hold the secret, and it is an open question already.
+  const stateOf = (urls) => {
+    const c = counts(), items = [
+      ...stillOpen.map((e) => ({ severity: e.severity, file: e.path, line: e.line ?? e.originalLine, status: "open", url: threadUrl(e) })),
+      ...[...posted, ...hygItems].filter((x) => !heldIds.has(hostOf.get(x.id) ?? x.id)).map((x) => ({ fp: x.fp, severity: x.severity, file: x.file || null, line: x.line ?? null, status: "new", url: urls.get(hostOf.get(x.id) ?? x.id) ?? null, ...(x.done_when && { done_when: one(x.answered ? redact(String(x.done_when)) : x.done_when) }) })),
+    ];
+    // one scan of the whole state; on a hit, only the entries that hit are dropped
+    const safe = scanOutbound(JSON.stringify(items), { repo }).ok ? items : items.filter((i) => scanOutbound(JSON.stringify(i), { repo }).ok);
+    return { verdict: v().event, next: nextStep(c, safe, ci.state), ci: ci.state, items: safe, fixed: fixed.map(threadUrl), retracted: retracted.map(threadUrl) };
+  };
   const bodyOf = (outside, key, inline, urls = new Map()) => [
-    f.reviewNumber > 1 ? `${f.reviewNumber === 2 ? "Second pass" : `Pass ${f.reviewNumber}`}, on \`${f.headSha.slice(0, 7)}\`.` : "",
-    ...retracted.map((e) => `Correction: ${one(composed.corrections?.find((x) => x.thread_id === e.threadId)?.text) || "our earlier finding here was wrong."} ${at(e.path, e.line ?? e.originalLine, `https://github.com/${repo}/pull/${n}#discussion_r${e.commentId}`)}`),
-    // A must (earlier and still open, or from this run) blocks the event: a verdict that says nothing blocks would contradict it.
-    (blocking.length && !plain(composed.verdict)) || ((blocking.length || mustNow) && /\bnothing\b[^.]*\bblock/i.test(plain(composed.verdict)))
-      ? (blocking.length
-        ? `${blocking.length} earlier must ${blocking.length === 1 ? "finding is" : "findings are"} still open, so the PR is blocked.`
-        : "The must findings block the merge.")
-      : one(composed.verdict),
+    firstLine(),
+    ...retracted.map((e) => `Correction: ${one(composed.corrections?.find((x) => x.thread_id === e.threadId)?.text) || "our earlier finding here was wrong."} ${at(e.path, e.line ?? e.originalLine, threadUrl(e))}`),
+    // The first line holds the decision: a bare "Nothing blocks." repeats it; any "nothing ... blocks" contradicts a block.
+    /^nothing blocks\.?$/i.test(plain(composed.verdict)) || (commitStatus(counts()).state !== "success" && /\bnothing\b[^.]*\bblock/i.test(plain(composed.verdict))) ? "" : one(composed.verdict),
     whyNotApproved(v(), { questions: open.length, lenses: run.missing?.length ?? 0, seats: new Set([...run.dropped, ...missedNow].map((x) => x.seat)).size, mode }),
     // The setup stage (#38) sets f.checked: the depth and the checks run.
     f.checked ? `What was checked: ${one(f.checked)}` : "",
@@ -681,8 +700,9 @@ async function once(o, restart) {
     run.missing?.length ? `Lenses not run: ${run.missing.join(", ")}.` : "",
     // Dropped seats and missed parts stay out of the body: they are in run.json and the run log.
     ci.line ?? "",
+    checks.length ? `<details><summary>${checks.length} earlier ${checks.length === 1 ? "thread checks" : "threads check"} out</summary>\n\n${checks.join("\n")}\n</details>` : "",
     older.length ? `<details><summary>${older.length} pre-existing ${older.length === 1 ? "finding" : "findings"}: in code this PR touches, not caused by it. Not blocking.</summary>\n\n${older.map((c) => `- ${one(c.title)} ${at(c.file, c.line)}: ${one(c.case)}`).join("\n")}\n</details>` : "",
-    summaryMarker(runId, f.headSha, key, counts()),
+    summaryMarker(runId, f.headSha, key, counts(), stateOf(urls)),
   ].filter(Boolean).join("\n\n");
 
   const warnings = (hyg.warnings ?? []).map((w) => `warning: ${w}`);
@@ -732,6 +752,7 @@ async function once(o, restart) {
       sides: { keep: "post: post the comment with the secret redacted.", drop: "drop: do not post this finding." }, failure: `Secret rules: ${ruleIds(s.hits)}`,
     }));
   }
+  heldIds = new Set(items.filter((x) => !clean.some((c) => c.id === x.id)).map((x) => x.id));
   // Step 6 per finding: a key per sha and finding, so a crash, a --restart or a re-frame never posts a finding twice.
   const inlineKey = (x) => inlineKeyOf(f.headSha, x.fp, x.file, x.line);
   const fresh = [];
@@ -856,7 +877,10 @@ async function syncMarker(gh, repo, n, sha, counts, log) {
   try {
     const m = await gh.markerCounts(repo, n, sha);
     if (!m?.id || ["must", "questions", "gaps"].every((k) => m[k] === counts[k])) return;
-    await gh.editReview(m.id, m.body.replace(/<!-- pr-review run=[^\n]*-->\s*$/, () => summaryMarker(m.runId, sha, m.key, counts)));
+    // the state and the decision line follow the new counts (#65); a marker from before the state stays without one
+    const state = m.state && { ...m.state, next: nextStep(counts, m.state.items ?? [], m.state.ci) };
+    const body = m.body.replace(/^\*\*(Nothing blocks\.|Blocks: [^*\n]*)\*\*/, () => decision(counts));
+    await gh.editReview(m.id, body.replace(/<!-- pr-review run=[^\n]*-->\s*$/, () => summaryMarker(m.runId, sha, m.key, counts, state)));
   } catch (e) { log(`review marker not updated: ${e.message}`); }
 }
 

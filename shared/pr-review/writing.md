@@ -49,10 +49,10 @@ right. Link each PR, commit, RFC or doc you cite, never with `§` or `¶`: `[RFC
 
 The engine builds the body from parts: `verdict` (what blocks and why, or
 "Nothing blocks."), `answers` to the author's questions, an `index` of the
-inline comments by theme, `praise` (1 or 2 specific lines, if earned) and
-`body` (items that cannot go inline, never what the PR does; on a later pass,
-if the author's replies check out). Retract a wrong earlier finding of ours in
-`corrections`. Never write the pass line, locations, open points or seats.
+inline comments, `praise` (1 or 2 specific lines, if earned), `body` (items
+that cannot go inline, never what the PR does) and `confirmed` (earlier replies
+that check out). Retract a wrong earlier finding of ours in `corrections`. Never
+write the decision, the pass line, locations, open points, seats or "done when".
 
 ## Replies
 

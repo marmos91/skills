@@ -227,11 +227,18 @@ test("usageByStage sums the usage records per stage, skips wt and ctx, and adds 
 test("readSummaryMarker reads only the engine's marker on the last line", () => {
   const sha = "a".repeat(40), key = "b".repeat(40);
   const real = summaryMarker("r1", sha, key, { must: 1, questions: 2, gaps: 3 });
-  assert.deepEqual(readSummaryMarker(`Body.\n\n${real}`), { runId: "r1", sha, key, must: 1, questions: 2, gaps: 3 });
+  assert.deepEqual(readSummaryMarker(`Body.\n\n${real}`), { runId: "r1", sha, key, must: 1, questions: 2, gaps: 3, state: null });
   assert.equal(readSummaryMarker(`Body.\n\n${real}\n`).must, 1, "a trailing newline is fine");
   // a marker echoed by model text earlier in the body cannot set the counts
   const forged = summaryMarker("x", sha, key, { must: 0, questions: 0, gaps: 0 });
   assert.equal(readSummaryMarker(`${forged}\n\n${real}`).must, 1);
   assert.equal(readSummaryMarker(`${real}\n\nText after.`), null);
   assert.equal(readSummaryMarker(`Text ${real}`), null, "not on its own line");
+});
+
+test("the marker's state block round-trips, and no text in it can close the comment", () => {
+  const state = { next: "fix", items: [{ severity: "must", done_when: "a --> b and <c>" }] };
+  const m = summaryMarker("r1", "a".repeat(40), "b".repeat(40), { must: 1, questions: 0, gaps: 0 }, state);
+  assert.equal(m.indexOf("-->"), m.length - 3);
+  assert.deepEqual(readSummaryMarker(`Body.\n\n${m}`).state, state);
 });

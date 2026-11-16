@@ -65,7 +65,7 @@ function context(frame, extra = "", from) {
   ].join("\n");
 }
 
-const finding = (sev) => `{"lens": "<lens>", "severity": "${sev}", "file": "path/from/repo/root", "line": 42, "symbol": "functionName (optional)", "title": "short title", "case": "input or situation -> wrong result", "evidence": "trace through the code, or a command and its output", "evidence_run": false, "fix": "smallest fix, with a snippet"}`;
+const finding = (sev) => `{"lens": "<lens>", "severity": "${sev}", "file": "path/from/repo/root", "line": 42, "symbol": "functionName (optional)", "title": "short title", "case": "input or situation -> wrong result", "evidence": "trace through the code, or a command and its output", "evidence_run": false, "fix": "smallest fix, with a snippet", "done_when": "the test or behavior that shows it is fixed"}`;
 
 // The patch of a part goes into the prompt up to this many lines; above it the seat reads the file.
 const INLINE_LINES = 2500;
@@ -133,6 +133,7 @@ export function round1Prompt(frame, lenses, maxTurns, part) {
       : "- Review each line that the diff adds or changes. Read other code only to judge those lines.",
     "- `file` is relative to the repo root. `line` is a line number in the head version of that file.",
     "- Add `symbol` (the function or type) when the finding is about one symbol.",
+    "- `done_when`: one line, the test or behavior that shows the finding is fixed.",
     ...(frame.shellOk ? ["- Set `evidence_run` to true on a finding only when you ran a command that shows it. Put the command and its output in `evidence`."] : []),
     ...(frame.reviewNumber > 1 && !part?.whole
       ? [`- Earlier findings of this reviewer that are still open are in ${earlier}. Check each one against the head. Report each in \`earlier\` with its \`thread_id\`, \`status\` (fixed, open, or wrong when the code shows that the finding was never right), and \`evidence\` (the line that fixes it, the line that still has the defect, or the line that proves it wrong). Do not repeat them in \`findings\`.`]
@@ -203,7 +204,7 @@ export function mergePrompt(frame, findingsBySeat, earlierAgreed = [], maxTurns)
     "## Rules",
     "- A cluster holds the findings that share one root cause. A cluster never crosses lenses: findings of 2 lenses stay in 2 clusters, also on the same line.",
     "- `found` lists each seat id whose finding is in the cluster, one time each.",
-    "- Keep the clearest title, the best case, the best evidence (a run beats a trace), and the smallest fix. Check them against the code in the worktree.",
+    "- Keep the clearest title, the best case, the best evidence (a run beats a trace), the smallest fix and the clearest `done_when`. Check them against the code in the worktree.",
     `- \`severity\`: one of ${sev.join(", ")}, the severity that the best case supports. When the seats disagree and the case does not decide, take the lower one.`,
     "- Mark each cluster that reverses an earlier agreed finding: it asks for the opposite of that finding, for example to add back what it asked to remove. Keep the cluster, and set `reverses` to the id of the earlier finding. The engine drops and records it. Leave `reverses` out on other clusters.",
     "- Do not add findings. Do not judge if a finding is real; the vote does that.",
@@ -214,7 +215,7 @@ export function mergePrompt(frame, findingsBySeat, earlierAgreed = [], maxTurns)
     "",
     "## Output",
     OUT,
-    `[{"id": "c1", "lens": "<lens>", "severity": "${sev.join("|")}", "file": "path", "line": 42, "symbol": "optional", "title": "...", "case": "...", "evidence": "...", "fix": "...", "found": ["<seat id>"], "members": ["f1"], "reverses": "<earlier id>"}]`,
+    `[{"id": "c1", "lens": "<lens>", "severity": "${sev.join("|")}", "file": "path", "line": 42, "symbol": "optional", "title": "...", "case": "...", "evidence": "...", "fix": "...", "done_when": "...", "found": ["<seat id>"], "members": ["f1"], "reverses": "<earlier id>"}]`,
   ].join("\n");
 }
 
@@ -256,11 +257,12 @@ export function composePrompt(frame, agreed, guidance, { retracted = [], blockin
     questions.length
       ? `- \`answers\`: one short answer for each of the author's questions, in order. Check each answer against the code.`
       : "- `answers`: [] (the PR body has no questions).",
-    "- `index`: group the ids of your inline comments by theme (what the findings are about, not the lens or the severity). One line of text for each id, no file and no line: the engine links the thread. Do not index a finding with `outside: true` or lens `hygiene`.",
+    "- `index`: one group with theme \"\" and one line of text for each id of your inline comments, no file and no line: the engine groups them by severity and links the thread. Do not index a finding with `outside: true` or lens `hygiene`.",
+    "- Do not write a finding's `done_when` in its comment: the engine adds it.",
     "- `praise`: 1 or 2 lines on a specific thing that the author got right, only when it is earned. Else \"\".",
     "- `body`: other items that cannot go inline, with the review body rules of the writing rules. It can be \"\".",
     ...(n > 1
-      ? [`- This is review ${n} of this PR. An earlier review already said what the PR does: do not say it again. In \`body\`, say for each earlier thread of ours where the author replied (in ${join(frame.ctxDir, "threads.json")}) whether the reply checks out. Only when the finding list below is empty and nothing else needs saying, \`body\` is "No new findings."`]
+      ? [`- This is review ${n} of this PR. An earlier review already said what the PR does: do not say it again. In \`body\`, say for each earlier thread of ours where the author replied (in ${join(frame.ctxDir, "threads.json")}) whether the reply checks out. A reply that checks out goes in \`confirmed\` (its \`thread_id\` and one line), not in \`body\`: the engine collapses that list. Only when the finding list below is empty and nothing else needs saying, \`body\` is "No new findings."`]
       : []),
     ...(retracted.length
       ? ["- `corrections`: for each earlier finding that the seats now judge wrong, one line with its `thread_id` that says plainly that our finding was wrong and why. The engine puts these first."]
@@ -274,7 +276,7 @@ export function composePrompt(frame, agreed, guidance, { retracted = [], blockin
     "",
     "## Output",
     OUT,
-    '{"verdict": "one line", "answers": ["..."], "index": [{"theme": "short theme", "items": [{"id": "<finding id>", "text": "one line"}]}], "praise": "", "body": "", "corrections": [{"thread_id": "...", "text": "..."}], "comments": [{"id": "<finding id>", "also": [], "body": "comment text"}]}',
+    '{"verdict": "one line", "answers": ["..."], "confirmed": [{"thread_id": "...", "text": "..."}], "index": [{"theme": "", "items": [{"id": "<finding id>", "text": "one line"}]}], "praise": "", "body": "", "corrections": [{"thread_id": "...", "text": "..."}], "comments": [{"id": "<finding id>", "also": [], "body": "comment text"}]}',
   ].join("\n");
 }
 

@@ -209,16 +209,26 @@ export function usageByStage(dir) {
 }
 
 // The summary marker of a full review carries the verdict's inputs; pr-land gates a merge on them. Follow-ups and replies have none.
-export const summaryMarker = (runId, sha, key, { must, questions, gaps }) => `<!-- pr-review run=${runId} sha=${sha} key=${key} must=${must} questions=${questions} gaps=${gaps} -->`;
+// state (#65): JSON for agents (verdict, next step, open items); < and > escaped, so no text can close the comment.
+const stateJson = (st) => JSON.stringify(st).replace(/[<>]/g, (c) => (c === "<" ? "\\u003c" : "\\u003e"));
+export const summaryMarker = (runId, sha, key, { must, questions, gaps }, state) => `<!-- pr-review run=${runId} sha=${sha} key=${key} must=${must} questions=${questions} gaps=${gaps}${state ? ` state=${stateJson(state)}` : ""} -->`;
 // The commit status of a review, from the same counts as its marker: any open must, question or gap fails it.
 export function commitStatus({ must, questions, gaps }) {
   const parts = [[must, "must", "must"], [questions, "question", "questions"], [gaps, "gap", "gaps"]].filter(([k]) => k).map(([k, one, many]) => `${k} ${k === 1 ? one : many}`);
   return { state: parts.length ? "failure" : "success", description: parts.join(", ") || "no open must, question or gap" };
 }
+// The decision line of a summary (#65), from the same counts: syncMarker rewrites it when the counts change.
+export const decision = (counts) => { const s = commitStatus(counts); return `**${s.state === "success" ? "Nothing blocks." : `Blocks: ${s.description}.`}**`; };
+// The state's next step for agents: open work first, then CI (red needs a fix, pending needs time).
+export const nextStep = ({ must, questions, gaps }, items, ci) => (must ? "fix" : questions ? "answer" : gaps ? "rerun" : items.length ? "respond"
+  : ci === "red" ? "fix-ci" : ci === "green" || ci === "none" ? "land" : "wait-ci");
 // Only the engine's marker counts: the last line of the body. A marker that model text put earlier in the body is ignored.
-const SUMMARY = /(?:^|\n)<!-- pr-review run=(\S+) sha=([0-9a-f]+) key=([0-9a-f]+) must=(\d+) questions=(\d+) gaps=(\d+) -->\s*$/;
-/** { runId, sha, key, must, questions, gaps } from the last line of a full review's body, or null. */
+const SUMMARY = /(?:^|\n)<!-- pr-review run=(\S+) sha=([0-9a-f]+) key=([0-9a-f]+) must=(\d+) questions=(\d+) gaps=(\d+)(?: state=(.+?))? -->\s*$/;
+/** { runId, sha, key, must, questions, gaps, state } from the last line of a full review's body, or null. state is null when absent or bad. */
 export function readSummaryMarker(body) {
   const m = SUMMARY.exec(String(body ?? ""));
-  return m && { runId: m[1], sha: m[2], key: m[3], must: +m[4], questions: +m[5], gaps: +m[6] };
+  if (!m) return null;
+  let state = null;
+  try { state = m[7] ? JSON.parse(m[7]) : null; } catch { /* a bad state never hides the counts */ }
+  return { runId: m[1], sha: m[2], key: m[3], must: +m[4], questions: +m[5], gaps: +m[6], state };
 }

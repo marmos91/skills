@@ -228,7 +228,7 @@ export const mutantFindings = (r) => (r?.mutants ?? []).filter((m) => m.status =
   title: `No test catches a break in \`${code(m.before)}\``,
   case: `The engine changed \`${code(m.before)}\` to \`${code(m.after)}\` (${m.op}). \`${m.command}\` still passes.`,
   evidence: `${m.command}: exit 0 with the mutant.\n${m.output.slice(-500)}`,
-  fix: "Add a test that fails on this change.", proven: true,
+  fix: "Add a test that fails on this change.", done_when: `\`${m.command}\` fails with this mutant.`, proven: true,
 }));
 
 /**

@@ -110,12 +110,14 @@ const newestFull = (pr, me) => readSummaryMarker((pr.reviews ?? []).filter((r) =
 function reviewGaps(pr, me, localQuestions) {
   const last = newestFull(pr, me);
   if (!last) return [`no approval of the head and no full pr-review review by ${me}`];
-  const { runId, sha, must, questions, gaps } = last;
+  const { runId, sha, must, questions, gaps, state } = last;
   if (sha !== pr.headRefOid) return [`the newest pr-review review is on ${sha.slice(0, 7)}, the head is ${pr.headRefOid.slice(0, 7)}`];
   // The marker count is frozen at posting; the local queue knows what the maintainer answered since. Both count questions waiting for an answer.
   const q = localQuestions(runId) ?? questions;
   const out = [];
-  if (must) out.push(`the newest pr-review review has ${must} open must`);
+  // the state block (#65) says where each must is: its thread, or the file when it is off the diff
+  const where = (state?.items ?? []).filter((x) => x.severity === "must").map((x) => x.url ?? x.file).filter(Boolean);
+  if (must) out.push(`the newest pr-review review has ${must} open must${where.length ? ` (${where.join(", ")})` : ""}`);
   if (q) out.push(`${q} pr-review question${q === 1 ? "" : "s"} not settled`);
   if (gaps) out.push(`the newest pr-review review is incomplete: ${gaps} lens${gaps === 1 ? "" : "es"} or seat${gaps === 1 ? "" : "s"} missing (a follow-up on a review without saved counts, or a failed seat): run a full pr-review on the head`);
   return out;
