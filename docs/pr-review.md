@@ -333,8 +333,8 @@ of a full review adds `must=<n> questions=<n> gaps=<n>`: the open must
 findings, the questions waiting, and the lenses not run, seats dropped and
 parts missed, as they stand when the review is posted. It then adds
 `state=<json>` for agents: `verdict` (the event), `next` (`fix`, `answer`,
-`rerun`, `respond` or `land`), `items` (each open earlier thread and each new
-finding: `fp`, `severity`, `file`, `line`, `status` open or new, the thread
+`rerun`, `respond`, `wait-ci` or `land`), `items` (each open earlier thread and
+each new finding the secret scan did not hold: `fp`, `severity`, `file`, `line`, `status` open or new, the thread
 `url` or null off the diff, `done_when`), and the `fixed` and `retracted`
 thread URLs. `pr-land` names the open musts from it. Questions are the
 finding questions on the PR that wait on you or on a run to apply your

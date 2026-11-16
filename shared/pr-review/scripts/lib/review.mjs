@@ -653,12 +653,14 @@ async function once(o, restart) {
   };
   // Numbered before the filter: an empty answer must not move the later ones onto the wrong question.
   const replies = (composed.answers ?? []).slice(0, f.questions?.length ?? 0).map((a, i) => [i + 1, one(a)]).filter(([, a]) => a);
+  let heldIds = new Set(); // set at post time, once the secret scan ran on each comment
   const threadUrl = (e) => `https://github.com/${repo}/pull/${n}#discussion_r${e.commentId}`;
   const stillOpen = earlierAll.filter((e) => !fixed.includes(e) && !retracted.includes(e));
   // First line (#65): the decision from the marker counts (what pr-land and the commit status read), then the delta.
   const firstLine = () => {
     const s = commitStatus(counts()), since = pst.lastReviewedSha ? `, since \`${pst.lastReviewedSha.slice(0, 7)}\`` : "";
-    const delta = f.reviewNumber > 1 ? ` Pass ${f.reviewNumber}${since}: ${fixed.length} fixed, ${posted.length + hygItems.length} new, ${stillOpen.length} still open${retracted.length ? `, ${retracted.length} retracted` : ""}.` : "";
+    // new: the comments that post (a folded finding rides on its host, a held one does not post)
+    const delta = f.reviewNumber > 1 ? ` Pass ${f.reviewNumber}${since}: ${fixed.length} fixed, ${items.filter((x) => !heldIds.has(x.id)).length} new, ${stillOpen.length} still open${retracted.length ? `, ${retracted.length} retracted` : ""}.` : "";
     return `**${s.state === "success" ? "Nothing blocks." : `Blocks: ${s.description}.`}**${delta}`;
   };
   // Earlier threads that only check out (fixed, or a reply the judge confirmed) go in one collapsed list, each linked.
@@ -666,19 +668,20 @@ async function once(o, restart) {
   const checks = earlierAll.filter((e) => fixed.includes(e) || (confirmed.get(e.threadId) && !retracted.includes(e)))
     .map((e) => `- ${confirmed.get(e.threadId) || `Fixed: ${plain(String(e.body ?? "").split("\n")[0])}`} ([thread](${threadUrl(e)}))`);
   // State for agents (#65), in the marker: the open items, each with its thread and its "done when".
+  // A finding the secret scan holds stays out: its done_when may hold the secret, and it is an open question already.
   const stateOf = (urls) => {
     const c = counts(), items = [
       ...stillOpen.map((e) => ({ severity: e.severity, file: e.path, line: e.line ?? e.originalLine, status: "open", url: threadUrl(e) })),
-      ...[...posted, ...hygItems].map((x) => ({ fp: x.fp, severity: x.severity, file: x.file || null, line: x.line ?? null, status: "new", url: urls.get(hostOf.get(x.id) ?? x.id) ?? null, ...(x.done_when && { done_when: one(x.done_when) }) })),
+      ...[...posted, ...hygItems].filter((x) => !heldIds.has(hostOf.get(x.id) ?? x.id)).map((x) => ({ fp: x.fp, severity: x.severity, file: x.file || null, line: x.line ?? null, status: "new", url: urls.get(hostOf.get(x.id) ?? x.id) ?? null, ...(x.done_when && { done_when: one(x.done_when) }) })),
     ];
-    const next = c.must ? "fix" : c.questions ? "answer" : c.gaps ? "rerun" : items.length ? "respond" : "land";
+    const next = c.must ? "fix" : c.questions ? "answer" : c.gaps ? "rerun" : items.length ? "respond" : ci.state === "green" || ci.state === "none" ? "land" : "wait-ci";
     return { verdict: v().event, next, items, fixed: fixed.map(threadUrl), retracted: retracted.map(threadUrl) };
   };
   const bodyOf = (outside, key, inline, urls = new Map()) => [
     firstLine(),
     ...retracted.map((e) => `Correction: ${one(composed.corrections?.find((x) => x.thread_id === e.threadId)?.text) || "our earlier finding here was wrong."} ${at(e.path, e.line ?? e.originalLine, threadUrl(e))}`),
     // The first line holds the decision: a verdict that says nothing blocks repeats it, or contradicts it.
-    /\bnothing\b[^.]*\bblock/i.test(plain(composed.verdict)) ? "" : one(composed.verdict),
+    /^nothing blocks\.?$/i.test(plain(composed.verdict)) ? "" : one(composed.verdict),
     whyNotApproved(v(), { questions: open.length, lenses: run.missing?.length ?? 0, seats: new Set([...run.dropped, ...missedNow].map((x) => x.seat)).size, mode }),
     // The setup stage (#38) sets f.checked: the depth and the checks run.
     f.checked ? `What was checked: ${one(f.checked)}` : "",
@@ -747,6 +750,7 @@ async function once(o, restart) {
       sides: { keep: "post: post the comment with the secret redacted.", drop: "drop: do not post this finding." }, failure: `Secret rules: ${ruleIds(s.hits)}`,
     }));
   }
+  heldIds = new Set(items.filter((x) => !clean.some((c) => c.id === x.id)).map((x) => x.id));
   // Step 6 per finding: a key per sha and finding, so a crash, a --restart or a re-frame never posts a finding twice.
   const inlineKey = (x) => inlineKeyOf(f.headSha, x.fp, x.file, x.line);
   const fresh = [];

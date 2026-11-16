@@ -2041,6 +2041,45 @@ test("the state block in the marker lists an off-diff must with its file and don
   });
 });
 
+test("a finding the secret scan holds stays out of the state block, so the summary still posts", async () => {
+  const fx = fixture(); routes(fx);
+  const token = "ghp_" + "Q".repeat(36);
+  const { r } = await go(fx, happy({ merge: [C("c1", { done_when: `no log line prints ${token}` })] }), { mode: "loop" });
+  assert.equal(r.exit, 0, r.summary);
+  const p = posts(fx)[0];
+  assert.equal(p.threads.length, 0);
+  assert.ok(!p.body.includes(token));
+  assert.deepEqual(readSummaryMarker(p.body).state.items, []);
+});
+
+test("state next waits for CI: no finding and pending checks is wait-ci, not land", async () => {
+  const fx = fixture(); routes(fx);
+  const r0 = R(fx);
+  r0["pr checks 5 -R o/r --json name,state,link,bucket,startedAt"] = { stdout: [{ name: "test", state: "PENDING", link: "https://github.com/o/r/actions/runs/9/job/1", bucket: "pending", startedAt: "2026-11-11T00:00:00Z" }], exit: 8 };
+  W(fx, r0);
+  const { r } = await go(fx, { all: { findings: [] }, merge: [], compose: { verdict: "Nothing blocks.", body: "", comments: [] } });
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(readSummaryMarker(posts(fx)[0].body).state.next, "wait-ci");
+});
+
+test("the pass line counts posted comments: a folded finding is not a second new thread", async () => {
+  const fx = fixture(); routes(fx);
+  savePrState(fx.state, N, { ...prState(fx.state, N), reviews: 1, lastReviewedSha: fx.base });
+  const sec = { lens: "security", title: "Leak" };
+  const { r } = await go(fx, happy({ merge: [C("c1"), C("c2", sec)], "v~2": [keep("c1"), keep("c2")],
+    compose: { body: "", comments: [{ id: "c1", also: ["c2"], body: "**must:** off by one, and a leak" }] } }));
+  assert.equal(r.exit, 0, r.summary);
+  assert.match(posts(fx)[0].body, /^\*\*Blocks: 2 must\.\*\* Pass 2, since `[0-9a-f]{7}`: 0 fixed, 1 new, 0 still open\./);
+});
+
+test("a verdict with more to say than \"Nothing blocks.\" is kept", async () => {
+  const fx = fixture(); routes(fx);
+  const verdict = "Nothing in the parser blocks, but the schema change needs a migration first.";
+  const { r } = await go(fx, happy({ compose: { verdict, body: "", comments: [{ id: "c1", body: "**must:** off by one" }] } }));
+  assert.equal(r.exit, 0, r.summary);
+  assert.match(posts(fx)[0].body, /\n\nNothing in the parser blocks, but the schema change needs a migration first\.\n\n/);
+});
+
 test("an empty answer keeps the next answers on their own question numbers", async () => {
   const fx = fixture(); routes(fx, { body: "Is 2 right?\nWhy not 3?" });
   await go(fx, happy({ compose: { verdict: "The off by one blocks.", answers: ["", "3 overflows the buffer."], body: "", comments: [{ id: "c1", body: "**must:** off by one" }] } }));
