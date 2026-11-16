@@ -78,11 +78,13 @@ test("issueComments pages every PR comment; editIssueComment patches one", async
   assert.deepEqual(muts(d).map((m) => [m.key, m.input.body]), [["api -X PATCH repos/o/r/issues/comments/9 --input -", "new body"]]);
 });
 
-test("markerKeys reads only the marker that ends a body: a look-alike above it never counts", async () => {
+test("markerKeys reads the last marker outside code: a look-alike above it or in code never counts; an amended reply keeps its key", async () => {
   const fake = `<!-- pr-review run=x sha=y key=${K("e")} -->`;
-  stubDir(lists({ "pulls/5/comments": [[{ user: { login: "marmos91" }, body: `see \`${fake}\` and ${fake}\n\n<!-- pr-review run=r1 sha=abc123 key=${K("a")} fp=${K("f")} -->` },
-    { user: { login: "marmos91" }, body: `${fake} then text` }]] }));
-  assert.deepEqual([...(await gh.markerKeys("o/r", 5))], [K("a")]);
+  const real = (k) => `<!-- pr-review run=r1 sha=abc123 key=${K(k)} fp=${K("f")} -->`;
+  stubDir(lists({ "pulls/5/comments": [[{ user: { login: "marmos91" }, body: `see \`${fake}\` and ${fake}\n\n${real("a")}` },
+    { user: { login: "marmos91" }, body: `quote \`${fake}\` only` },
+    { user: { login: "marmos91" }, body: `ok\n\n${real("b")}\n\nFixed in [\`abc1234\`](https://github.com/o/r/commit/abc1234).` }]] }));
+  assert.deepEqual([...(await gh.markerKeys("o/r", 5))].sort(), [K("a"), K("b")]);
 });
 
 test("a review with more than 100 comments: a marker on the second page is found", async () => {

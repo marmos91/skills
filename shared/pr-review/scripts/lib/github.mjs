@@ -1,5 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import { readSummaryMarker } from "./state.mjs";
+import { outsideCode } from "./learnings.mjs";
 
 const GH_URL = /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/;
 /** owner/repo of each GitHub remote of the current folder, origin first. */
@@ -100,8 +101,8 @@ export async function markerKeys(repo, n) {
   for (const path of [`repos/${repo}/pulls/${n}/reviews`, `repos/${repo}/pulls/${n}/comments`, `repos/${repo}/issues/${n}/comments`]) {
     for (const r of (await json(["api", "--paginate", "--slurp", path])).flat()) {
       if (r?.user?.login !== me) continue;
-      // only the marker that ends the body: a look-alike the model wrote above it (code span included) never counts
-      const m = /<!-- pr-review [^>]*?\bkey=([0-9a-f]{40})\b[^>]*-->\s*$/.exec(String(r.body ?? ""));
+      // the last marker outside code: the engine appends it after the model text, and linkFix appends after it
+      const m = [...outsideCode(r.body).matchAll(/<!-- pr-review [^>]*?\bkey=([0-9a-f]{40})\b[^>]*-->/g)].at(-1);
       if (m) keys.add(m[1]);
     }
   }
