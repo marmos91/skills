@@ -249,7 +249,11 @@ export async function summary({ repo, n, points: given, gh }) {
     if (!p.thread) return p;
     const t = named[1].find((x) => x.id === p.thread);
     if (!t) throw new Error(`point ${p.n}: thread ${p.thread} not found on ${repo}#${n}`);
-    return { ...p, fps: fpsOf(t, named[0]) };
+    // a thread can carry folded findings: a point answers only the ones it names, else the host (the first)
+    const all = fpsOf(t, named[0]), want = p.fps ?? (p.fp ? [p.fp] : null);
+    const bad = (want ?? []).find((f) => !all.includes(f));
+    if (bad) throw new Error(`point ${p.n}: ${bad} is not a finding of thread ${p.thread}`);
+    return { ...p, fps: want ?? all.slice(0, 1) };
   });
   // the newest pr-review review (null with none): the review this step answers
   const reviewed = prState(stateRoot(repo), n).lastReviewedSha;

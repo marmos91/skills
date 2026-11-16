@@ -273,10 +273,16 @@ test("the fingerprints come from our own council marker: findings list them, sum
   const gh = fakeGh([ours, pasted]);
   assert.deepEqual((await findings({ repo: REPO, n: N, gh, config: loadConfig() })).findings.map((f) => f.fps), [[f1, f2], []]);
   const pts = [{ n: 1, status: "done", sha: SHA, thread: "T1", text: "fixed." }, { n: 2, status: "open", thread: "T2", text: "no." }];
-  assert.deepEqual((await summary({ repo: REPO, n: N, points: pts, gh })).points.map((p) => p.fps), [[f1, f2], []]);
-  assert.deepEqual(recordedPoints(REPO, N, "h1").map((p) => p.fps), [[f1, f2], []]);
+  // a point that names no fingerprint answers the thread's host finding only, not the folded ones
+  assert.deepEqual((await summary({ repo: REPO, n: N, points: pts, gh })).points.map((p) => p.fps), [[f1], []]);
+  assert.deepEqual(recordedPoints(REPO, N, "h1").map((p) => p.fps), [[f1], []]);
   assert.equal(recordedPoints(REPO, N, "h0"), null);
   await assert.rejects(summary({ repo: REPO, n: N, points: [{ ...pts[0], thread: "T9" }], gh }), /thread T9 not found/);
+  freshState();
+  // each folded finding gets its own point; a fingerprint of another thread is refused
+  const split = [{ ...pts[0], fps: [f1] }, { n: 2, status: "open", thread: "T1", fps: [f2], text: "kept." }];
+  assert.deepEqual((await summary({ repo: REPO, n: N, points: split, gh })).points.map((p) => p.fps), [[f1], [f2]]);
+  await assert.rejects(summary({ repo: REPO, n: N, points: [{ ...pts[0], fp: k }], gh: fakeGh([ours]) }), /is not a finding of thread T1/);
 });
 
 test("summary: a rerun at the same head keeps the points of the posted comment", async () => {

@@ -96,8 +96,11 @@ order):
 ```
 
 Give each point the `thread` it answers (the `id` from `findings`): the
-summary then records the point with the thread's `fps`, which `pr-converge`
-reads. For a done point, say what changed from the suggestion and why. For an open
+summary then records the point with the thread's first fingerprint, which
+`pr-converge` reads. A thread with several `fps` holds folded findings: give
+each one its own point with `"fps": ["<fp>"]`, or list them all in one
+point. A finding that one point marks done and another keeps open stays
+open. For a done point, say what changed from the suggestion and why. For an open
 point, give the reason and the options it leaves. Then run
 `$P summary <file>`. It posts one comment that opens with the count ("2
 points are in; point 3 is kept open.") and links each commit. It posts once

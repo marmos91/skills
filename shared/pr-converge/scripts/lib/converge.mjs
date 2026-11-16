@@ -30,11 +30,15 @@ export const saveState = (repo, n, s) => writeAtomic(join(convergeDir(repo, n), 
  */
 // The musts still open. A must is fixed only when a done point names its fingerprint and a commit was pushed after
 // the round's head, in that round's respond step or a later one (a resumed declined run); else it stays open.
+// The newest step that answers a fingerprint decides it; within one step an open point beats a done one.
 const fpsOf = (p) => p.fps ?? (p.fp ? [p.fp] : []);
+const openLast = (points) => [...points].sort((a, b) => (a.status === "open") - (b.status === "open"));
 export const openMusts = (s) => s.rounds.flatMap((r) => {
-  const fixed = new Set(s.responses.filter((x) => x.round >= r.round && x.sha !== r.sha)
-    .flatMap((x) => x.points.filter((p) => p.status === "done" && p.sha !== r.sha).flatMap(fpsOf)));
-  return r.findings.filter((f) => f.severity === "must" && !fixed.has(f.fp));
+  const fixed = new Map();
+  for (const x of s.responses.filter((x) => x.round >= r.round && x.sha !== r.sha)) {
+    for (const p of openLast(x.points)) for (const fp of fpsOf(p)) fixed.set(fp, p.status === "done" && p.sha !== r.sha);
+  }
+  return r.findings.filter((f) => f.severity === "must" && !fixed.get(f.fp));
 });
 
 export async function converge(state, { deps, save, maxRounds = 4 }) {
@@ -105,7 +109,7 @@ const plural = (k, one, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
 export function summaryText(repo, s) {
   // one line per finding: a later answer (a resumed declined run that fixed it) replaces the earlier one
   const byFp = new Map();
-  s.responses.forEach((r, i) => r.points.forEach((p, j) => byFp.set(fpsOf(p).join(",") || `${i}.${j}`, p)));
+  s.responses.forEach((r, i) => openLast(r.points).forEach((p, j) => byFp.set(fpsOf(p).join(",") || `${i}.${j}`, p)));
   const done = [...byFp.values()].filter((p) => p.status === "done");
   const kept = [...byFp.values()].filter((p) => p.status === "open");
   const last = s.rounds.at(-1);

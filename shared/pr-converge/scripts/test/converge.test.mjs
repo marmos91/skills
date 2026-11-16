@@ -327,6 +327,18 @@ test("the end summary lists a finding once: a fix after a resumed declined stop 
   assert.doesNotMatch(f.calls.posts.at(-1), /Declined/);
 });
 
+test("a must that one point fixes and another declines in the same step stays open", async (t) => {
+  const { last } = setup(t);
+  const f = fakes([{ findings: [finding("m1", "must"), finding("s1")] }, { findings: [] }]);
+  // one thread holds both findings: the done point covers both, the open point declines the must
+  f.deps.respond = async () => { f.moveHead(sha("b")); return { sha: sha("b"), points: [
+    { n: 1, status: "done", sha: sha("b"), fps: ["m1", "s1"], text: "fixed." }, { n: 2, status: "open", fps: ["m1"], text: "declined m1." }] }; };
+  assert.equal(await run(f.deps, "--merge"), 5);
+  assert.equal(last().status, "declined");
+  assert.equal(f.calls.land, 0);
+  assert.match(f.calls.posts[0], /Still open:\n- must: finding m1/);
+});
+
 test("--config and --effort reach every pr-review round", async (t) => {
   const { dir } = setup(t);
   const f = fakes([]);
