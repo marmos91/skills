@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // CLI: pr-converge run|status <n>. JSON on stdout. Exit codes: 0 converged or merged, 1 usage or lock,
-// 2 the agent's turn (pr-respond), 3 paused for the user, 4 a step failed, 5 stopped (round cap or no progress).
+// 2 the agent's turn (pr-respond), 3 paused for the user, 4 a step failed, 5 stopped (round cap, no progress, a declined must).
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
@@ -22,7 +22,7 @@ const OPTIONS = {
   repo: { type: "string" }, merge: { type: "boolean" }, resume: { type: "boolean" }, pushed: { type: "string" },
   points: { type: "string" }, rebased: { type: "string" }, config: { type: "string" }, help: { type: "boolean", short: "h" },
 };
-const EXIT = { converged: 0, merged: 0, respond: 2, paused: 3, capped: 5, stalled: 5 };
+const EXIT = { converged: 0, merged: 0, respond: 2, paused: 3, capped: 5, stalled: 5, declined: 5 };
 const HERE = dirname(realpathSync(fileURLToPath(import.meta.url)));
 const sibling = (skill, cli) => join(HERE, "..", "..", skill, "scripts", cli);
 const SHA = /^[0-9a-f]{40}$/;
@@ -47,17 +47,24 @@ export function realDeps(repo, n, { review = realReview } = {}) {
       const before = (prState(rs, n).agreed ?? []).length;
       const r = await review({ repo, n, restart, log: (l) => console.error(l) });
       if (r.exit !== 0 && r.exit !== 3) throw new Error(`pr-review: ${r.summary}`);
-      const st = prState(rs, n);
+      const st = prState(rs, n), questions = openQuestions(rs).filter((q) => q.pr === n).length;
+      // a stop with no question queued (no core paths at depth auto) reviewed nothing
+      const skipped = r.skipped || (r.exit === 3 && !questions) ? r.summary : null;
       return {
-        sha: st.lastReviewedSha, skipped: r.skipped ? r.summary : null,
-        findings: r.skipped ? [] : (st.agreed ?? []).slice(before).map((f) => ({ fp: f.id, severity: f.severity, title: f.title })),
-        questions: openQuestions(rs).filter((q) => q.pr === n).length,
+        // only a call that posted recorded its sha; else the loop keeps the head it called on
+        sha: r.exit === 0 && !skipped ? st.lastReviewedSha : null, skipped,
+        findings: skipped ? [] : (st.agreed ?? []).slice(before).map((f) => ({ fp: f.id, severity: f.severity, title: f.title })),
+        questions,
       };
     },
     // the agent's push, recorded by --pushed for one respond step; without it, the agent's turn
     respond: async (s) => { const p = s.pushed; delete s.pushed; return p ?? { handoff: true }; },
     checks: async (sha) => { const s = (await github.checks(repo, n, sha)).state; return s === "none" ? "green" : s; },
     land: async () => {
+      // pr-land merges the PR of the clone's repo: it must be the one the loop reviewed
+      let here = null;
+      try { here = JSON.parse(execFileSync(process.env.GH_BIN || "gh", ["repo", "view", "--json", "nameWithOwner"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })).nameWithOwner; } catch {}
+      if (here?.toLowerCase() !== repo.toLowerCase()) return { blocked: `this clone is ${here ?? "not a GitHub repo"}, not ${repo}: run pr-converge in a clone of ${repo}` };
       const bin = sibling("pr-land", "pr-land");
       if (!existsSync(bin)) return { blocked: "pr-land is not installed next to pr-converge" };
       const r = spawnSync(bin, [String(n)], { encoding: "utf8", stdio: ["ignore", "pipe", 2] });
@@ -123,7 +130,7 @@ export async function main(argv, { deps, review } = {}) {
       const state = applyFlags(loadState(repo, n), v);
       saveState(repo, n, state);
       const { status, state: s } = await converge(state, { deps: d, save: (x) => saveState(repo, n, x), maxRounds: config.converge.max_rounds });
-      if (status in { converged: 1, merged: 1, capped: 1, stalled: 1 } && !s.summaryPosted) {
+      if (status in { converged: 1, merged: 1, capped: 1, stalled: 1, declined: 1 } && !s.summaryPosted) {
         await d.post(summaryText(repo, s));
         s.summaryPosted = true;
         saveState(repo, n, s);

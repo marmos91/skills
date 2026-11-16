@@ -13,7 +13,9 @@ This skill adds a loop and its stop rules around three skills: `pr-review`
 rounds, keeps the state, and tells you when it is your turn. `$SKILL_DIR`
 is the folder of this file.
 
-Run it in a clone of the repo, on the PR branch. It prints JSON.
+Run it in a clone of the repo, on the PR branch. It prints JSON. `pr-land`
+merges the PR of this clone's repo, so the loop refuses to land when the
+clone is not `--repo`.
 
 ```sh
 sh $SKILL_DIR/scripts/pr-converge run <n> [--merge]
@@ -24,7 +26,7 @@ sh $SKILL_DIR/scripts/pr-converge run <n> [--merge]
 | `0` | `converged` or `merged` | Report to the user (below). |
 | `2` | `respond` | Your turn: run `pr-respond` on this round's findings (below). |
 | `3` | `paused` | Read `pause.why`; see "Pauses". |
-| `5` | `capped` or `stalled` | Report what is still open. Nothing is merged. |
+| `5` | `capped`, `stalled` or `declined` | Report what is still open. Nothing is merged. |
 | `1` / `4` | | A usage error or a lock, or a step failed: tell the user. |
 
 ## The loop
@@ -43,7 +45,8 @@ sh $SKILL_DIR/scripts/pr-converge run <n> [--merge]
    full sha of the head you pushed (`git rev-parse HEAD`) and the same
    points file you gave `pr-respond summary` (checked the same way). The
    push counts for this one step; the next round's findings are your turn
-   again. Every finding declined and nothing pushed: pass the current head.
+   again. Every finding declined and nothing pushed: pass the current head;
+   the loop then goes to the checks without another round.
 4. The loop starts the next round. Go to step 2.
 
 ## Stop rules
@@ -55,6 +58,9 @@ sh $SKILL_DIR/scripts/pr-converge run <n> [--merge]
   merges.
 - **No progress:** a round that raises only the findings of the round
   before (same fingerprints) stops the loop (`stalled`).
+- **Declined must:** a round with a `must` whose respond step kept a point
+  open stops the loop before land (`declined`). It never merges; the user
+  decides.
 
 ## Pauses
 
@@ -64,7 +70,9 @@ A pause holds until you run again with `--resume`. Tell the user why.
   for the user. They answer with `pr-review answer`; then `--resume`
   reviews the same round again. The round keeps the findings it raised.
 - `review-skipped`: `pr-review` did not review (the head was reviewed
-  before, or you have a pending review on GitHub). Submit or delete the
+  before, you have a pending review on GitHub, or the repo has no core
+  paths set for `review.depth` auto: set them with
+  `pr-review config core-paths`). Submit or delete the
   pending review, or confirm a new review of the same head; then
   `--resume` reviews it again (`--restart`).
 - `foreign-push`: someone else pushed to the PR. Show the user the new

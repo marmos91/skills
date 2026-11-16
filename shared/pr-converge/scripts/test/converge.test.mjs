@@ -3,8 +3,11 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { main } from "../main.mjs";
+import { chmodSync } from "node:fs";
+import { main, realDeps } from "../main.mjs";
 import { loadState } from "../lib/converge.mjs";
+import { answer, queueQuestion } from "../../../pr-review/scripts/lib/questions.mjs";
+import { prState, savePrState, stateRoot } from "../../../pr-review/scripts/lib/state.mjs";
 
 const REPO = "example/app";
 const sha = (c) => c.repeat(40);
@@ -196,4 +199,71 @@ test("a land that is not ready pauses; --rebased after a conflict lands without 
   f.moveHead(sha("c")); // the conflict-only rebase, pushed
   assert.equal(await run(f.deps, "--rebased", sha("c")), 0);
   assert.deepEqual([f.calls.review, last().head], [1, sha("c")]);
+});
+
+// A fake pr-review engine: each call runs the next step, which may record a review the way review() does.
+function engine(steps) {
+  const asked = [];
+  const review = async (o) => { asked.push(o); return steps[asked.length - 1](); };
+  const post = (sha, agreed = []) => { const st = prState(stateRoot(REPO), 7); savePrState(stateRoot(REPO), 7, { ...st, lastReviewedSha: sha, agreed: [...(st.agreed ?? []), ...agreed] }); };
+  return { review, asked, post };
+}
+
+test("a pr-review stop with no question (core paths unset) is not a clean round", async (t) => {
+  const { last } = setup(t);
+  const f = fakes([]);
+  delete f.deps.review;
+  const e = engine([() => ({ exit: 3, corePaths: [], summary: "which paths are core? run pr-review config core-paths" })]);
+  assert.equal(await main(["run", "7", "--repo", REPO, "--merge"], { deps: f.deps, review: e.review }), 3);
+  assert.equal(last().pause.kind, "review-skipped");
+  assert.equal(f.calls.land, 0);
+});
+
+test("a round that stops at a question keeps the head it was called on", async (t) => {
+  const { last } = setup(t);
+  const f = fakes([]);
+  delete f.deps.review;
+  const rs = () => stateRoot(REPO);
+  const e = engine([
+    () => { e.post(sha("a"), [{ id: "a1", severity: "should", title: "a1" }]); return { exit: 0, summary: "posted" }; },
+    // round 2 on b: a split question stops it before lastReviewedSha is saved
+    () => { queueQuestion(rs(), { pr: 7, sha: sha("b"), fingerprint: "f".repeat(40), file: "x.js", line: 1, snippet: "", finding: { title: "t", case: "c" }, sides: { keep: "k", drop: "d" }, failure: "" }); return { exit: 3, summary: "a question waits" }; },
+    () => { e.post(sha("b")); return { exit: 0, summary: "posted" }; },
+  ]);
+  assert.equal(await main(["run", "7", "--repo", REPO, "--merge"], { deps: f.deps, review: e.review }), 3);
+  assert.equal(last().pause.kind, "question");
+  assert.equal(last().head, sha("b"));
+  answer(rs(), "7-ffffffff", "drop");
+  assert.equal(await main(["run", "7", "--repo", REPO, "--resume"], { deps: f.deps, review: e.review }), 0);
+  assert.equal(last().status, "merged");
+});
+
+test("pr-land is not run when the clone is another repo than --repo", async (t) => {
+  const { dir } = setup(t);
+  const gh = join(dir, "gh");
+  writeFileSync(gh, `#!/bin/sh\necho '{"nameWithOwner":"example/other"}'\n`);
+  chmodSync(gh, 0o755);
+  const old = process.env.GH_BIN; process.env.GH_BIN = gh;
+  t.after(() => { if (old === undefined) delete process.env.GH_BIN; else process.env.GH_BIN = old; });
+  const r = await realDeps(REPO, 7).land();
+  assert.match(r.blocked ?? "", /this clone is example\/other, not example\/app/);
+});
+
+test("a respond step that pushed nothing goes to land, not to a round pr-review would skip", async (t) => {
+  const { last } = setup(t);
+  const f = fakes([{ findings: [finding("a1")] }]);
+  f.deps.respond = async (s) => ({ sha: s.head, points: [{ n: 1, status: "open", text: "out of scope." }] });
+  assert.equal(await run(f.deps, "--merge"), 0);
+  assert.equal(last().status, "merged");
+  assert.deepEqual([f.calls.review, f.calls.land], [1, 1]);
+});
+
+test("a declined must stays open: the loop stops and never lands", async (t) => {
+  const { last } = setup(t);
+  const f = fakes([{ findings: [finding("m1", "must")] }, { findings: [] }]);
+  f.deps.respond = async () => { f.moveHead(sha("b")); return { sha: sha("b"), points: [{ n: 1, status: "open", text: "declined: out of scope." }] }; };
+  assert.equal(await run(f.deps, "--merge"), 5);
+  assert.equal(last().status, "declined");
+  assert.equal(f.calls.land, 0);
+  assert.match(f.calls.posts[0], /Still open:\n- must: finding m1/);
 });
