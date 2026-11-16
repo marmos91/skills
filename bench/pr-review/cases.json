@@ -24,7 +24,7 @@
     "bugs": [
       {
         "file": "shared/pr-review/scripts/lib/setup.mjs",
-        "lines": [171, 185],
+        "lines": [171, 171],
         "what": "runSetup returns the cached result of a finished setup before it resets the worktree, so a resumed run lets the seats read a worktree that a check left dirty."
       },
       {

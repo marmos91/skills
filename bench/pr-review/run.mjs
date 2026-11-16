@@ -7,10 +7,10 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { checkArgs, loadCases, markdown, scoreCase } from "./score.mjs";
+import { checkArgs, loadCases, markdown, mixLine, scoreCase } from "./score.mjs";
 import { isolatedClone } from "./clone.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -19,22 +19,26 @@ const { values: v } = parseArgs({ options: {
   only: { type: "string" }, until: { type: "string", default: "tally" }, slack: { type: "string", default: "3" },
   cases: { type: "string", default: join(here, "cases.json") }, state: { type: "string" },
 } });
-let slack, cases;
-try { ({ slack, cases } = checkArgs(v, loadCases(v.cases))); } catch (e) { console.error(`run.mjs: ${e.message}`); process.exit(1); }
+let slack, cases, label;
+try { ({ slack, cases, label } = checkArgs(v, loadCases(v.cases))); } catch (e) { console.error(`run.mjs: ${e.message}`); process.exit(1); }
 
 // The engine keeps its state here, never in the user's own pr-review state: no question, lock or settled finding leaks either way.
-process.env.XDG_STATE_HOME = v.state ?? mkdtempSync(join(tmpdir(), "pr-review-bench-"));
+// absolute: frame puts the run worktree under it, and git resolves a relative path from the clone
+process.env.XDG_STATE_HOME = resolve(v.state ?? mkdtempSync(join(tmpdir(), "pr-review-bench-")));
 const engine = join(here, "..", "..", "shared", "pr-review", "scripts", "lib");
 const { review } = await import(join(engine, "review.mjs"));
 const github = await import(join(engine, "github.mjs"));
 const { usageByStage } = await import(join(engine, "state.mjs"));
+const { applyEffort, loadUserConfig } = await import(join(engine, "config.mjs"));
+// The mix that runs: --config, else the user's own pr-review config (as review() loads it), at this effort.
+const configFrom = v.config ? resolve(v.config) : "the user's pr-review config";
+const mix = mixLine(applyEffort(loadUserConfig({ cliPath: v.config }), v.effort));
 (await import(join(engine, "child.mjs"))).installSignalHandlers();
 
 const gh = (...a) => execFileSync(process.env.GH_BIN || "gh", a, { encoding: "utf8" }).trim();
 // Old review threads would show the seats earlier findings on the very bug, and link clusters to them: none.
 const benchGh = { ...github, threads: async () => [] };
 
-const label = v.label ?? `${v.effort}${v.config ? `-${basename(v.config).replace(/\.json$/, "")}` : ""}${v.depth === "full" ? "-full" : ""}`;
 const rows = [];
 for (const c of cases) {
   const t0 = Date.now();
@@ -44,7 +48,7 @@ for (const c of cases) {
     const p = await github.pr(c.repo, c.pr);
     if (p.headSha !== c.head) throw new Error(`PR head is ${p.headSha}, the case says ${c.head}`);
     // only the case's commits, and the diff is exactly base...head: both settled before any model call
-    const dir = isolatedClone(`https://github.com/${c.repo}.git`, join(process.env.XDG_STATE_HOME, "clones", c.id), c, p.baseRef);
+    const dir = isolatedClone(`https://github.com/${c.repo}.git`, join(process.env.XDG_STATE_HOME, "clones"), c, p.baseRef);
     console.error(`${c.id}: reviewing ${c.repo}#${c.pr} at effort ${v.effort}`);
     const r = await review({ repo: c.repo, n: c.pr, repoDir: dir, gh: benchGh, effort: v.effort, depth: v.depth, configPath: v.config,
       dryRun: true, until: v.until, restart: true, log: (l) => console.error(`  ${l}`) });
@@ -65,8 +69,8 @@ if (v.until === "frame") {
 } else {
   const out = join(here, "results");
   mkdirSync(out, { recursive: true });
-  const md = markdown(`${label} (effort ${v.effort}, depth ${v.depth}${v.config ? `, config ${basename(v.config)}` : ""})`, rows);
-  writeFileSync(join(out, `${label}.json`), JSON.stringify({ label, effort: v.effort, depth: v.depth, config: v.config ? basename(v.config) : null, slack, at: new Date().toISOString(), rows }, null, 2) + "\n");
+  const md = markdown(`${label} (effort ${v.effort}, depth ${v.depth}, config ${configFrom})`, rows).replace("\n\n", `\n\n${mix}\n\n`);
+  writeFileSync(join(out, `${label}.json`), JSON.stringify({ label, effort: v.effort, depth: v.depth, config: configFrom, mix, slack, at: new Date().toISOString(), rows }, null, 2) + "\n");
   writeFileSync(join(out, `${label}.md`), md);
   console.log(md);
 }

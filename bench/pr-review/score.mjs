@@ -1,7 +1,11 @@
 // Case loader and scorer of the pr-review benchmark. Pure: no git, no gh, no model calls (run.mjs does those).
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { basename, resolve } from "node:path";
 
 const SHA = /^[0-9a-f]{40}$/;
+// ids and labels become file and folder names: no dots, no slashes, so never "." or ".."
+export const NAME = /^[a-z0-9][a-z0-9-]*$/;
 
 /** Reads and checks a cases file (a JSON array). Throws on the first bad field, naming the case. */
 export function loadCases(file) {
@@ -13,7 +17,7 @@ export function checkCases(cases) {
   const ids = new Set();
   for (const [i, c] of cases.entries()) {
     const bad = (m) => { throw new Error(`case ${c?.id ?? i}: ${m}`); };
-    if (typeof c?.id !== "string" || !/^[\w.-]+$/.test(c.id)) bad("id: want letters, digits, . _ -");
+    if (typeof c?.id !== "string" || !NAME.test(c.id)) bad("id: want lowercase letters, digits and -, starting with a letter or digit");
     if (ids.has(c.id)) bad("id: duplicate");
     ids.add(c.id);
     // github.com only: run.mjs checks that the repo is public before it runs
@@ -31,18 +35,32 @@ export function checkCases(cases) {
   return cases;
 }
 
-/** Checks the runner's flags. -> { slack, cases } (the cases --only picks). Throws a usage error. */
+/** Checks the runner's flags. -> { slack, cases (the ones --only picks), label }. Throws a usage error. */
 export function checkArgs(v, cases) {
   if (!["low", "medium", "high", "max"].includes(v.effort)) throw new Error("--effort must be low|medium|high|max (auto would pick per case)");
   if (!["tally", "frame"].includes(v.until)) throw new Error("--until must be tally or frame");
   if (!["light", "full"].includes(v.depth)) throw new Error("--depth must be light or full");
   // Number("3l") is NaN, and a NaN slack matches no finding: every hit would score as a false positive
   if (!/^\d+$/.test(String(v.slack))) throw new Error("--slack must be a non-negative integer");
-  if (v.only === undefined) return { slack: Number(v.slack), cases };
-  const only = v.only.split(",").map((s) => s.trim()).filter(Boolean);
-  const unknown = only.filter((id) => !cases.some((c) => c.id === id));
-  if (!only.length || unknown.length) throw new Error(`--only: no case ${unknown.join(", ") || "named"}; cases: ${cases.map((c) => c.id).join(", ")}`);
-  return { slack: Number(v.slack), cases: cases.filter((c) => only.includes(c.id)) };
+  if (v.label !== undefined && !NAME.test(v.label)) throw new Error("--label: want lowercase letters, digits and -");
+  let picked = cases;
+  if (v.only !== undefined) {
+    const only = v.only.split(",").map((s) => s.trim()).filter(Boolean);
+    const unknown = only.filter((id) => !cases.some((c) => c.id === id));
+    if (!only.length || unknown.length) throw new Error(`--only: no case ${unknown.join(", ") || "named"}; cases: ${cases.map((c) => c.id).join(", ")}`);
+    picked = cases.filter((c) => only.includes(c.id));
+  }
+  // the default label names what ran, so a run of one case or another config never overwrites a full run
+  const config = v.config && `${basename(v.config).replace(/\.json$/, "").toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${createHash("sha1").update(resolve(v.config)).digest("hex").slice(0, 6)}`;
+  const label = v.label ?? [v.effort, config || "user-config", v.depth === "full" && "full", v.only !== undefined && picked.map((c) => c.id).join("-")].filter(Boolean).join("-");
+  return { slack: Number(v.slack), cases: picked, label };
+}
+
+/** The seat mix of an effective config, one line: what ran, for the results. */
+export function mixLine(config) {
+  const id = (s) => `${s.harness}:${s.model}${s.thinking ? `/${s.thinking}` : ""}`;
+  const lenses = Object.entries(config.lenses ?? {}).filter(([, l]) => l.seats).map(([n, l]) => `${n} (${l.seats.map(id).join(", ")})`);
+  return [`seats ${config.seats.map(id).join(", ")}`, `judge ${id(config.judge)}`, lenses.length && `lens seats ${lenses.join("; ")}`].filter(Boolean).join("; ");
 }
 
 // slack: a finding a few lines off the range names the same code (seats cite the call, the bug sits above it)

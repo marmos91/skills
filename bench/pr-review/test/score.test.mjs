@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { checkArgs, checkCases, loadCases, markdown, scoreCase, summarize } from "../score.mjs";
+import { checkArgs, checkCases, loadCases, markdown, mixLine, scoreCase, summarize } from "../score.mjs";
 import { isolatedClone } from "../clone.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -26,6 +26,7 @@ test("the shipped cases load", () => {
 test("checkCases rejects bad cases, naming the case", () => {
   assert.throws(() => checkCases([]), /non-empty/);
   assert.throws(() => checkCases([kase(), kase()]), /x-1: id: duplicate/);
+  for (const id of [".", "..", "a/b", "A-1", "-x", "x.y"]) assert.throws(() => checkCases([kase({ id })]), /id: want/, id);
   assert.throws(() => checkCases([kase({ repo: "o/../r" })]), /repo/);
   assert.throws(() => checkCases([kase({ repo: "https://example.com/o/r" })]), /repo/);
   assert.throws(() => checkCases([kase({ pr: 0 })]), /pr/);
@@ -115,8 +116,9 @@ test("isolatedClone: only the case's commits; the fix is out of reach; a base of
   g("merge", "-q", "--no-ff", "-m", "merge", "feat");
   g("commit", "-q", "--allow-empty", "-m", "fix");
   const fix = g("rev-parse", "HEAD");
-  const c = { pr: 7, base, head };
-  const dir = isolatedClone(src, join(tmp, "case"), c, "main");
+  const c = { id: "case", pr: 7, base, head };
+  const dir = isolatedClone(src, tmp, c, "main");
+  assert.equal(dir, join(tmp, "case"));
   const in_ = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   assert.throws(() => in_("cat-file", "-e", `${fix}^{commit}`));
   // the 2 refs frame fetches from origin
@@ -124,5 +126,56 @@ test("isolatedClone: only the case's commits; the fix is out of reach; a base of
   assert.equal(in_("rev-parse", "origin/main"), base);
   assert.equal(in_("rev-parse", "refs/pr-review/7"), head);
   assert.throws(() => in_("cat-file", "-e", `${fix}^{commit}`));
-  assert.throws(() => isolatedClone(src, join(tmp, "bad"), { pr: 7, base: fix, head }, "main"), /not an ancestor/);
+  assert.throws(() => isolatedClone(src, tmp, { id: "bad", pr: 7, base: fix, head }, "main"), /not an ancestor/);
+});
+
+test("isolatedClone removes nothing outside <root>/<id>: a relative root or an unsafe id throws first", (t) => {
+  const tmp = mkdtempSync(join(tmpdir(), "bench-guard-")), root = join(tmp, "clones");
+  t.after(() => rmSync(tmp, { recursive: true, force: true }));
+  mkdirSync(root);
+  writeFileSync(join(tmp, "keep"), "x");
+  const c = { pr: 1, base: sha("a"), head: sha("b") };
+  for (const id of ["..", ".", "a/../.."]) assert.throws(() => isolatedClone(tmp, root, { ...c, id }, "main"), /not a safe folder name/);
+  assert.throws(() => isolatedClone(tmp, "clones", { ...c, id: "x" }, "main"), /absolute/);
+  assert.ok(existsSync(join(tmp, "keep")) && existsSync(root));
+});
+
+test("checkArgs: --effort, --until and --depth take only their values", () => {
+  for (const [k, bad] of [["effort", "auto"], ["effort", "huge"], ["until", "compose"], ["until", "post"], ["depth", "auto"]]) {
+    assert.throws(() => checkArgs(args({ [k]: bad }), [kase()]), new RegExp(`--${k} must be`), `${k}=${bad}`);
+  }
+  for (const e of ["low", "medium", "high", "max"]) assert.doesNotThrow(() => checkArgs(args({ effort: e }), [kase()]));
+});
+
+test("checkArgs: the default label names the cases and the config; --label is a safe name", () => {
+  const two = [kase(), kase({ id: "x-2" })];
+  assert.equal(checkArgs(args(), two).label, "medium-user-config");
+  assert.equal(checkArgs(args({ only: "x-2", depth: "full" }), two).label, "medium-user-config-full-x-2");
+  const a = checkArgs(args({ config: "/a/mix.json" }), two).label, b = checkArgs(args({ config: "/b/mix.json" }), two).label;
+  assert.match(a, /^medium-mix-[0-9a-f]{6}$/);
+  assert.notEqual(a, b);
+  assert.equal(checkArgs(args({ label: "mine" }), two).label, "mine");
+  for (const bad of ["../x", "a/b", ".", "x.json"]) assert.throws(() => checkArgs(args({ label: bad }), two), /--label/);
+});
+
+test("mixLine names the seats, the judge and the lens seats", () => {
+  const s = (model, thinking) => ({ harness: "claude", model, thinking });
+  assert.equal(mixLine({ seats: [s("opus", "high"), s("m", "low")], judge: s("opus", "high"), lenses: { security: { seats: [s("opus", "max")] }, correctness: { enabled: true } } }),
+    "seats claude:opus/high, claude:m/low; judge claude:opus/high; lens seats security (claude:opus/max)");
+});
+
+test("recall counts a nit on the bug", () => {
+  assert.deepEqual(scoreCase(kase(), [f("src/a.js", 11, "nit", "agreed")]).agreed, { found: 1, fp: 0 });
+});
+
+test("the lower slack edge: lines[0] - slack finds the bug, one line less does not", () => {
+  assert.equal(scoreCase(kase(), [f("src/a.js", 7, "must", "agreed")]).agreed.found, 1);
+  assert.deepEqual(scoreCase(kase(), [f("src/a.js", 6, "must", "agreed")]).agreed, { found: 0, fp: 1 });
+});
+
+test("skills-47: one finding on the git clean line finds only that bug", () => {
+  const c = loadCases(join(here, "..", "cases.json")).find((x) => x.id === "skills-47-setup-reset");
+  const s = scoreCase(c, [f("shared/pr-review/scripts/lib/setup.mjs", 180, "must", "agreed")]);
+  assert.equal(s.agreed.found, 1);
+  assert.deepEqual(s.missed, ["shared/pr-review/scripts/lib/setup.mjs:171-171"]);
 });

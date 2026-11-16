@@ -35,7 +35,9 @@ CI does not run it. CI runs only the scorer tests (`test/score.test.mjs`).
 }
 ```
 
-`lines` are line numbers in the file at `head`. A PR can hold more than one bug.
+`lines` are line numbers in the file at `head`. A PR can hold more than one bug; keep
+their ranges (plus the slack) apart, or one finding scores as two. `id` is lowercase
+letters, digits and `-`: it names the case's clone folder.
 
 ## Add a case
 
@@ -65,6 +67,11 @@ node bench/pr-review/run.mjs --effort medium --config mix-opus-only.json --label
 - `--slack N` (default 3): a finding up to N lines outside a bug's range still finds it.
 - `--state <dir>` is the engine state and the case clones (default: a new temp folder).
 - `--only a,b` runs those cases; an id that is no case is an error.
+
+`--label <name>` names the results (lowercase letters, digits, `-`). The default is
+the effort, the config file name and a hash of its path (or `user-config`), `full` for
+`--depth full`, and the `--only` case ids. The results record the effort, the config path
+(or that the user's own pr-review config ran) and the seat mix: seats, judge and lens seats.
 
 Each run writes `results/<label>.json` (every cluster, with its file, line, severity and
 vote status) and `results/<label>.md` (git ignores `results/`), and prints the table.
