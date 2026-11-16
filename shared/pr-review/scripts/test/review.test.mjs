@@ -2532,16 +2532,19 @@ test("#92: a finding still settled by an fp:line entry of an older engine gets i
   assert.ok(prState(fx.state, N).settled.includes(keyOf(fingerprint(PRE), 1, "const b = open();")), "the line can move now and stay settled");
 });
 
-test("#92: a commit that only reindents a settled line keeps its finding settled", async () => {
-  const fx = fixture(); routes(fx);
-  await go(fx, happy());
+test("#92: a reindent keeps a .js finding settled, but unsettles one in a whitespace-significant .py file", async () => {
+  const fx = fixture({ "b.py": "if x:\n    y()\n    z()\n" }); routes(fx);
+  const py = { file: "b.py", line: 3, title: "z runs only when x" };
+  const both = (compose) => ({ all: { findings: [F()] }, merge: [C("c1"), C("c2", py)], "v~2": [keep("c1"), keep("c2")], compose });
+  await go(fx, both({ body: "Two.", comments: [{ id: "c1", body: "**must:** one" }, { id: "c2", body: "**must:** two" }] }));
   git(fx.seed, "checkout", "-q", "feat");
-  const b = commit(fx.seed, { "a.js": "const a = 2;\n  const  b = 3;\nconst c = 4;\nconst d = 5;\n" }, "style: indent b");
+  const b = commit(fx.seed, { "a.js": "const a = 2;\n  const  b = 3;\nconst c = 4;\nconst d = 5;\n", "b.py": "if x:\n    y()\nz()\n" }, "style: indent");
   git(fx.seed, "push", "-qf", fx.origin, "HEAD:refs/pull/5/head");
   routes(fx, { head: b });
-  const { r } = await go(fx, { ...happy(), compose: { body: "No new findings.", comments: [] } });
+  const { r } = await go(fx, both({ body: "One.", comments: [{ id: "c2", body: "**must:** two" }] }));
   assert.equal(r.exit, 0, r.summary);
-  assert.deepEqual(JSON.parse(readFileSync(join(r.runDir, "clusters.json"), "utf8")).dropped.map((d) => d.reason), ["settled"]);
+  const cl = JSON.parse(readFileSync(join(r.runDir, "clusters.json"), "utf8"));
+  assert.deepEqual([cl.clusters.map((c) => c.file), cl.dropped.map((d) => [d.finding.file, d.reason])], [["b.py"], [["a.js", "settled"]]]);
 });
 
 test("#92: a finding on a line past the end of its file is dropped at the merge step", async () => {

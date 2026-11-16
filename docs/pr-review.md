@@ -408,7 +408,10 @@ They apply to a manual `review` and to the loop.
    The settled list records the fingerprint with its code anchor: the
    text of the finding's line with its whitespace collapsed, so a reindent
    keeps it settled (the changed lines that unsettle a finding come from a
-   whitespace-blind diff). A finding whose line text matches a settled entry stays
+   whitespace-blind diff). In files where indentation changes meaning
+   (`.py`, `.pyi`, `.yaml`, `.yml`, `Makefile`, `*.mk`, `.haml`, `.pug`,
+   `.slim`, `.coffee`, `.nim`, `.fs`, `.fsx`, `.sass`, `.styl`) a whitespace
+   edit still counts as a change. A finding whose line text matches a settled entry stays
    settled wherever the line moved; another instance on other code is new.
    Two lines that read exactly the same share one entry: settling one settles
    both. With no anchor (a blank line), and for entries an older engine

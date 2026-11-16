@@ -214,11 +214,17 @@ function anchors(dir, sha) {
   };
 }
 
-// The lines changed since the review, whitespace edits left out: they unsettle a settled finding.
+// Files where indentation changes meaning: a whitespace edit there still unsettles a finding.
+const WHITESPACE_SIGNIFICANT = /(\.(py|pyi|ya?ml|mk|haml|pug|slim|coffee|nim|fsx?|sass|styl)|(^|\/)(GNU)?[Mm]akefile)$/;
+
+// The lines changed since the review: they unsettle a settled finding. Whitespace edits are left out (delta-w.patch)
+// except in whitespace-significant files.
 function changedLines(f) {
-  const out = new Map(), w = join(f.ctxDir, "delta-w.patch");
-  for (const [file, h] of parseHunks(readFileSync(existsSync(w) ? w : scopePatch(f), "utf8"))) out.set(file, new Set([...h.right].filter(([, k]) => k === "add").map(([l]) => l)));
-  return out;
+  const added = (file) => new Map([...parseHunks(readFileSync(file, "utf8"))].map(([p, h]) => [p, new Set([...h.right].filter(([, k]) => k === "add").map(([l]) => l))]));
+  const all = added(scopePatch(f)), w = join(f.ctxDir, "delta-w.patch");
+  if (!existsSync(w)) return all;
+  const blind = added(w);
+  return new Map([...all.keys()].map((p) => [p, WHITESPACE_SIGNIFICANT.test(p) ? all.get(p) : blind.get(p) ?? new Set()]));
 }
 
 function ciOf(f) {
