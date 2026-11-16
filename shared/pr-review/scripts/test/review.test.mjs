@@ -2370,7 +2370,7 @@ test("pre-existing: posts once, collapsed at the end of the summary, never inlin
   assert.equal(p.threads.length, 0);
   assert.match(p.body, /<details><summary>1 pre-existing finding: in code this PR touches, not caused by it\. Not blocking\.<\/summary>\n\n- Old leak \(\[`b\.js`\]\([^)]+b\.js#L1\)\): b never closes\n<\/details>\n\n<!-- pr-review [^\n]+ -->$/);
   assert.deepEqual(counts(p.body), { must: 0, questions: 0, gaps: 0 });
-  assert.ok(prState(fx.state, N).settled.includes(fingerprint(PRE)));
+  assert.ok(prState(fx.state, N).settled.includes(keyOf(fingerprint(PRE), 1, "const b = open();")));
 });
 
 test("pre-existing: a later pass does not raise it again", async () => {
@@ -2382,4 +2382,28 @@ test("pre-existing: a later pass does not raise it again", async () => {
   assert.equal(r.exit, 0, r.summary);
   assert.ok(!run.calls.some((c) => c.k === "v~2"), "dropped before the vote");
   assert.doesNotMatch(posts(fx)[1].body, /pre-existing/);
+});
+
+test("pre-existing: the only finding keeps the loop's unanimous zero", async () => {
+  const fx = fixture({ "b.js": "const b = open();\n" }); routes(fx);
+  const { r } = await go(fx, preRun, { mode: "loop", effort: "medium" });
+  assert.equal(r.exit, 0, r.summary);
+  assert.ok(!r.reasons.includes("loop: not unanimous zero"), r.reasons.join("; "));
+});
+
+test("pre-existing: a split vote drops it, with no jev call and no question", async () => {
+  const fx = fixture({ "b.js": "const b = open();\n" }); routes(fx);
+  let asked = 0;
+  const { r } = await go(fx, { ...preRun, merge: [{ ...PRE, id: "c1", found: [S0] }], "v~1": [keep("c1")], "v~2": [drop("c1")] }, { decide: async () => { asked++; return { decision: "unsure" }; } });
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(asked, 0);
+  assert.equal(openQuestions(fx.state).length, 0);
+  assert.doesNotMatch(posts(fx)[0].body, /pre-existing/);
+  assert.ok(prState(fx.state, N).settled.includes(keyOf(fingerprint(PRE), 1, "const b = open();")));
+});
+
+test("pre-existing: \"No new findings.\" is dropped when the body lists one", async () => {
+  const fx = fixture({ "b.js": "const b = open();\n" }); routes(fx);
+  await go(fx, { ...preRun, compose: { body: "No new findings.", comments: [] } });
+  assert.doesNotMatch(posts(fx)[0].body, /No new findings/);
 });

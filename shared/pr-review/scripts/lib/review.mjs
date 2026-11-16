@@ -391,7 +391,8 @@ async function once(o, restart) {
     }
   }
   const noTracking = outs.some((x) => x.v.no_tracking === true);
-  const unanimousZero = outs.every((x) => x.v.findings.length === 0);
+  // a pre-existing finding never blocks (#69), so it does not break a unanimous zero
+  const unanimousZero = outs.every((x) => x.v.findings.every((g) => g.severity === "pre-existing"));
   if (o.until === "round1") return finish("round1");
 
   // Merge (spec 6.4, 7.5 rule 4): a cluster that reverses an earlier agreed finding is dropped and recorded.
@@ -475,6 +476,8 @@ async function once(o, restart) {
     }
     if (status === "agreed") { agreed.push({ ...c, ask_author: c.found.length === 1 }); continue; }
     if (status === "rejected") { rejected.push(c); continue; }
+    // A split pre-existing finding (#69) is dropped: it never blocks, so it gets no jev call and no question.
+    if (c.severity === "pre-existing") { rejected.push(c); continue; }
     // by id too (2 clusters can share one fp, as in applyProof); hashed, because the id is judge output and a cached
     // merge.json from an older run is never validated again
     const dfile = join(runDir, "decide", `${sha1(`${c.id}\0${c.fp}`)}.json`);
@@ -606,7 +609,7 @@ async function once(o, restart) {
   // A function, like v(): the post step still queues the questions the secret scan holds, so the marker reads the final count.
   const counts = () => ({ must: blocking.length + [...agreed, ...hygItems].filter((x) => x.severity === "must").length, questions: waitingQuestions(repoState, n).length, gaps: (run.missing?.length ?? 0) + run.dropped.length + missedNow.length });
   // "No new findings." over a posted finding contradicts itself: drop it whatever compose wrote
-  const said = refs(composed.body.trim()), anyFinding = posted.length + hygItems.length > 0;
+  const said = refs(composed.body.trim()), anyFinding = posted.length + older.length + hygItems.length > 0;
   // Engine layout of the body (spec 6.8): pass line, corrections, verdict, checks, answers, thread index, praise.
   // The index lists only ids whose thread went inline (inline: the posted items on diff lines), at their real line.
   const one = (t) => refs(String(t ?? "").replace(/\s+/g, " ").trim());
