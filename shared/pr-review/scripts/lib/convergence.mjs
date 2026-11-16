@@ -14,12 +14,14 @@ export function allowedSeverities(reviewNumber) {
   return new Set(reviewNumber <= 1 ? ["must", "should", "nit"] : reviewNumber === 2 ? ["must", "should"] : ["must"]);
 }
 
-export function filterNew(findings, { reviewNumber, settled, changedLines }) {
+// learned: fingerprints rejected on any PR of the repo (learnings.mjs). Dropped wherever they are, changed lines too.
+export function filterNew(findings, { reviewNumber, settled, changedLines, learned = new Set() }) {
   const allowed = allowedSeverities(reviewNumber);
   const keep = [];
   const dropped = [];
   for (const finding of findings) {
     if (!allowed.has(finding.severity)) dropped.push({ finding, reason: "severity floor" });
+    else if (learned.has(fingerprint(finding))) dropped.push({ finding, reason: "learned" });
     else if (settled.has(fingerprint(finding)) && !changedLines.get(finding.file)?.has(finding.line)) dropped.push({ finding, reason: "settled" });
     else keep.push(finding);
   }

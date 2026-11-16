@@ -6,6 +6,7 @@ import * as github from "./github.mjs";
 import { redact } from "./secrets.mjs";
 import { canDrive } from "./trust.mjs";
 import { stripComments } from "./config.mjs";
+import { LEARNINGS } from "./learnings.mjs";
 import { done, markDone, waitLock } from "./state.mjs";
 
 export class DiffTooLarge extends Error {
@@ -330,6 +331,7 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
   const f = {
     headSha: head, baseRef: p.baseRef, trusted, ownPr: p.author === viewer, shellOk,
     reviewNumber: (prState.reviews ?? 0) + 1, delta, ctxDir, worktree, changedPaths, chunks, ci, repoConfigText, nonce, questions,
+    learnings: show(repoDir, base, LEARNINGS),
   };
   json(runDir, "frame.json", f);
   markDone(runDir, "frame");

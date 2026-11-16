@@ -12,6 +12,7 @@ import { redact } from "./lib/secrets.mjs";
 import { askJev as realAskJev, findJev as realFindJev } from "./lib/decider.mjs";
 import { review, SetupError, STAGES } from "./lib/review.mjs";
 import { answer, markAsked, openQuestions, questionWarnings } from "./lib/questions.mjs";
+import { learn, suggestion } from "./lib/learnings.mjs";
 import { FINAL_STAGE, Locked, VERSION, done, holderAlive, prState, stateRoot, usageByStage } from "./lib/state.mjs";
 import { remoteRepos } from "./lib/github.mjs";
 import { DEPTHS, setCorePaths } from "./lib/setup.mjs";
@@ -212,6 +213,7 @@ async function respondCmd([action, ...args], v, deps) {
     throw e;
   }
   console.log(JSON.stringify(out, null, 2));
+  if (out.learned?.length) console.error(suggestion(out.learned));
   return 0;
 }
 
@@ -230,8 +232,12 @@ export async function main(argv, deps = {}) {
     if (rest.length > 2 || (id && !option)) throw new Usage(USAGE);
     const rs = stateRoot(repoOf(v.repo));
     if (!id) { console.log(JSON.stringify(listQuestions(rs), null, 2)); return 0; }
-    try { answer(rs, id, option); } catch (e) { throw new Usage(e.message); }
+    let q;
+    try { q = answer(rs, id, option); } catch (e) { throw new Usage(e.message); }
     console.log(`${id}: ${option}`);
+    // a drop of a council finding is learned; a loop question (kind) or a held secret is not about the finding
+    const lines = option === "drop" && !q.finding?.kind && !q.finding?.secret ? learn(rs, [q.fingerprint], `PR #${q.pr}: ${q.finding?.title ?? ""}`) : [];
+    if (lines.length) console.log(suggestion(lines));
     return 0;
   }
   if (cmd === "status") {

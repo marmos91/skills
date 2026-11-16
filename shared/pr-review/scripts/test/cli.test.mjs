@@ -1,7 +1,7 @@
 import "./hermetic.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, chmodSync, existsSync } from "node:fs";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -47,6 +47,16 @@ test("answer: no args lists open questions as JSON; an answer closes the questio
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(JSON.parse(cli(fx, "answer").stdout), []);
   assert.equal(cli(fx, "answer", id, "maybe").status, 1);
+});
+
+test("answer drop: the finding's fingerprint is learned locally and suggested for the base branch", () => {
+  const fx = fixture();
+  process.env.XDG_STATE_HOME = fx.env.XDG_STATE_HOME;
+  const fp = "c".repeat(40), id = queueQuestion(stateRoot("o/r"), { ...QUESTION, fingerprint: fp });
+  const r = cli(fx, "answer", id, "drop");
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, new RegExp(`add to \\.pr-review/learnings\\.md on the base branch.*\\n- ${fp} PR #7: Off by one\\n$`, "s"));
+  assert.equal(readFileSync(join(fx.state, "learnings.md"), "utf8"), `- ${fp} PR #7: Off by one\n`);
 });
 
 test("a command with no --repo and no git remote is a usage error", () => {

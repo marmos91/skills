@@ -13,6 +13,7 @@ import { decide as realDecide } from "../lib/decider.mjs";
 import { answer, openQuestions } from "../lib/questions.mjs";
 import { stateRoot, prState, readSummaryMarker, savePrState } from "../lib/state.mjs";
 import { fingerprint } from "../lib/convergence.mjs";
+import { learn } from "../lib/learnings.mjs";
 import * as github from "../lib/github.mjs";
 import { queueCoreQuestion, saveCorePaths } from "../lib/setup.mjs";
 // The verdict counts of a review body, read the way pr-land reads them.
@@ -33,7 +34,7 @@ const S0 = "claude:opus", S1 = "auto:cubbit/mimir", S2 = "auto:cubbit/mimir-pro"
 
 const git = (cwd, ...args) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 const commit = (dir, files, msg) => {
-  for (const [p, text] of Object.entries(files)) writeFileSync(join(dir, p), text);
+  for (const [p, text] of Object.entries(files)) { mkdirSync(dirname(join(dir, p)), { recursive: true }); writeFileSync(join(dir, p), text); }
   git(dir, "add", "-A"); git(dir, "commit", "-qm", msg);
   return git(dir, "rev-parse", "HEAD");
 };
@@ -144,6 +145,19 @@ test("happy path posts one review with inline comments and the marker", async ()
   assert.equal(st.lastReviewedSha, fx.head);
   assert.ok(st.settled.includes(fingerprint(F())));
   assert.equal(existsSync(join(r.runDir, "post.done")), true);
+});
+
+test("learnings: a fingerprint in .pr-review/learnings.md on the base branch, or in the local file, is not raised", async () => {
+  const line = `- ${fingerprint(F())} PR #3: not a bug\n`;
+  const fx = fixture({ ".pr-review/learnings.md": line }); routes(fx);
+  const a = await go(fx, happy());
+  assert.equal(a.r.exit, 0, a.r.summary);
+  assert.ok(!a.run.calls.some((c) => c.k === "v~2"), "dropped before the vote");
+  assert.equal(posts(fx)[0]?.threads?.length ?? 0, 0);
+  const fx2 = fixture(); routes(fx2);
+  learn(fx2.state, [fingerprint(F())], "PR #3: not a bug");
+  const b = await go(fx2, happy());
+  assert.ok(!b.run.calls.some((c) => c.k === "v~2"), "local file");
 });
 
 test("rerun after a crash before markDone(post) does not post again", async () => {

@@ -8,6 +8,7 @@ import { prData } from "./prompts.mjs";
 import { linkFix } from "./reply.mjs";
 import { canDrive } from "./trust.mjs";
 import { stateRoot, writeAtomic } from "./state.mjs";
+import { learn, markerFps } from "./learnings.mjs";
 
 export const Q = {
   correct: "This review finding is correct about the code at the PR head.",
@@ -165,7 +166,10 @@ export async function decide({ repo, n, threadId, gh, jev, show, fileDiff }) {
   return { decision: "fix", reason: "jev: correct, and about code this PR changes" };
 }
 
-/** A short reason on the thread; the thread stays open for the reviewer. -> { action: "replied"|"skipped" } */
+/**
+ * A short reason on the thread; the thread stays open for the reviewer. A council finding (fp= in its marker) is
+ * learned with the reason. -> { action: "replied"|"skipped", learned: [lines] }
+ */
 export async function decline({ repo, n, threadId, reason, gh }) {
   const [me, t] = [await gh.viewer(), await thread(gh, repo, n, threadId)];
   if (handledNow(t, me, load(repo, n).handled)) return { action: "skipped" };
@@ -176,7 +180,7 @@ export async function decline({ repo, n, threadId, reason, gh }) {
   const key = sha1(`respond-decline\0${threadId}\0${lastOther(t, me)}`);
   if (!(await gh.findMarker(repo, n, key))) await gh.reply(repo, n, t.comments[0].id, `${body}\n\n<!-- pr-review key=${key} -->`);
   markHandled(repo, n, t, me);
-  return { action: "replied" };
+  return { action: "replied", learned: learn(stateRoot(repo), markerFps(t.comments[0].body), `PR #${n}: ${body}`) };
 }
 
 /**

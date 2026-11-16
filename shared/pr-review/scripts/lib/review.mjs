@@ -11,6 +11,7 @@ import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.
 import { tally } from "./tally.mjs";
 import { validate } from "./schema.mjs";
 import { allowedSeverities, filterNew, fingerprint } from "./convergence.mjs";
+import { learnedFps } from "./learnings.mjs";
 import { codeLink, diffLine, linkRefs, parseHunks, place } from "./hunks.mjs";
 import { verdict } from "./verdict.mjs";
 import { redact, scanOutbound } from "./secrets.mjs";
@@ -379,6 +380,7 @@ async function once(o, restart) {
 
   // Merge (spec 6.4, 7.5 rule 4): a cluster that reverses an earlier agreed finding is dropped and recorded.
   const pst = pst0;
+  const learned = learnedFps(repoState, f.learnings);
   const raw = Object.values(bySeat).some((x) => x.length)
     ? await child(ctx, "merge", "merge", { seat: config.judge, schema: "merge", prompt: (s) => mergePrompt(f, bySeat, pst.agreed ?? [], s.max_turns) })
     : [];
@@ -400,7 +402,7 @@ async function once(o, restart) {
   });
   const reversed = all.filter((c) => c.reverses), linked = all.filter((c) => !c.reverses && resolvedThread(c));
   const { keep: clusters, dropped } = filterNew(all.filter((c) => !c.reverses && !resolvedThread(c)), {
-    reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: changedLines(f),
+    reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: changedLines(f), learned,
   });
   save(join(runDir, "clusters.json"), { clusters, reversed, linked, dropped });
   markDone(runDir, "merge");
@@ -496,7 +498,7 @@ async function once(o, restart) {
   // same delta and severity filters as a council finding.
   if (depth === "full") {
     applyProof(agreed, tallied, fids);
-    const mf = filterNew(mutantFindings(mutants), { reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: changedLines(f) }).keep;
+    const mf = filterNew(mutantFindings(mutants), { reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: changedLines(f), learned }).keep;
     agreed.push(...mf.map((m, i) => ({ ...m, id: `m${i + 1}`, found: [], seats: [], fp: fingerprint(m) })));
   }
 
@@ -513,7 +515,7 @@ async function once(o, restart) {
   const belowFloor = agreed.filter((c) => !c.answered && !floor.has(c.severity)).length;
   const leftOut = agreed.length - posted.length - belowFloor;
   // Hygiene obeys the same severity floor and settled list as council findings (spec 7.5).
-  const hygNew = filterNew(hyg.findings.map((h) => ({ ...h, file: "", line: null })), { reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: new Map() }).keep;
+  const hygNew = filterNew(hyg.findings.map((h) => ({ ...h, file: "", line: null })), { reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: new Map(), learned }).keep;
   const hygItems = hygNew.filter((h) => allowed.has(h.severity)).map((h, i) => ({ ...h, id: `h${i + 1}`, fp: fingerprint(h) }));
   if (!restart && (pst.summaryBlocked?.[f.headSha] ?? 0) >= 2) {
     return { exit: 4, runDir, planned, summary: `the review summary was blocked by the secret scan twice at ${f.headSha}; see the question, or use --restart` };

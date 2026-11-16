@@ -1,7 +1,7 @@
 import "./hermetic.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GitError, NotOnHead, Q, RoundCap, approve, gitReaders, decide, decline, findings, fixed, summary, summaryText } from "../lib/respond.mjs";
@@ -149,6 +149,16 @@ test("decline: a short reason on the first comment, the thread stays open; no se
   const again = fakeGh([th("T1", [bot(1, "x"), c(2, ME, "Out of scope; see #40.")])]);
   assert.equal((await decline({ repo: REPO, n: N, threadId: "T1", reason: "Out of scope.", gh: again })).action, "skipped");
   assert.equal(again.calls.reply.length, 0);
+});
+
+test("decline: a council finding is learned in the local learnings file with the reason; other threads are not", async () => {
+  freshState();
+  const fp = "a".repeat(40), council = c(1, ME, `**must:** x\n\n<!-- pr-review run=r1 sha=${SHA} key=${"b".repeat(40)} fp=${fp} -->`);
+  const r = await decline({ repo: REPO, n: N, threadId: "T1", reason: "Not a bug:\nthe guard covers it.", gh: fakeGh([th("T1", [council])]) });
+  assert.deepEqual(r.learned, [`- ${fp} PR #7: Not a bug: the guard covers it.`]);
+  assert.equal(readFileSync(join(stateRoot(REPO), "learnings.md"), "utf8"), `${r.learned[0]}\n`);
+  freshState();
+  assert.deepEqual((await decline({ repo: REPO, n: N, threadId: "T1", reason: "No.", gh: fakeGh([th("T1", [bot(1, "x")])]) })).learned, []);
 });
 
 test("fixed: posts and resolves only on a jev yes; no or unsure posts nothing", async () => {

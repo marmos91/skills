@@ -25,6 +25,12 @@ test("settled fingerprint is dropped unless its lines changed", () => {
   r = filterNew([x], { reviewNumber: 1, settled, changedLines: new Map([["a.js", new Set([7])]]) });
   assert.equal(r.keep.length, 0);
 });
+test("a learned fingerprint is dropped, also on a changed line", () => {
+  const x = f();
+  const r = filterNew([x], { reviewNumber: 1, settled: new Set(), changedLines: new Map([["a.js", new Set([42])]]), learned: new Set([fingerprint(x)]) });
+  assert.equal(r.keep.length, 0);
+  assert.equal(r.dropped[0].reason, "learned");
+});
 test("titles that normalize to empty fall back to the case", () => {
   assert.notEqual(fingerprint(f({ title: "1.", case: "a -> b" })), fingerprint(f({ title: "2!", case: "c -> d" })));
   assert.equal(fingerprint(f({ title: "1.", case: "a -> b" })), fingerprint(f({ title: "2!", case: "A -> b" })));
