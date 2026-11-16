@@ -4,21 +4,22 @@ import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { rangeText, scanOutbound } from "../../pr-review/scripts/lib/secrets.mjs";
 
-const USAGE = "usage: secret-scan [--repo owner/repo] [--range <a..b>] [file...]   (no file or range: reads stdin)";
+const USAGE = "usage: secret-scan [--repo owner/repo]... [--range <a..b>] [file...]   (no file or range: reads stdin)";
 
 let args;
-try { args = parseArgs({ options: { repo: { type: "string" }, range: { type: "string" }, help: { type: "boolean", short: "h" } }, allowPositionals: true }); }
+try { args = parseArgs({ options: { repo: { type: "string", multiple: true }, range: { type: "string" }, help: { type: "boolean", short: "h" } }, allowPositionals: true }); }
 catch (e) { console.error(`${e.message}\n${USAGE}`); process.exit(2); }
 if (args.values.help) { console.log(USAGE); process.exit(0); }
 
 // exitCode, not exit(): exit() drops stderr writes still pending on a pipe
 process.exitCode = (() => {
   // No --repo: strict. The cwd's origin can be a private fork of a public target.
-  const repo = args.values.repo ?? null;
+  const repo = args.values.repo ?? null; // several: opt out only when every one is listed
   const { range } = args.values;
+  if (range !== undefined && !range.trim()) { console.error(`secret-scan: --range needs a range (a..b)\n${USAGE}`); return 2; }
   // [name, label for hit lines, read]; a range is a diff, so its hits carry file:line
   const inputs = [
-    ...(range ? [[`range ${range}`, null, () => rangeText(process.cwd(), range)]] : []),
+    ...(range !== undefined ? [[`range ${range}`, null, () => rangeText(process.cwd(), range)]] : []),
     ...args.positionals.map((f) => [f, f, () => readFileSync(f, "utf8")]),
   ];
   if (!inputs.length) inputs.push(["stdin", null, () => readFileSync(0, "utf8")]);

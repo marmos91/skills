@@ -96,13 +96,16 @@ const leaves = (v) => (v && typeof v === "object" ? Object.values(v).flatMap(lea
  * shortcut: values under 12 chars or with spaces are skipped as noise; add them to private.txt when they matter.
  */
 export function fileValues(text) {
-  let raw;
-  try { raw = leaves(JSON.parse(text)); } catch {
+  let raw = [];
+  // JSON only for an object or array; a number keeps its source text (a 16+ digit value or `1e400` would change)
+  try { const j = JSON.parse(text, (k, v, ctx) => (typeof v === "number" ? ctx.source : v)); if (j && typeof j === "object") raw = leaves(j); } catch { /* not JSON */ }
+  if (!raw.length) {
     raw = text.split(/\r?\n/).flatMap((l) => {
-      const line = l.trim().replace(/\s+[#;].*$/, "").replace(/^(?:export\s+|-\s+)/, "");
-      if (!line || /^[#;[]|^---$/.test(line)) return [];
-      const v = line.replace(/^[\w.-]+\s*[=:]\s*/, "");
-      return v === line ? [line] : [line, v]; // the whole line too: a bare base64 value ends in `=`
+      const t = l.trim();
+      if (!t || t === "---") return [];
+      const line = t.replace(/\s+[#;].*$/, "").replace(/^(?:export\s+|-\s+)/, "");
+      // the raw line too: a bare value may start with `#`, `;` or `[`, or end in `=` (base64)
+      return [t, line, line.replace(/^[\w.-]+\s*[=:]\s*/, "")];
     });
   }
   const unq = raw.map((v) => v.trim().replace(/^(["'])(.*)\1$/, "$2"));
@@ -111,7 +114,8 @@ export function fileValues(text) {
 
 /** Every commit of a range as one text to scan: patches of merges and binary-marked files too, no textconv. */
 export function rangeText(dir, range) {
-  return execFileSync("git", ["log", "-p", "--cc", "--text", "--no-ext-diff", "--no-textconv", "--format=%B", range],
+  // --no-relative: diff.relative would limit the patch to the cwd's subfolder
+  return execFileSync("git", ["log", "-p", "--cc", "--text", "--no-ext-diff", "--no-textconv", "--no-relative", "--format=%B", range],
     { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 256 * 1024 * 1024 });
 }
 
@@ -132,7 +136,8 @@ function locator(text, label) {
 
 /**
  * Every hit in text: { rule, masked, where, fp, allowed }. Never holds the full value.
- * A repo (owner/repo) listed in private-repos.txt skips the private-infrastructure patterns; no repo is strict.
+ * repo: one owner/repo, or several (the PR target and the push remote). The private-infrastructure patterns are
+ * skipped only when every one is listed in private-repos.txt; no repo, or an empty one, is strict.
  */
 export function findings(text, { timeoutMs = 30000, repo = null, label = null } = {}) {
   const where = locator(text, label);
@@ -148,7 +153,8 @@ export function findings(text, { timeoutMs = 30000, repo = null, label = null } 
   for (const [kind, re] of PATTERNS) for (const m of text.matchAll(re)) add(kind, m[0], m.index);
   let allowed = new Set();
   try {
-    if (!(repo && lines("private-repos.txt").includes(repo))) {
+    const repos = [repo].flat();
+  if (!(repos.length && repos.every((r) => r && lines("private-repos.txt").includes(r)))) {
       for (const re of privatePatterns()) for (const m of text.matchAll(re)) if (m[0]) add("private-infra", m[0], m.index);
     }
     for (const v of new Set(sopsValues())) for (let i = text.indexOf(v); i >= 0; i = text.indexOf(v, i + 1)) add("sops-value", v, i);

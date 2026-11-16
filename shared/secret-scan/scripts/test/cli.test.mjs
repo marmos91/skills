@@ -2,7 +2,7 @@ import "../../../pr-review/scripts/test/hermetic.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -135,4 +135,30 @@ test("--range scans each commit's patch, binary-marked files included, and a bad
   const bad = scan("", "--range", "nope..HEAD");
   assert.equal(bad.status, 2);
   assert.match(bad.stderr, /cannot read range nope\.\.HEAD/);
+});
+
+test("--range \"\" is a usage error, not a scan of stdin", () => {
+  const { scan } = setup();
+  const r = scan("clean", "--range", "");
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /--range needs a range/);
+});
+
+test("--range scans the whole repo even with diff.relative set in a subfolder", () => {
+  const { dir, scan } = setup();
+  const g = (...a) => git(dir, ...a);
+  g("init", "-q", "-b", "main"); g("config", "user.name", "T"); g("config", "user.email", "t@example.com"); g("config", "diff.relative", "true");
+  mkdirSync(join(dir, "sub"));
+  writeFileSync(join(dir, "sub", "a.txt"), "x\n"); g("add", "."); g("commit", "-q", "--no-gpg-sign", "-m", "init");
+  writeFileSync(join(dir, "prod.yaml"), `token: ${TOKEN}\n`); g("add", "."); g("commit", "-q", "--no-gpg-sign", "-m", "config");
+  const r = spawnSync(CLI, ["--range", "HEAD~1..HEAD"], { cwd: join(dir, "sub"), encoding: "utf8", env: { ...process.env, SECRET_SCAN_CONFIG: dir, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /^github-token: ghp_… \(prod\.yaml:1, /m);
+});
+
+test("--repo twice: the opt-out needs both listed", () => {
+  const { scan } = setup({ "private.txt": "example\\.internal\n", "private-repos.txt": "me/infra\n" });
+  assert.equal(scan(`host ${HOST}`, "--repo", "me/infra", "--repo", "me/infra").status, 0);
+  assert.equal(scan(`host ${HOST}`, "--repo", "me/infra", "--repo", "me/public").status, 1);
+  assert.equal(scan(`host ${HOST}`, "--repo", "me/infra", "--repo", "").status, 1);
 });

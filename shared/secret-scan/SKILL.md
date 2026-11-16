@@ -29,7 +29,7 @@ secret-scan --repo owner/repo < body.md           # name the repo the text goes 
 ```
 
 Scan the diff or the text, not the whole history, unless the user asks.
-`--range` runs `git log -p --cc --text --no-ext-diff --no-textconv`: merge
+`--range` (never empty) runs `git log -p --cc --text --no-ext-diff --no-textconv --no-relative`: merge
 commits and files marked `-diff` show their patch, and no textconv (which
 could decrypt sops files) runs. pr-open uses the same command. Do not pipe
 `git` into the scan: a git error gives empty input, and the scan passes;
@@ -59,7 +59,7 @@ never passes without its lists. Keep the folder out of every repo.
 | `private.txt` | a regex, case-insensitive (a line that is not a valid regex is a literal). It can be rendered there by sops-nix, so the list lives encrypted in your dotfiles. |
 | `sops-files.txt` | the path of a file sops-nix renders (for example a kubeconfig or `~/.aws/credentials`). A relative path is in the config folder. JSON leaves, and per line the whole line and the value of `key = value`, `key: value`, `export KEY=value` or `- item` (an inline ` #` or ` ;` comment and quotes removed) count; keys, values under 12 characters and values with spaces do not. A missing file is skipped. |
 | `allow.txt` | `<fp> <reason>`: the hit with that fingerprint does not block. A line without a reason allows nothing. gitleaks hits have no fingerprint (its report is redacted, so the value never touches the disk): allow one with a `gitleaks:allow` comment on the line, or an allowlist in the gitleaks config (`GITLEAKS_CONFIG`). |
-| `private-repos.txt` | `owner/repo`: a private repo where the `private.txt` set is skipped. Secrets and sops values are still checked. Remove the line if the repo goes public. The CLI opts out only with `--repo`; without it the scan is strict (the folder's origin can be a private fork of a public repo). pr-review and pr-respond pass the PR's repo; pr-open passes the repo `gh` opens the PR in (`--repo` to the CLI). Text sent to jev has no repo and gets the strict set. |
+| `private-repos.txt` | `owner/repo`: a private repo where the `private.txt` set is skipped. Secrets and sops values are still checked. Remove the line if the repo goes public. The CLI opts out only with `--repo`; without it the scan is strict (the folder's origin can be a private fork of a public repo). `--repo` can be given more than once (the PR target and the push remote): the opt-out needs every one listed. pr-review and pr-respond pass the PR's repo; pr-open passes the repo `gh` opens the PR in and the origin it pushes to (`--repo` twice). Text sent to jev has no repo and gets the strict set. |
 
 ## Steps
 

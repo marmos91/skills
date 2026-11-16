@@ -44,10 +44,18 @@ function gh(dir, args) {
 const openPrOf = (dir, branch) => JSON.parse(gh(dir, ["pr", "list", "--head", branch, "--state", "open", "--json", "number,url"]))[0] ?? null;
 
 // secret-scan (#39) when installed, else the pr-review scan. Hits are masked by both.
-// repo: the repo the PR opens in, for the private-repos.txt opt-out; null scans strict.
-function secretHits(dir, text, repo) {
-  const r = spawnSync(process.env.PR_OPEN_SECRET_SCAN || "secret-scan", repo ? ["--repo", repo] : [], { cwd: dir, input: text, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
-  if (r.error?.code === "ENOENT") return scanOutbound(text, { repo }).hits;
+// The pushed origin's owner/repo from its configured URL; null when it is not on GitHub.
+function originRepo(dir) {
+  let url = "";
+  try { url = git(dir, "config", "--get", "remote.origin.url"); } catch { return null; }
+  return /github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?\/?$/.exec(url)?.[1] ?? null;
+}
+
+// repos: the PR target and the pushed origin; the private-repos.txt opt-out needs both listed, so text pushed to a
+// public origin is scanned strict even when the gh target is private.
+function secretHits(dir, text, repos) {
+  const r = spawnSync(process.env.PR_OPEN_SECRET_SCAN || "secret-scan", repos.flatMap((x) => ["--repo", x ?? ""]), { cwd: dir, input: text, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+  if (r.error?.code === "ENOENT") return scanOutbound(text, { repo: repos }).hits;
   if (r.error) return [`secret-scan: ${r.error.message}`];
   return r.status === 0 ? [] : [String(r.stderr || "secret-scan: hit").trim()];
 }
@@ -99,7 +107,7 @@ export async function openPr(dir, { title, bodyFile, base: wanted, draft = false
 
   // The secret scan sees everything that is posted: every commit's patch and message, the title, the final body.
   const final = buildBody({ body, record, parent, parentPr: parentPr?.number });
-  const hits = secretHits(dir, `${rangeText(dir, `${ref}..${sha}`)}\n${title}\n${final}`, repo);
+  const hits = secretHits(dir, `${rangeText(dir, `${ref}..${sha}`)}\n${title}\n${final}`, [repo, originRepo(dir)]);
   if (hits.length) throw new Blocked("the secret scan found a hit", { hits });
 
   if (!/#\d+/.test(body)) warnings.push("no linked issue");

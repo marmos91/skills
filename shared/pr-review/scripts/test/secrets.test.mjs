@@ -244,10 +244,19 @@ test("fileValues: the values of each supported format", () => {
     ["inline ; comment", `token = ${v} ; rotated\n`, [v]],
     ["# inside a value stays", `token: ab#cd${v}\n`, [`ab#cd${v}`]],
     ["CRLF", `token: ${v}\r\n`, [v]],
+    ["bare value starting with #", "#Zp9vL2qRt8wX4kQ7\n", ["#Zp9vL2qRt8wX4kQ7"]],
+    ["bare value starting with ; or [", ";Zp9vL2qRt8wX4\n[Zp9vL2qRt8wX4\n", [";Zp9vL2qRt8wX4", "[Zp9vL2qRt8wX4"]],
+    ["big number, bare", "12345678901234567890\n", ["12345678901234567890"]],
+    ["number that JSON reads as Infinity", "93847e102938\n", ["93847e102938"]],
+    ["big number in JSON", '{"pin": 98765432109876543210}', ["98765432109876543210"]],
     ["JSON leaves", JSON.stringify({ a: { b: v }, n: [pad] }), [v, pad]],
     ["comments, sections, short values and spaces are not values", `# ${v}\n; ${v}\n[section]\n---\nregion: eu-west-1\nname: two words here ok\n`, []],
   ];
-  for (const [name, text, want] of table) assert.deepEqual(fileValues(text), want, name);
+  for (const [name, text, want] of table) {
+    const got = fileValues(text);
+    if (name.startsWith("comments,")) assert.deepEqual(got, want, name);
+    else for (const w of want) assert.ok(got.includes(w), `${name}: ${JSON.stringify(got)}`);
+  }
 });
 
 test("a relative sops-files.txt entry is in the config folder, wherever the scan runs", (t) => {
@@ -276,4 +285,11 @@ test("gitleaks runs outside the scanned repo: a .gitleaks.toml in the cwd does n
   withStub(`cat >/dev/null; [ -e .gitleaks.toml ] && exit 2; ${getReport}; echo '[]' > "$p"`, () => {
     assert.deepEqual(scanOutbound("clean text"), { ok: true, hits: [] });
   });
+});
+
+test("the opt-out with several repos needs every one listed", (t) => {
+  withConfig(t, { "private.txt": "example\\.internal\n", "private-repos.txt": "acme/private\n" });
+  assert.equal(scanOutbound("db01.example.internal", { repo: ["acme/private", "acme/private"] }).ok, true);
+  assert.equal(scanOutbound("db01.example.internal", { repo: ["acme/private", "acme/sdk"] }).ok, false);
+  assert.equal(scanOutbound("db01.example.internal", { repo: ["acme/private", null] }).ok, false);
 });

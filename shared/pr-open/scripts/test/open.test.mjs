@@ -216,7 +216,15 @@ test("secret-scan on PATH is used, and its hit blocks", async (t) => {
   assert.equal(created(gh), undefined);
 });
 
-test("the scan gets the repo the PR opens in: --repo for secret-scan, the opt-out in the fallback", async (t) => {
+// origin's configured URL names a GitHub repo; pushes still go to the local bare repo
+function originAs(dir, slug) {
+  const bare = git(dir, "remote", "get-url", "origin");
+  const url = `https://github.com/${slug}.git`;
+  git(dir, "config", `url.${bare}.insteadOf`, url);
+  git(dir, "config", "remote.origin.url", url);
+}
+
+test("the scan gets the PR target and the pushed origin: the opt-out needs both listed", async (t) => {
   const { dir, bodyFile } = await stack();
   writeFileSync(bodyFile, "Adds b on db01.example.internal.\n\nCloses #3\n");
   const cfg = mkdtempSync(join(tmpdir(), "ss-"));
@@ -226,22 +234,30 @@ test("the scan gets the repo the PR opens in: --repo for secret-scan, the opt-ou
   process.env.SECRET_SCAN_CONFIG = cfg;
   t.after(() => { process.env.PR_OPEN_SECRET_SCAN = "pr-open-no-such-scanner"; process.env.SECRET_SCAN_CONFIG = oldCfg; });
   const view = (nameWithOwner) => routes({ "repo view": { stdout: { defaultBranchRef: { name: "main" }, nameWithOwner } } });
-  // fallback: the target repo, not the clone's origin, decides; no repo is strict
+  const open = () => openPr(dir, { title: "feat: b", bodyFile, base: "feat/a" });
+  // no target, a public target, or a private target pushed to a public origin: strict
   ghStub(routes());
-  await assert.rejects(openPr(dir, { title: "feat: b", bodyFile, base: "feat/a" }), (e) => e instanceof Blocked);
+  await assert.rejects(open(), (e) => e instanceof Blocked);
+  originAs(dir, "acme/private");
   ghStub(view("acme/public"));
-  await assert.rejects(openPr(dir, { title: "feat: b", bodyFile, base: "feat/a" }), (e) => e instanceof Blocked);
+  await assert.rejects(open(), (e) => e instanceof Blocked);
+  originAs(dir, "acme/sdk");
+  ghStub(view("acme/private"));
+  await assert.rejects(open(), (e) => e instanceof Blocked);
+  // both private: the opt-out applies
+  originAs(dir, "acme/private");
   const gh = ghStub(view("acme/private"));
-  assert.equal((await openPr(dir, { title: "feat: b", bodyFile, base: "feat/a" })).number, 8);
+  assert.equal((await open()).number, 8);
   assert.ok(created(gh));
-  // the CLI: gets --repo
+  // the CLI gets both as --repo
   const bin = mkdtempSync(join(tmpdir(), "pr-open-scan-"));
   writeFileSync(join(bin, "secret-scan"), "#!/bin/sh\ncat >/dev/null\necho \"args: $*\" >&2\nexit 1\n");
   chmodSync(join(bin, "secret-scan"), 0o755);
   process.env.PR_OPEN_SECRET_SCAN = join(bin, "secret-scan");
   const { dir: d2, bodyFile: b2 } = await stack();
+  originAs(d2, "acme/sdk");
   ghStub(view("acme/public"));
-  await assert.rejects(openPr(d2, { title: "feat: b", bodyFile: b2, base: "feat/a" }), (e) => e.detail?.hits[0] === "args: --repo acme/public");
+  await assert.rejects(openPr(d2, { title: "feat: b", bodyFile: b2, base: "feat/a" }), (e) => e.detail?.hits[0] === "args: --repo acme/public --repo acme/sdk");
 });
 
 test("a base that exists only on origin is fetched", async () => {
