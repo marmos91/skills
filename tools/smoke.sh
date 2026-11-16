@@ -12,6 +12,7 @@ npx --yes --package "$tgz" -- skills install --claude
 "$HOME/.local/bin/pr-review-loop" --help
 "$HOME/.local/bin/pr-respond" --help
 "$HOME/.local/bin/pr-land" --help
+echo clean | "$HOME/.local/bin/secret-scan"
 "$HOME/.local/bin/jev" --help
 "$HOME/.local/bin/repo-audit" status
 npx --yes --package "$tgz" -- skills list
@@ -20,7 +21,7 @@ npx --yes --package "$tgz" -- skills list
 if [ -d .git ] || [ -f .git ]; then
   rm -rf "$home" && mkdir -p "$home"
   ./install.sh
-  for cli in pr-review pr-review-loop pr-respond pr-land jev; do "$HOME/.local/bin/$cli" --help >/dev/null; done
+  for cli in pr-review pr-review-loop pr-respond pr-land secret-scan jev; do "$HOME/.local/bin/$cli" --help >/dev/null; done
   "$HOME/.local/bin/repo-audit" status >/dev/null
   ./install.sh --rm
 fi

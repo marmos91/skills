@@ -51,7 +51,16 @@ the full command each time: zsh does not split a variable into words.
 3. Fix the finding. Add a test. Prove that the test guards the fix: revert
    the fix, see the test fail, put the fix back.
 4. Run the full test suite. Commit signed (`git commit -S`) with a concise
-   message, in the repo's commit style. Do not name an AI or a tool. Push.
+   message, in the repo's commit style. Do not name an AI or a tool. Before
+   the push, scan every commit since the PR base (this works on a branch
+   with no upstream too):
+   `b=$(gh pr view --json baseRefName --jq .baseRefName) && t=$(gh repo view --json nameWithOwner --jq .nameWithOwner) && o=$(gh repo view "$(git remote get-url origin)" --json nameWithOwner --jq .nameWithOwner) && git fetch -q origin "+refs/heads/${b}:refs/remotes/origin/${b}" && secret-scan --repo "$t" --repo "$o" --range "origin/${b}..HEAD"`.
+   Both repos: the private-repos opt-out applies only when the PR target and
+   the origin you push to are both listed.
+   `--range` builds the same input as pr-open (the `secret-scan` skill
+   says how); the explicit refspec works in a single-branch clone.
+   Any non-zero exit blocks the push (a git error too). Remove the hit, or
+   allow a false one as the `secret-scan` skill says. Push.
 5. For each fixed thread, run `$P fixed <id> <sha>` with the sha of the
    pushed fixing commit (a sha that is not in the PR head is refused). jev
    checks that the commit fixes the case first. Only on a yes it replies

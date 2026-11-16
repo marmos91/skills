@@ -34,6 +34,8 @@ const marker = (runId, sha, key, fp) => `<!-- pr-review run=${runId} sha=${sha} 
 const view = ({ seats, fp, answered, ...c }) => c;
 // GitHub text that the engine puts into a posted body: no markup, no mentions, no marker look-alikes.
 export const safeText = (s) => String(s ?? "").replace(/[<>@`]/g, "").replace(/\s+/g, " ").trim().slice(0, 80);
+// The masked hits (fp included, never the value) of an answered "post" that still hits after redaction.
+const stillHeld = (where, hits) => `${where}: answered "post", but the comment still hits after redaction: ${hits.join("; ")}. Not posted; asked again. Remove the value, or allow a hit by its fp in secret-scan's allow.txt${hits.some((h) => !/fp [0-9a-f]{12}/.test(h)) ? " (a hit with no fp is from gitleaks: use a gitleaks:allow comment or a GITLEAKS_CONFIG allowlist)" : ""}`;
 const ruleIds = (hits) => [...new Set(hits.map((h) => h.split(":")[0]))].join(", ");
 const MARKER_FP = /<!-- pr-review run=\S+ sha=\S+ key=[0-9a-f]{40} fp=([0-9a-f]{40}(?:,[0-9a-f]{40})*) -->/;
 
@@ -644,7 +646,7 @@ async function once(o, restart) {
   const own = (c) => ({ ...c, fps: [c.fp], body: mark(c, `**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}`) });
   // One scan per item: each scan spawns gitleaks.
   const scans = new Map();
-  const scan1 = (x) => { if (!scans.has(x)) scans.set(x, scanOutbound(x.answered ? redact(x.body) : x.body)); return scans.get(x); };
+  const scan1 = (x) => { if (!scans.has(x)) scans.set(x, scanOutbound(x.answered ? redact(x.body) : x.body, { repo })); return scans.get(x); };
   const passes = (x) => scan1(x).ok;
   const heldHosts = new Set(items.filter((x) => !passes(x)).map((x) => x.id));
   for (const c of folded.filter((c) => heldHosts.has(hostOf.get(c.id)))) { hostOf.delete(c.id); items.push(await checked(own(c))); }
@@ -653,7 +655,13 @@ async function once(o, restart) {
     const text = x.answered ? redact(x.body) : x.body;
     const s = scan1(x);
     if (s.ok) { clean.push({ ...x, body: text }); continue; }
-    if (x.answered) continue;
+    // redact() knows only the built-in patterns: a private name or a sops value still hits. Say so; never the value.
+    // The answer is closed now and the question below is asked again, so it stays open until the hit is gone or allowed.
+    if (x.answered) {
+      log(stillHeld(`${x.file}:${x.line}`, s.hits));
+      const id = pendingAnswers(repoState).find((q) => q.pr === n && q.fingerprint === x.fp)?.id;
+      if (id) { appliedAnswer(repoState, id); if (applied.includes(id)) applied.splice(applied.indexOf(id), 1); }
+    }
     // A later "post" answer posts this engine-final body (checked, marked). A held host keeps its own finding
     // only: its folded findings went out on their own.
     save(join(runDir, "held", `${x.fp}.json`), { body: redact(x.fps.length > 1 ? (await checked(own(x))).body : x.body) });
@@ -672,7 +680,7 @@ async function once(o, restart) {
   const p = place(fresh.map((x) => ({ file: x.file, line: x.line, body: `${x.body}\n\n${marker(runId, f.headSha, inlineKey(x), x.fps.join(","))}` })), hunks, permalink);
   const key = sha1(`review\0${runId}`);
   const body = bodyOf(p.body, key, clean.filter((x) => !offDiff(x)));
-  const scan = scanOutbound(body);
+  const scan = scanOutbound(body, { repo });
   if (!scan.ok) {
     const st = prState(repoState, n);
     const tries = (st.summaryBlocked?.[f.headSha] ?? 0) + 1;
@@ -769,7 +777,7 @@ function heldText(repoState, n, runId, fp) {
  */
 async function followUp(o, head, pst, answered) {
   const { repo, n, gh, repoState } = o;
-  const items = [], already = [];
+  const items = [], already = [], held = [];
   // one fetch: an answered finding already posted inline at this head (an earlier follow-up that crashed
   // before appliedAnswer, or a later full run) is not posted again
   const seen = await gh.markerKeys(repo, n);
@@ -784,7 +792,10 @@ async function followUp(o, head, pst, answered) {
     const fix = f.fix && f.proven !== undefined && suggestionOf(f.fix) ? uncheckedNote(f.fix, "a follow-up runs no test") : f.fix;
     const base = `**${f.severity}:** ${f.title}\n\n${f.case}${fix ? `\n\n${fix}` : ""}${q.answer === "ask-author" ? "\n\nCan you confirm this case?" : ""}`;
     const text = f.secret ? heldText(repoState, n, pst.lastRunId, q.fingerprint) : f.proven === false ? markUnproven(base, !diffLine(hunks, f.file, f.line)) : base;
-    if (text && scanOutbound(text).ok) items.push({ q, text });
+    if (!text) continue;
+    const s = scanOutbound(text, { repo });
+    if (s.ok) items.push({ q, text });
+    else { o.log(stillHeld(`question ${q.id}`, s.hits)); held.push(q); }
   }
   let url = null;
   if (items.length) {
@@ -800,7 +811,7 @@ async function followUp(o, head, pst, answered) {
       gaps: was ? was.gaps : 1,
     };
     const body = [`Follow-up on the review of ${head}: points settled by the maintainer.`, p.body.length ? p.body.map((l) => `- ${l}`).join("\n") : "", summaryMarker(runId, head, key, counts)].filter(Boolean).join("\n\n");
-    if (!scanOutbound(body).ok) return { exit: 4, skipped: true, summary: "follow-up blocked by the secret scan" };
+    if (!scanOutbound(body, { repo }).ok) return { exit: 4, skipped: true, summary: "follow-up blocked by the secret scan" };
     if (!seen.has(key)) {
       if (await gh.pendingReview(repo, n)) return { exit: 0, skipped: true, summary: "skipped: you have a pending review on this PR; submit or delete it, then run again" };
       url = (await gh.postReview(repo, n, { commitOID: head, event: "COMMENT", body, threads: p.inline })).url;
@@ -818,8 +829,10 @@ async function followUp(o, head, pst, answered) {
     savePrState(repoState, n, st);
   }
   for (const q of answered) appliedAnswer(repoState, q.id);
+  // still held: ask again (an applied question comes back fresh)
+  for (const q of held) queueQuestion(repoState, { pr: n, sha: head, fingerprint: q.fingerprint, file: q.finding.file, line: q.finding.line, snippet: "", finding: q.finding, sides: q.sides, failure: q.finding.case });
   return {
-    exit: 0, skipped: !items.length, url, event: items.length ? "COMMENT" : undefined, queueApprove: false, reasons: [],
+    exit: held.length && o.mode === "interactive" ? 3 : 0, skipped: !items.length, url, event: items.length ? "COMMENT" : undefined, queueApprove: false, reasons: [],
     summary: items.length ? `follow-up posted with ${items.length} answered finding(s)${url ? `: ${url}` : " (marker found on GitHub)"}` : `answers applied at ${head}; nothing to post`,
   };
 }

@@ -1,3 +1,4 @@
+import "./hermetic.mjs";
 import test from "node:test";
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
@@ -268,6 +269,56 @@ test("secret in a finding -> that post blocked, question queued", async () => {
   assert.equal(t.length, 1);
   assert.match(t[0].body, /\[REDACTED:github-token\] leaks/);
   assert.ok(!JSON.stringify(mutations(fx)).includes(token));
+});
+
+test("a comment held by a private name: answer post cannot redact it, so it stays out, the log gives the fp and the question is asked again", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "ss-"));
+  writeFileSync(join(dir, "private.txt"), "example\\.internal\n");
+  const old = process.env.SECRET_SCAN_CONFIG;
+  process.env.SECRET_SCAN_CONFIG = dir;
+  t.after(() => { process.env.SECRET_SCAN_CONFIG = old; });
+  const fx = fixture(); routes(fx);
+  const answers = happy({ compose: { body: "Summary.", comments: [{ id: "c1", body: "**must:** calls db01.example.internal" }] } });
+  await go(fx, answers);
+  const q = openQuestions(fx.state);
+  assert.match(q[0].finding.case, /^Secret rules: private-infra/);
+  answer(fx.state, q[0].id, "post");
+  const lines = [];
+  const again = await go(fx, answers, { log: (l) => lines.push(l) });
+  assert.equal(again.r.exit, 3, again.r.summary);
+  assert.equal(posts(fx).at(-1).threads.length, 0);
+  const why = lines.find((l) => /still hits after redaction: private-infra: exam… \(line \d+, fp [0-9a-f]{12}\)/.test(l));
+  assert.ok(why, lines.join("\n"));
+  assert.ok(!why.includes("example.internal") && !why.includes("gitleaks"));
+  assert.ok(!JSON.stringify(mutations(fx)).includes("example.internal"));
+  const reopened = openQuestions(fx.state);
+  assert.equal(reopened.length, 1, "asked again");
+  assert.equal(reopened[0].fingerprint, q[0].fingerprint);
+  // the hit allowed by its fp: the next answer posts it
+  writeFileSync(join(dir, "allow.txt"), `${/fp ([0-9a-f]{12})/.exec(why)[1]} the example host is public\n`);
+  answer(fx.state, reopened[0].id, "post");
+  const third = await go(fx, answers);
+  assert.equal(third.r.exit, 0, third.r.summary);
+  assert.match(JSON.stringify(posts(fx).at(-1).threads), /db01\.example\.internal/);
+});
+
+test("a full run (--restart) on an answered post that still hits: not posted, the fp is logged, asked again", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "ss-"));
+  writeFileSync(join(dir, "private.txt"), "example\\.internal\n");
+  const old = process.env.SECRET_SCAN_CONFIG;
+  process.env.SECRET_SCAN_CONFIG = dir;
+  t.after(() => { process.env.SECRET_SCAN_CONFIG = old; });
+  const fx = fixture(); routes(fx);
+  const answers = happy({ compose: { body: "Summary.", comments: [{ id: "c1", body: "**must:** calls db01.example.internal" }] } });
+  await go(fx, answers);
+  const q = openQuestions(fx.state);
+  answer(fx.state, q[0].id, "post");
+  const lines = [];
+  const again = await go(fx, answers, { restart: true, log: (l) => lines.push(l) });
+  assert.equal(again.r.exit, 3, again.r.summary);
+  assert.ok(lines.some((l) => /a\.js:\d+: answered "post", but the comment still hits after redaction: private-infra: exam… \(line \d+, fp [0-9a-f]{12}\)/.test(l)), lines.join("\n"));
+  assert.ok(!JSON.stringify(mutations(fx)).includes("example.internal"));
+  assert.equal(openQuestions(fx.state).length, 1, "asked again");
 });
 
 test("own pending review not owned by the run -> skip", async () => {

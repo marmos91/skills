@@ -109,7 +109,7 @@ export async function reply({ repo, n, threadId, mode, frame, config, runDir, gh
 
   const key = `key=${createHash("sha1").update(`reply\0${threadId}\0${last.id}`).digest("hex")}`;
   const full = `${body}\n\n<!-- pr-review run=${basename(runDir)} sha=${frame.headSha} ${key} -->`;
-  const scan = scanOutbound(full);
+  const scan = scanOutbound(full, { repo });
   if (!scan.ok) return enqueue("secret", { hits: scan.hits });
 
   const rec = {
@@ -156,7 +156,7 @@ export async function reply({ repo, n, threadId, mode, frame, config, runDir, gh
 export async function linkFix(gh, repo, n, { t, commentId, sha, me, tail = "", posted = false }) {
   const link = `Fixed in [\`${sha.slice(0, 7)}\`](https://github.com/${repo}/commit/${sha}).`;
   const msg = tail ? `${link}\n\n${tail}` : link;
-  if (!scanOutbound(msg).ok) return false;
+  if (!scanOutbound(msg, { repo }).ok) return false;
   // a thread longer than the fetched page: its newest comment is unknown, so reply
   const whole = t && t.comments.length === (t.commentCount ?? t.comments.length);
   const last = whole && t.comments.length > 1 && t.comments.at(-1).author === me ? t.comments.at(-1) : null;

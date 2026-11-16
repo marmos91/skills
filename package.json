@@ -18,6 +18,7 @@
     "pr-respond": "shared/pr-respond/scripts/pr-respond",
     "pr-open": "shared/pr-open/scripts/pr-open",
     "pr-land": "shared/pr-land/scripts/pr-land",
+    "secret-scan": "shared/secret-scan/scripts/secret-scan",
     "jev": "shared/jev/jev.py",
     "repo-audit": "shared/repo-audit/scripts/audit.sh"
   },
@@ -32,7 +33,7 @@
     "!**/__pycache__/"
   ],
   "scripts": {
-    "test": "node --test test/*.test.mjs shared/pr-review/scripts/test/*.test.mjs shared/pr-open/scripts/test/*.test.mjs shared/pr-land/scripts/test/*.test.mjs && python3 -m unittest discover shared/jev && sh shared/repo-audit-fix/scripts/test/jev-gate.test.sh",
+    "test": "node --test test/*.test.mjs shared/pr-review/scripts/test/*.test.mjs shared/pr-open/scripts/test/*.test.mjs shared/pr-land/scripts/test/*.test.mjs shared/secret-scan/scripts/test/*.test.mjs && python3 -m unittest discover shared/jev && sh shared/repo-audit-fix/scripts/test/jev-gate.test.sh",
     "check-pack": "node tools/check-pack.mjs",
     "smoke": "sh tools/smoke.sh"
   },

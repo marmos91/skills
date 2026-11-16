@@ -2,10 +2,13 @@ import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, chmodSync } from "node:fs";
+import { mkdtempSync, writeFileSync, chmodSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { scanOutbound, redact } from "../lib/secrets.mjs";
+import { fileValues, scanOutbound, redact } from "../lib/secrets.mjs";
+
+// A developer's own ~/.config/secret-scan must not change these results.
+process.env.SECRET_SCAN_CONFIG = mkdtempSync(join(tmpdir(), "ss-empty-"));
 
 const r = (c, n) => c.repeat(n);
 const cases = {
@@ -137,4 +140,156 @@ test("real gitleaks flags a random token and passes clean text", { skip: !hasGit
   assert.ok(res.hits.length >= 2, `expected gitleaks plus built-in hit, got ${res.hits}`);
   assert.ok(res.hits.every((h) => !h.includes(rand)));
   assert.deepEqual(scanOutbound("Looks fine, but check GH_TOKEN handling."), { ok: true, hits: [] });
+});
+
+function withConfig(t, files) {
+  const dir = mkdtempSync(join(tmpdir(), "ss-"));
+  for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), typeof text === "function" ? text(dir) : text);
+  const old = process.env.SECRET_SCAN_CONFIG;
+  process.env.SECRET_SCAN_CONFIG = dir;
+  t.after(() => { process.env.SECRET_SCAN_CONFIG = old; });
+  return dir;
+}
+
+test("the outbound scan applies the local secret-scan config: private names, sops values, allow list", (t) => {
+  const value = "v4lue" + "x".repeat(12);
+  const dir = withConfig(t, { "private.txt": "example\\.internal\n", "creds.env": `export API_KEY="${value}"\n`, "sops-files.txt": (d) => join(d, "creds.env") });
+  const res = scanOutbound(`ping db.example.internal with ${value}`);
+  assert.deepEqual(res.hits.map((h) => h.split(":")[0]), ["private-infra", "sops-value"]);
+  assert.ok(res.hits.every((h) => !h.includes("example") && !h.includes(value)));
+  writeFileSync(join(dir, "allow.txt"), res.hits.map((h) => `${/fp (\w+)/.exec(h)[1]} test fixture`).join("\n"));
+  assert.deepEqual(scanOutbound(`ping db.example.internal with ${value}`), { ok: true, hits: [] });
+});
+
+test("a trailing # comment on a config line is dropped; \\# is a literal #", (t) => {
+  const value = "v4lue" + "y".repeat(12);
+  withConfig(t, {
+    "private.txt": "example\\.internal # our domain\nbuild\\#7\n",
+    "creds.env": `TOKEN=${value}\n`,
+    "sops-files.txt": (d) => `${join(d, "creds.env")}   # rendered by sops-nix\n`,
+  });
+  assert.equal(scanOutbound("deploy on db01.example.internal").ok, false);
+  assert.equal(scanOutbound("see build#7").ok, false);
+  assert.equal(scanOutbound(`uses ${value}`).ok, false);
+});
+
+test("a config file that is there but unreadable blocks; a missing one is skipped", { skip: process.getuid?.() === 0 && "root reads every file" }, (t) => {
+  const dir = withConfig(t, { "private.txt": "example\\.internal\n" });
+  assert.deepEqual(scanOutbound("clean text"), { ok: true, hits: [] });
+  chmodSync(join(dir, "private.txt"), 0o000);
+  t.after(() => chmodSync(join(dir, "private.txt"), 0o600));
+  const res = scanOutbound("clean text");
+  assert.equal(res.ok, false);
+  assert.match(res.hits[0], /^secret-scan: config unreadable \(EACCES\)/);
+  writeFileSync(join(dir, "sops-files.txt"), join(dir, "nope.env"));
+  chmodSync(join(dir, "private.txt"), 0o600);
+  assert.deepEqual(scanOutbound("clean text"), { ok: true, hits: [] });
+});
+
+test("CRLF config lines: a trailing comment is still dropped", (t) => {
+  withConfig(t, { "private.txt": "example\\.internal # our domain\r\nother\\.internal\r\n" });
+  assert.equal(scanOutbound("deploy on db01.example.internal").ok, false);
+  assert.equal(scanOutbound("deploy on db01.other.internal").ok, false);
+});
+
+test("allow.txt: the reason is verbatim, a # in it does not cut it", (t) => {
+  const dir = withConfig(t, { "private.txt": "example\\.internal\n" });
+  const fp = /fp (\w+)/.exec(scanOutbound("see db01.example.internal").hits[0])[1];
+  writeFileSync(join(dir, "allow.txt"), `${fp} #123 names it on purpose\n`);
+  assert.deepEqual(scanOutbound("see db01.example.internal"), { ok: true, hits: [] });
+  writeFileSync(join(dir, "allow.txt"), `${fp}\n# ${fp} commented out\n`);
+  assert.equal(scanOutbound("see db01.example.internal").ok, false);
+});
+
+test("a dangling link in sops-files.txt (a secret that did not render) blocks", (t) => {
+  const dir = withConfig(t, {});
+  symlinkSync(join(dir, "gone.env"), join(dir, "creds.env"));
+  writeFileSync(join(dir, "sops-files.txt"), join(dir, "creds.env"));
+  const res = scanOutbound("clean text");
+  assert.equal(res.ok, false);
+  assert.match(res.hits[0], /^secret-scan: config unreadable \(ENOENT\)/);
+});
+
+test("a repo in private-repos.txt skips the private set through the library too; no repo is strict", (t) => {
+  withConfig(t, { "private.txt": "example\\.internal\n", "private-repos.txt": "me/infra\n" });
+  assert.equal(scanOutbound("db01.example.internal", { repo: "me/infra" }).ok, true);
+  assert.equal(scanOutbound("db01.example.internal", { repo: "me/public" }).ok, false);
+  assert.equal(scanOutbound("db01.example.internal").ok, false);
+});
+
+test("many hits in a big diff stay fast (line numbers are not recounted per hit)", () => {
+  const line = `+const k = "${cases["aws-access-key-id"]}";\n`;
+  const text = "+x\n".repeat(100000) + line.repeat(3000);
+  const t0 = Date.now();
+  // a stub gitleaks: a real one would add its own hits and time
+  const res = withStub(`cat >/dev/null; ${getReport}; echo '[]' > "$p"`, () => scanOutbound(text));
+  assert.equal(res.hits.length, 3000);
+  assert.match(res.hits.at(-1), /\(line 103000, fp/);
+  assert.ok(Date.now() - t0 < 3000, `took ${Date.now() - t0} ms`);
+});
+
+test("fileValues: the values of each supported format", () => {
+  const v = "Abcd1234Efgh5678";
+  const pad = "dGhpc2lzYXZlcnlsb25nc2VjcmV0dmFsdWU=";
+  const table = [
+    ["bare line", `${v}\n`, [v]],
+    ["bare base64 with = padding", `${pad}\n`, [pad]],
+    ["key = value (INI)", `[default]\naws_secret = ${v}\n`, [v]],
+    ["key=value (env)", `TOKEN=${v}\n`, [`TOKEN=${v}`, v]],
+    ["export KEY=\"value\"", `export TOKEN="${v}"\n`, [`TOKEN="${v}"`, v]],
+    ["key: value (YAML)", `token: ${v}\n`, [v]],
+    ["nested YAML, quoted", `a:\n  b: '${v}'\n`, [v]],
+    ["YAML list item", `- ${v}\n`, [v]],
+    ["inline # comment", `token: ${v} # prod\n`, [v]],
+    ["inline ; comment", `token = ${v} ; rotated\n`, [v]],
+    ["# inside a value stays", `token: ab#cd${v}\n`, [`ab#cd${v}`]],
+    ["CRLF", `token: ${v}\r\n`, [v]],
+    ["bare value starting with #", "#Zp9vL2qRt8wX4kQ7\n", ["#Zp9vL2qRt8wX4kQ7"]],
+    ["bare value starting with ; or [", ";Zp9vL2qRt8wX4\n[Zp9vL2qRt8wX4\n", [";Zp9vL2qRt8wX4", "[Zp9vL2qRt8wX4"]],
+    ["big number, bare", "12345678901234567890\n", ["12345678901234567890"]],
+    ["number that JSON reads as Infinity", "93847e102938\n", ["93847e102938"]],
+    ["big number in JSON", '{"pin": 98765432109876543210}', ["98765432109876543210"]],
+    ["JSON leaves", JSON.stringify({ a: { b: v }, n: [pad] }), [v, pad]],
+    ["comments, sections, short values and spaces are not values", `# ${v}\n; ${v}\n[section]\n---\nregion: eu-west-1\nname: two words here ok\n`, []],
+  ];
+  for (const [name, text, want] of table) {
+    const got = fileValues(text);
+    if (name.startsWith("comments,")) assert.deepEqual(got, want, name);
+    else for (const w of want) assert.ok(got.includes(w), `${name}: ${JSON.stringify(got)}`);
+  }
+});
+
+test("a relative sops-files.txt entry is in the config folder, wherever the scan runs", (t) => {
+  const value = "r3lative" + "z".repeat(10);
+  withConfig(t, { "kubeconfig": `token: ${value}\n`, "sops-files.txt": "kubeconfig\n" });
+  const cwd = process.cwd();
+  process.chdir(tmpdir());
+  t.after(() => process.chdir(cwd));
+  assert.equal(scanOutbound(`uses ${value}`).ok, false);
+});
+
+test("mask never shows a whole short value", (t) => {
+  withConfig(t, { "private.txt": "\\bab\\b\n" });
+  const res = scanOutbound("x ab y");
+  assert.equal(res.ok, false);
+  assert.match(res.hits[0], /^private-infra: a… /);
+});
+
+test("gitleaks runs outside the scanned repo: a .gitleaks.toml in the cwd does not reach it", (t) => {
+  const repo = mkdtempSync(join(tmpdir(), "repo-"));
+  writeFileSync(join(repo, ".gitleaks.toml"), "[allowlist]\nregexes = ['.*']\n");
+  const cwd = process.cwd();
+  process.chdir(repo);
+  t.after(() => process.chdir(cwd));
+  // the stub fails when it can see a repo config: a scan that reads it errors (fails closed)
+  withStub(`cat >/dev/null; [ -e .gitleaks.toml ] && exit 2; ${getReport}; echo '[]' > "$p"`, () => {
+    assert.deepEqual(scanOutbound("clean text"), { ok: true, hits: [] });
+  });
+});
+
+test("the opt-out with several repos needs every one listed", (t) => {
+  withConfig(t, { "private.txt": "example\\.internal\n", "private-repos.txt": "acme/private\n" });
+  assert.equal(scanOutbound("db01.example.internal", { repo: ["acme/private", "acme/private"] }).ok, true);
+  assert.equal(scanOutbound("db01.example.internal", { repo: ["acme/private", "acme/sdk"] }).ok, false);
+  assert.equal(scanOutbound("db01.example.internal", { repo: ["acme/private", null] }).ok, false);
 });

@@ -2,7 +2,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { scanOutbound } from "../../../pr-review/scripts/lib/secrets.mjs";
+import { rangeText, scanOutbound } from "../../../pr-review/scripts/lib/secrets.mjs";
 import { checkBranch } from "./check.mjs";
 import { Blocked, Usage, readRecord } from "./counts.mjs";
 import { readOverride } from "./detect.mjs";
@@ -43,17 +43,32 @@ function gh(dir, args) {
 }
 const openPrOf = (dir, branch) => JSON.parse(gh(dir, ["pr", "list", "--head", branch, "--state", "open", "--json", "number,url"]))[0] ?? null;
 
+// owner/repo of a github.com URL (https, ssh:// or scp form); null for any other host.
+const ghSlug = (url) => /^(?:https:\/\/(?:[^@/]+@)?github\.com\/|ssh:\/\/git@github\.com(?::22)?\/|git@github\.com:)([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(url)?.[1] ?? null;
+
+/** The repos a push to origin really reaches (pushurl and insteadOf applied); [null] (strict scan) unless all are on GitHub. */
+export function pushRepos(dir) {
+  let urls = [];
+  try { urls = git(dir, "remote", "get-url", "--push", "--all", "origin").split("\n").filter(Boolean); } catch { return [null]; }
+  const slugs = urls.map(ghSlug);
+  return slugs.length && slugs.every(Boolean) ? [...new Set(slugs)] : [null];
+}
+
 // secret-scan (#39) when installed, else the pr-review scan. Hits are masked by both.
-function secretHits(text) {
-  const r = spawnSync(process.env.PR_OPEN_SECRET_SCAN || "secret-scan", [], { input: text, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
-  if (r.error?.code === "ENOENT") return scanOutbound(text).hits;
+// repos: the PR target and the pushed origin; the private-repos.txt opt-out needs both listed, so text pushed to a
+// public origin is scanned strict even when the gh target is private.
+function secretHits(dir, text, repos) {
+  const r = spawnSync(process.env.PR_OPEN_SECRET_SCAN || "secret-scan", repos.flatMap((x) => ["--repo", x ?? ""]), { cwd: dir, input: text, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+  if (r.error?.code === "ENOENT") return scanOutbound(text, { repo: repos }).hits;
   if (r.error) return [`secret-scan: ${r.error.message}`];
   return r.status === 0 ? [] : [String(r.stderr || "secret-scan: hit").trim()];
 }
 
 /** The base and its fresh remote ref; no base means the default branch from gh. check and open share it. */
 export function resolveBase(dir, base) {
-  const def = JSON.parse(gh(dir, ["repo", "view", "--json", "defaultBranchRef"])).defaultBranchRef.name;
+  // gh resolves the repo the PR opens in (the parent of a fork when it is the default)
+  const view = JSON.parse(gh(dir, ["repo", "view", "--json", "defaultBranchRef,nameWithOwner"]));
+  const def = view.defaultBranchRef.name;
   base ??= def;
   if (base.startsWith("-")) throw new Usage(`bad base: ${base}`);
   // An explicit refspec: a single-branch clone would only fill FETCH_HEAD.
@@ -62,7 +77,7 @@ export function resolveBase(dir, base) {
     if (/couldn't find remote ref/i.test(msg)) throw new Usage(`origin has no branch ${base}`);
     throw new Error(`git fetch origin ${base} failed: ${msg}`);
   }
-  return { base, def, ref: `origin/${base}` };
+  return { base, def, ref: `origin/${base}`, repo: view.nameWithOwner ?? null };
 }
 
 /** What check and open both gate: the record of HEAD, and the commits, title and body as posted (without the engine's stack lines). */
@@ -79,7 +94,7 @@ export async function openPr(dir, { title, bodyFile, base: wanted, draft = false
   let body;
   try { body = readFileSync(bodyFile, "utf8"); } catch (e) { throw new Usage(`cannot read the body file: ${e.message}`); }
   const branch = git(dir, "rev-parse", "--abbrev-ref", "HEAD");
-  const { base, def, ref } = resolveBase(dir, wanted);
+  const { base, def, ref, repo } = resolveBase(dir, wanted);
   if (branch === "HEAD" || branch === base) throw new Usage(`check out the branch to open (now on ${branch})`);
   // A stack is a base with an open PR of its own; any other base (develop, release/x) is a plain base.
   const parentPr = base === def ? null : openPrOf(dir, base);
@@ -96,7 +111,7 @@ export async function openPr(dir, { title, bodyFile, base: wanted, draft = false
 
   // The secret scan sees everything that is posted: every commit's patch and message, the title, the final body.
   const final = buildBody({ body, record, parent, parentPr: parentPr?.number });
-  const hits = secretHits(`${git(dir, "log", "-p", "--cc", "--no-ext-diff", "--no-textconv", "--format=%B", `${ref}..${sha}`)}\n${title}\n${final}`);
+  const hits = secretHits(dir, `${rangeText(dir, `${ref}..${sha}`)}\n${title}\n${final}`, [repo, ...pushRepos(dir)]);
   if (hits.length) throw new Blocked("the secret scan found a hit", { hits });
 
   if (!/#\d+/.test(body)) warnings.push("no linked issue");

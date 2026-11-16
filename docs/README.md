@@ -16,6 +16,7 @@ The skills:
 - `jev` answers yes/no questions. `repo-audit-fix` uses it as a second check on plans.
 - `pr-review` reviews one GitHub PR with a council of different models and posts only the findings they agree on. It uses `jev` to settle splits.
 - `pr-review-loop` runs `pr-review` and thread replies for a whole repo on an interval.
+- `secret-scan` checks text before it is pushed or posted: secrets, private infrastructure names and sops values, masked. `pr-review`, `pr-respond` and `pr-open` use it.
 - `pr-respond` fixes the review findings on your own PR, round by round, until a round adds nothing new. It uses `jev` to confirm each finding.
 - `pr-open` takes a finished branch to an open PR, with signed commits, real test counts and a secret scan.
 - `pr-land` merges a converged PR, retargets and rebases the PRs stacked on it, and cleans up branches and issues.
@@ -65,7 +66,7 @@ links, run `./install.sh --rm`.
 | `gh` (logged in) | `audit.sh issues`, `fix.sh plan` (issue map), `fix.sh` PR stage; `pr-review` and `pr-review-loop`: all GitHub reads and posts; `pr-open`: opens the PR; `pr-land`: merges, retargets, ticks and closes issues |
 | `node` | JSON steps in `audit.sh` and `fix.sh`; the `pr-review` engine |
 | `claude` CLI | `pr-review` seats with `harness: claude` (the default judge and first seat) |
-| `gitleaks` (optional) | `pr-review` outbound secret scan; built-in patterns without it |
+| `gitleaks` (optional) | `secret-scan` (and the scans of `pr-review`, `pr-respond`, `pr-open`); built-in patterns without it |
 | `python3` | `jev` (also the optional `pr-review` decider) |
 | Mimir credentials | `jev`: `~/.config/mimir/api-key` and `~/.config/mimir/base-url` (ends in `/v1`) |
 

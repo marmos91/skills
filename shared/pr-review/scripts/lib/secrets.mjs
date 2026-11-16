@@ -1,7 +1,9 @@
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+// The one secret scan: pr-review, pr-respond and pr-open use it here; the secret-scan skill is its CLI.
+import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { lstatSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { isAbsolute, join } from "node:path";
 
 const L = "(?<![A-Za-z0-9])"; // \b misses tokens after "_"
 const R = "(?![A-Za-z0-9])";
@@ -21,14 +23,15 @@ const PATTERNS = [
   ["slack-webhook", /https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/_-]{20,}/g],
 ];
 
-const mask = (s) => `${String(s).slice(0, 4)}…`;
+// At most 4 characters, and never the whole value: a short value shows half.
+const mask = (s) => `${String(s).slice(0, Math.min(4, Math.floor(String(s).length / 2)))}…`;
 
 /** Replace every built-in pattern match with [REDACTED:<kind>]. */
 export function redact(text) {
   return PATTERNS.reduce((t, [kind, re]) => t.replace(re, `[REDACTED:${kind}]`), text);
 }
 
-const SCANNER_ERROR = "gitleaks: scanner-error";
+const SCANNER_ERROR = { rule: "gitleaks", masked: "scanner-error" };
 
 // Fails closed: only "not installed" (ENOENT) is silent.
 function gitleaksHits(text, timeoutMs) {
@@ -38,13 +41,14 @@ function gitleaksHits(text, timeoutMs) {
     const res = spawnSync(
       "gitleaks",
       ["stdin", "--redact", "--report-format", "json", "--report-path", report],
-      { input: text, encoding: "utf8", timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 },
+      // cwd outside the scanned repo: its .gitleaks.toml or .gitleaksignore must not change the scan (GITLEAKS_CONFIG still applies)
+      { cwd: dir, input: text, encoding: "utf8", timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 },
     );
     if (res.error?.code === "ENOENT") return [];
     if (res.error || (res.status !== 0 && res.status !== 1)) return [SCANNER_ERROR];
     const findings = JSON.parse(readFileSync(report, "utf8"));
     if (!Array.isArray(findings)) return [SCANNER_ERROR];
-    return findings.map((f) => `${f.RuleID ?? "gitleaks"}: ${mask(f.Secret ?? f.Match ?? "")}`);
+    return findings.map((f) => ({ rule: f.RuleID ?? "gitleaks", masked: mask(f.Secret ?? f.Match ?? ""), line: f.StartLine }));
   } catch {
     return [SCANNER_ERROR]; // missing or invalid report
   } finally {
@@ -52,11 +56,121 @@ function gitleaksHits(text, timeoutMs) {
   }
 }
 
-/** Scan text about to be posted publicly. Hits never hold the full secret. */
-export function scanOutbound(text, { timeoutMs = 30000 } = {}) {
-  const hits = gitleaksHits(text, timeoutMs);
-  for (const [kind, re] of PATTERNS) {
-    for (const m of text.matchAll(re)) hits.push(`${kind}: ${mask(m[0])}`);
+// Local, untracked config: the lists never leave the machine and are never printed.
+const configDir = () => process.env.SECRET_SCAN_CONFIG || join(homedir(), ".config", "secret-scan");
+// A missing file is skipped (other machines); a file that is there but unreadable throws, so the scan fails closed.
+// A dangling link (a sops-nix secret that did not render) is there: it throws too.
+function readIfThere(path) {
+  try { return readFileSync(path, "utf8"); } catch (e) {
+    if (e.code !== "ENOENT") throw e;
+    try { lstatSync(path); } catch { return null; }
+    throw e;
   }
+}
+const rawLines = (name) => (readIfThere(join(configDir(), name)) ?? "").split(/\r?\n/);
+// `#` at the start of a line or after whitespace starts a comment; `\#` is a literal `#` in a pattern.
+const lines = (name) => rawLines(name).map((l) => l.replace(/(^|\s)#.*$/, "").trim()).filter(Boolean);
+const fingerprint = (rule, value) => createHash("sha256").update(`${rule}\0${value}`).digest("hex").slice(0, 12);
+
+// private.txt: one regex per line, case-insensitive; a line that is not a valid regex is a literal.
+function privatePatterns() {
+  return lines("private.txt").map((l) => {
+    try { return new RegExp(l, "gi"); } catch { return new RegExp(l.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"); }
+  });
+}
+
+// sops-files.txt: one plain file per line, as sops-nix renders them; a relative path is in the config folder.
+// A missing file is skipped (other machines).
+function sopsValues() {
+  return lines("sops-files.txt").flatMap((f) => {
+    const p = f.replace(/^~(?=\/)/, homedir());
+    const text = readIfThere(isAbsolute(p) ? p : join(configDir(), p));
+    return text === null ? [] : fileValues(text);
+  });
+}
+
+const leaves = (v) => (v && typeof v === "object" ? Object.values(v).flatMap(leaves) : [String(v)]);
+/**
+ * The secret values of a rendered file: JSON leaves; else, per line, the line and the value of `key = value`,
+ * `key: value`, `export KEY=value` and `- item`, without an inline ` #` / ` ;` comment or quotes.
+ * shortcut: values under 12 chars or with spaces are skipped as noise; add them to private.txt when they matter.
+ */
+export function fileValues(text) {
+  let raw = [];
+  // JSON only for an object or array; a number keeps its source text (a 16+ digit value or `1e400` would change)
+  try { const j = JSON.parse(text, (k, v, ctx) => (typeof v === "number" ? ctx.source : v)); if (j && typeof j === "object") raw = leaves(j); } catch { /* not JSON */ }
+  if (!raw.length) {
+    raw = text.split(/\r?\n/).flatMap((l) => {
+      const t = l.trim();
+      if (!t || t === "---") return [];
+      const line = t.replace(/\s+[#;].*$/, "").replace(/^(?:export\s+|-\s+)/, "");
+      // the raw line too: a bare value may start with `#`, `;` or `[`, or end in `=` (base64)
+      return [t, line, line.replace(/^[\w.-]+\s*[=:]\s*/, "")];
+    });
+  }
+  const unq = raw.map((v) => v.trim().replace(/^(["'])(.*)\1$/, "$2"));
+  return [...new Set(unq.filter((v) => v.length >= 12 && !/\s/.test(v)))];
+}
+
+/** Every commit of a range as one text to scan: patches of merges and binary-marked files too, no textconv. */
+export function rangeText(dir, range) {
+  // --no-relative: diff.relative would limit the patch to the cwd's subfolder
+  return execFileSync("git", ["log", "-p", "--cc", "--text", "--no-ext-diff", "--no-textconv", "--no-relative", "--format=%B", range],
+    { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 256 * 1024 * 1024 });
+}
+
+// Where line n (1-based) is: file:line inside a unified diff, else `label:n` or `line n`.
+function locator(text, label) {
+  const where = [];
+  let file = null, n = 0;
+  for (const l of text.split("\n")) {
+    let w = null;
+    if (l.startsWith("+++ ")) file = l.slice(4).replace(/^b\//, "");
+    else if (l.startsWith("@@") && file) n = Number(/\+(\d+)/.exec(l)?.[1] ?? 0);
+    else if (file && n && /^[+ ]/.test(l)) w = `${file}:${n++}`;
+    else if (!/^[-\\]/.test(l)) n = 0; // any other line ends the hunk (a commit message, a header)
+    where.push(w);
+  }
+  return (line) => where[line - 1] ?? (label ? `${label}:${line}` : `line ${line}`);
+}
+
+/**
+ * Every hit in text: { rule, masked, where, fp, allowed }. Never holds the full value.
+ * repo: one owner/repo, or several (the PR target and the push remote). The private-infrastructure patterns are
+ * skipped only when every one is listed in private-repos.txt; no repo, or an empty one, is strict.
+ */
+export function findings(text, { timeoutMs = 30000, repo = null, label = null } = {}) {
+  const where = locator(text, label);
+  const starts = [0];
+  for (let i = text.indexOf("\n"); i >= 0; i = text.indexOf("\n", i + 1)) starts.push(i + 1);
+  const lineOf = (i) => { // binary search: a big diff has many hits
+    let lo = 0, hi = starts.length - 1;
+    while (lo < hi) { const m = (lo + hi + 1) >> 1; if (starts[m] <= i) lo = m; else hi = m - 1; }
+    return lo + 1;
+  };
+  const out = gitleaksHits(text, timeoutMs).map(({ line, ...h }) => ({ ...h, where: line ? where(line) : null, fp: null }));
+  const add = (rule, value, i) => out.push({ rule, masked: mask(value), where: where(lineOf(i)), fp: fingerprint(rule, value) });
+  for (const [kind, re] of PATTERNS) for (const m of text.matchAll(re)) add(kind, m[0], m.index);
+  let allowed = new Set();
+  try {
+    const repos = [repo].flat();
+  if (!(repos.length && repos.every((r) => r && lines("private-repos.txt").includes(r)))) {
+      for (const re of privatePatterns()) for (const m of text.matchAll(re)) if (m[0]) add("private-infra", m[0], m.index);
+    }
+    for (const v of new Set(sopsValues())) for (let i = text.indexOf(v); i >= 0; i = text.indexOf(v, i + 1)) add("sops-value", v, i);
+    // allow.txt: `<fp> <reason>`, the reason verbatim (it may hold `#`); a line without a reason allows nothing
+    allowed = new Set(rawLines("allow.txt").map((l) => /^\s*([0-9a-f]{12})\s+\S/.exec(l)?.[1]).filter(Boolean));
+  } catch (e) {
+    out.push({ rule: "secret-scan", masked: `config unreadable (${e.code ?? "error"})`, where: null, fp: null });
+  }
+  return out.map((h) => ({ ...h, allowed: !!h.fp && allowed.has(h.fp) }));
+}
+
+/** One line per hit: rule: masked (where, fp). */
+export const format = (h) => `${h.rule}: ${h.masked}${h.where || h.fp ? ` (${[h.where, h.fp && `fp ${h.fp}`].filter(Boolean).join(", ")})` : ""}`;
+
+/** Scan text about to be posted or pushed. Hits never hold the full value; allowed hits do not count. */
+export function scanOutbound(text, opts = {}) {
+  const hits = findings(text, opts).filter((h) => !h.allowed).map(format);
   return { ok: hits.length === 0, hits };
 }

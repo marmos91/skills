@@ -1,3 +1,4 @@
+import "../../../pr-review/scripts/test/hermetic.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -6,7 +7,7 @@ import { join } from "node:path";
 import { initRepo, commit, git } from "./repo.mjs";
 import { ghStub } from "./gh.mjs";
 import { Blocked, Usage, runTests } from "../lib/counts.mjs";
-import { buildBody, openPr, parentOf } from "../lib/open.mjs";
+import { buildBody, openPr, parentOf, pushRepos } from "../lib/open.mjs";
 
 // Pin the scanner: a secret-scan on the developer's PATH must not replace the fallback under test.
 process.env.PR_OPEN_SECRET_SCAN = "pr-open-no-such-scanner";
@@ -187,6 +188,16 @@ test("a secret in the test command would reach the body: blocked", async () => {
   assert.equal(created(gh), undefined);
 });
 
+test("a secret in a file marked -diff: still scanned, blocked, no PR", async () => {
+  const { dir, bodyFile } = await stack({ test: false });
+  commit(dir, ".gitattributes", "*.yaml -diff\n", "chore: attributes");
+  commit(dir, "prod.yaml", `token: ${TOKEN}\n`, "feat: config");
+  await runTests(dir, 'echo "ℹ pass 2"; echo "ℹ fail 0"', { quiet: true });
+  const gh = ghStub(routes());
+  await assert.rejects(openPr(dir, { title: "feat: b", bodyFile, base: "feat/a" }), (e) => e instanceof Blocked && e.detail.hits.some((h) => h.startsWith("github-token")));
+  assert.equal(created(gh), undefined);
+});
+
 test("a secret in the title: blocked, no PR", async () => {
   const { dir, bodyFile } = await stack();
   const gh = ghStub(routes());
@@ -203,6 +214,52 @@ test("secret-scan on PATH is used, and its hit blocks", async (t) => {
   const gh = ghStub(routes());
   await assert.rejects(openPr(dir, { title: "feat: b", bodyFile, base: "feat/a" }), (e) => e instanceof Blocked && e.detail.hits[0] === "rule-x: abcd…");
   assert.equal(created(gh), undefined);
+});
+
+test("the scan gets the PR target and the repos a push really reaches", async (t) => {
+  const { dir, bodyFile } = await stack();
+  writeFileSync(bodyFile, "Adds b on db01.example.internal.\n\nCloses #3\n");
+  const cfg = mkdtempSync(join(tmpdir(), "ss-"));
+  writeFileSync(join(cfg, "private.txt"), "example\\.internal\n");
+  writeFileSync(join(cfg, "private-repos.txt"), "acme/private\n");
+  const oldCfg = process.env.SECRET_SCAN_CONFIG;
+  process.env.SECRET_SCAN_CONFIG = cfg;
+  t.after(() => { process.env.PR_OPEN_SECRET_SCAN = "pr-open-no-such-scanner"; process.env.SECRET_SCAN_CONFIG = oldCfg; });
+  const view = (nameWithOwner) => routes({ "repo view": { stdout: { defaultBranchRef: { name: "main" }, nameWithOwner } } });
+  // a private target, but the push goes to a local path (not GitHub): strict
+  ghStub(view("acme/private"));
+  await assert.rejects(openPr(dir, { title: "feat: b", bodyFile, base: "feat/a" }), (e) => e instanceof Blocked);
+  // the CLI gets the target and the push repo as --repo; an unknown push target is an empty (strict) --repo
+  const bin = mkdtempSync(join(tmpdir(), "pr-open-scan-"));
+  writeFileSync(join(bin, "secret-scan"), "#!/bin/sh\ncat >/dev/null\necho \"args: $*\" >&2\nexit 1\n");
+  chmodSync(join(bin, "secret-scan"), 0o755);
+  process.env.PR_OPEN_SECRET_SCAN = join(bin, "secret-scan");
+  ghStub(view("acme/public"));
+  await assert.rejects(openPr(dir, { title: "feat: b", bodyFile, base: "feat/a" }), (e) => e.detail?.hits[0] === "args: --repo acme/public --repo");
+});
+
+test("pushRepos: only the URLs a push reaches, only on github.com", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pr-open-push-"));
+  git(dir, "init", "-q");
+  const set = (...kv) => { for (let i = 0; i < kv.length; i += 2) git(dir, "config", kv[i], kv[i + 1]); };
+  git(dir, "remote", "add", "origin", "https://github.com/acme/private.git");
+  assert.deepEqual(pushRepos(dir), ["acme/private"]);
+  git(dir, "remote", "set-url", "origin", "git@github.com:acme/private.git");
+  assert.deepEqual(pushRepos(dir), ["acme/private"]);
+  // a pushurl to another repo is what the push reaches
+  set("remote.origin.pushurl", "ssh://git@github.com/acme/sdk.git");
+  assert.deepEqual(pushRepos(dir), ["acme/sdk"]);
+  git(dir, "config", "--unset", "remote.origin.pushurl");
+  // a rewrite to another host, a look-alike host or a path: strict
+  set("url.https://gitlab.example.internal/.pushInsteadOf", "git@github.com:");
+  assert.deepEqual(pushRepos(dir), [null]);
+  git(dir, "config", "--remove-section", "url.https://gitlab.example.internal/");
+  for (const u of ["https://evilgithub.com/acme/private.git", "https://github.com.example.internal/acme/private", "git@example.internal:github.com/acme/private", "/tmp/acme/private"]) {
+    git(dir, "remote", "set-url", "origin", u);
+    assert.deepEqual(pushRepos(dir), [null], u);
+  }
+  git(dir, "remote", "remove", "origin");
+  assert.deepEqual(pushRepos(dir), [null]);
 });
 
 test("a base that exists only on origin is fetched", async () => {
