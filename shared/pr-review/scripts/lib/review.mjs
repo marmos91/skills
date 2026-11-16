@@ -262,8 +262,8 @@ async function once(o, restart) {
   if (skip) {
     const answered = pendingAnswers(repoState).filter((q) => q.pr === n && !q.finding?.kind);
     if (answered.length) return followUp(o, head, pst0, answered);
-    // A queued approval posts here once CI is green at this head, as the tick would (#100).
-    const q = pendingAnswers(repoState).find((x) => x.pr === n && x.sha === head && x.finding?.kind === "approve" && x.answer === "post");
+    // A queued approval posts here once CI is green at this head, as the tick would (#100). A dry run or --until posts nothing.
+    const q = !o.dryRun && !o.until && pendingAnswers(repoState).find((x) => x.pr === n && x.sha === head && x.finding?.kind === "approve" && x.answer === "post");
     if (q) {
       const r = await postApproval({ repo, gh, rs: repoState, q, runId: pst0.lastRunId ?? runId });
       if (r.done) appliedAnswer(repoState, q.id);
@@ -959,6 +959,13 @@ async function followUp(o, head, pst, answered) {
     questions: waitingQuestions(repoState, n).filter((q) => !answered.some((a) => a.id === q.id)).length + held.length,
     gaps: was ? was.gaps : 1,
   };
+  // A finding to post (an agreed finding) or a held one (an open question) is a verdict at this head that queues no
+  // approval. Recorded before the post: a crash after it leaves the finding in `already`, and the rerun would not withdraw.
+  if (items.length || held.length) {
+    const rec = { sha: head, queueApprove: false, must: counts.must > 0 };
+    savePrState(repoState, n, { ...prState(repoState, n), verdict: rec });
+    withdrawApprovals(repoState, n, rec, o.log);
+  }
   let url = null;
   if (items.length) {
     // by line too: a later answer for another line of one fp is a new follow-up
@@ -982,12 +989,6 @@ async function followUp(o, head, pst, answered) {
     // posted findings join agreed too, so a reworded repeat on the same line still links (same lens)
     st.agreed = [...(st.agreed ?? []), ...items.map(({ q }) => ({ id: q.fingerprint, lens: q.finding.lens, severity: q.finding.severity, file: q.finding.file, line: q.finding.line, title: q.finding.title }))];
     savePrState(repoState, n, st);
-  }
-  // A posted finding (an agreed finding) or a held one (an open question) is a verdict at this head that queues no approval.
-  if (items.length || held.length) {
-    const rec = { sha: head, queueApprove: false, must: counts.must > 0 };
-    savePrState(repoState, n, { ...prState(repoState, n), verdict: rec });
-    withdrawApprovals(repoState, n, rec, o.log);
   }
   if (!items.length) await syncMarker(gh, repo, n, head, counts, o.log); // nothing posted: the newest marker at this head takes the new counts
   if (already.length) {

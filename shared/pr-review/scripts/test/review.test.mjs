@@ -1297,6 +1297,36 @@ test("an interactive rerun at the same head posts the queued approval once CI is
   assert.equal(approvals(fx).length, 0);
 });
 
+test("a dry run or --until at a reviewed head never posts the queued approval (#108)", async () => {
+  const fx = fixture(); routes(fx);
+  let state = "pending";
+  const gh = { ...github, checks: async () => ({ state, since: null, items: [] }) };
+  await go(fx, CLEAN, { gh });
+  state = "green";
+  for (const over of [{ dryRun: true }, { until: "frame" }]) {
+    const { r } = await go(fx, CLEAN, { gh, ...over });
+    assert.equal(r.exit, 0, r.summary);
+    assert.deepEqual(posts(fx).map((p) => p.event), ["COMMENT"], JSON.stringify(over));
+    assert.equal(approvals(fx).length, 1, "still queued");
+  }
+});
+
+test("a follow-up that crashes after it posts a must still withdraws the queued approval (#108)", async () => {
+  const fx = fixture(); routes(fx);
+  const gh = { ...github, checks: async () => ({ state: "pending", since: null, items: [] }) };
+  await go(fx, CLEAN, { gh });
+  const { queueQuestion } = await import("../lib/questions.mjs");
+  answer(fx.state, queueQuestion(fx.state, { pr: N, sha: fx.head, fingerprint: fingerprint(F()), file: "a.js", line: 2, snippet: "", finding: F(), sides: { keep: "k", drop: "d" }, failure: "" }), "post");
+  const crash = { ...gh, postReview: async (...a) => { await github.postReview(...a); throw new Error("killed"); } };
+  await assert.rejects(go(fx, CLEAN, { gh: crash }), /killed/);
+  const rc = R(fx);
+  rc["api --paginate --slurp repos/o/r/pulls/5/comments"] = { stdout: [[{ user: { login: ME }, body: posts(fx).at(-1).threads[0].body }]] };
+  W(fx, rc);
+  const { r } = await go(fx, CLEAN, { gh: { ...gh, postReview: async () => assert.fail("posted twice") } });
+  assert.match(r.summary, /nothing to post/, "the rerun finds the posted must");
+  assert.equal(approvals(fx).length, 0, "withdrawn");
+});
+
 test("an answer-only follow-up that posts a must withdraws the queued approval (#100)", async () => {
   const fx = fixture(); routes(fx);
   const gh = { ...github, checks: async () => ({ state: "pending", since: null, items: [] }) };
