@@ -2,7 +2,7 @@
 name: pr-converge
 description: "Drive one GitHub PR from open to merged without a person driving each round: a pr-review council round, then pr-respond on its findings (fix with a test, decline with a reason, push, reply, resolve), then review again, until a round adds nothing new; then pr-land merges, only when the user opted in with --merge. Stops at the round cap or when two rounds raise the same findings; pauses on a user question, a push by someone else, red checks or a land that is not ready. Resumable. Use on 'pr-converge', 'converge PR 42', 'drive this PR to merged', 'review and fix until clean, then land'."
 metadata:
-  version: "0.4.0" # x-release-please-version
+  version: "0.5.0" # x-release-please-version
 ---
 
 # pr-converge: review, respond and land one PR until it converges
