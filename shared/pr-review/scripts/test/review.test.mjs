@@ -3000,3 +3000,16 @@ test("sast: the repo's semgrep rules are used for a trusted author only", async 
     assert.match(args(), trust ? /--config \.semgrep\.yml / : /--config p\/default /);
   }
 });
+
+test("the run summary gives the tokens and cost per stage and the PR total", async () => {
+  const fx = fixture(); routes(fx);
+  userConfig({ prices: { opus: { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 } } });
+  const compose = (o) => {
+    writeFileSync(o.outFile.replace(/\.json$/, ".usage.json"), JSON.stringify({ input: 1e6, output: 4e4, cache_read: 0, cache_creation: 0, model: "opus" }));
+    return happy().compose;
+  };
+  const { r } = await go(fx, happy({ compose }));
+  assert.equal(r.exit, 0, r.summary);
+  assert.match(r.summary, /\ntokens: (?:.*; )?compose input 1000000 output 40000 cache_read 0 cache_creation 0 cost 6\.0000/);
+  assert.match(r.summary, /\nPR total: input 1000000 output 40000 cache_read 0 cache_creation 0 cost 6\.0000/);
+});

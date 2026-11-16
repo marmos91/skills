@@ -2,7 +2,7 @@
 // Every child output and stage gets a marker (spec 8), so a rerun continues where the last run stopped.
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { basename, join, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import * as github from "./github.mjs";
 import { runChild as realRunChild, ChildFailed, SeatDropped, stopping, harnessFor } from "./child.mjs";
 import { WHOLE_PR_LENSES, applyEffort, loadUserConfig, lowerEffort, pickEffort, plannedChildren, seatId, seatsForLens, withLimits } from "./config.mjs";
@@ -24,7 +24,7 @@ import { answer, appliedAnswer, openQuestions, pendingAnswers, queueQuestion, wa
 import { runSast, sastClusters, sastLine } from "./sast.mjs";
 import { applyProof, checkFix, directionOnly, isProven, markUnproven, mutantFindings, proofLine, runMutants, scopePatch, suggestionOf, uncheckedNote } from "./proof.mjs";
 import { cherryPicked, coreCandidates, depthLine, pickDepth, queueCoreQuestion, readCorePaths, runSetup, settleCoreQuestions } from "./setup.mjs";
-import { FINAL_STAGE, VERSION, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, commitStatus, decision, nextStep, summaryMarker, usageByStage, writeAtomic } from "./state.mjs";
+import { FINAL_STAGE, VERSION, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, commitStatus, decision, nextStep, summaryMarker, prUsage, usageByStage, usageText, writeAtomic } from "./state.mjs";
 
 export const STAGES = ["frame", "setup", "round1", "merge", "round2", "tally", "decide", "compose", "post"];
 const RANK = { must: 0, should: 1, nit: 2, "pre-existing": 3 };
@@ -739,8 +739,7 @@ async function once(o, restart) {
     const p = place(items.map((x) => ({ file: x.file, line: x.line, body: x.body })), hunks, permalink);
     const file = join(runDir, "review.md");
     writeFileSync(file, [`event: ${v().event}`, bodyOf(p.body, "dry-run", items.filter((x) => !offDiff(x))), ...p.inline.map((x) => `---\n${x.path}:${x.line}\n${x.body}`)].join("\n\n") + "\n");
-    const tokens = Object.entries(usageByStage(runDir)).map(([st, u]) => `${st} ${["input", "output", "cache_read", "cache_creation"].map((k) => `${k} ${u[k] ?? "?"}`).join(" ")}`);
-    return finish("compose (dry run)", { dryRun: true, file, ...v(), summary: [`dry run: review written to ${file}; ${planned} children planned`, ...(tokens.length ? [`tokens: ${tokens.join("; ")}`] : []), ...warnings].join("\n") });
+    return finish("compose (dry run)", { dryRun: true, file, ...v(), summary: [`dry run: review written to ${file}; ${planned} children planned`, ...usageLines(runDir, config.prices), ...warnings].join("\n") });
   }
 
   // Post (spec 6.10). CI may have changed since frame: read it again; a failed read is unknown and blocks APPROVE.
@@ -888,6 +887,7 @@ async function once(o, restart) {
     exit: open.length && mode === "interactive" ? 3 : 0, runDir, planned, url, event, queueApprove, reasons, questions: questionFiles(),
     summary: [
       `${url ? `posted ${event}: ${url}` : "already posted (marker found on GitHub)"}; ${clean.length} inline finding(s)${open.length ? `; ${open.length} question(s) queued` : ""}`,
+      ...usageLines(runDir, config.prices),
       ...warnings,
     ].join("\n"),
   };
@@ -901,6 +901,12 @@ function withdrawApprovals(repoState, n, rec, log) {
     if (q.answer === null) answer(repoState, q.id, "drop");
     appliedAnswer(repoState, q.id);
   }
+}
+
+// The run's tokens and cost per stage, and the PR total over all its runs (runDir is runs/<sha>-<ms>); none when nothing is recorded.
+function usageLines(runDir, prices) {
+  const by = usageByStage(runDir, prices), pr = prUsage(dirname(runDir), prices);
+  return Object.keys(by).length ? [`tokens: ${Object.entries(by).map(([st, u]) => `${st} ${usageText(u)}`).join("; ")}`, `PR total: ${usageText(pr)}`] : [];
 }
 
 // On the reviewed sha, never the current head. A failed status (a token without the scope) does not undo the posted review.

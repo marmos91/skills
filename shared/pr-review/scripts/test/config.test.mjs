@@ -60,6 +60,13 @@ test("a lens needs 2 or more seats", () => {
   assert.throws(() => loadConfig({ userPath: p }), /needs 2 or more seats/);
 });
 
+test("a price needs input, output, cache_read and cache_write as numbers >= 0", () => {
+  const p = (price) => tmp(JSON.stringify({ prices: { opus: price } }));
+  assert.deepEqual(loadConfig({ userPath: p({ input: 15, output: 75, cache_read: 1.5, cache_write: 18.75 }) }).prices.opus.output, 75);
+  assert.throws(() => loadConfig({ userPath: p({ input: 15, output: 75, cache_read: 1.5 }) }), /prices.opus.cache_write must be a number >= 0/);
+  assert.throws(() => loadConfig({ userPath: p({ input: -1, output: 75, cache_read: 1.5, cache_write: 1 }) }), /prices.opus.input/);
+});
+
 test("thinking is checked per harness", () => {
   const seat = (harness, thinking) => tmp(JSON.stringify({ judge: { harness, model: "m", thinking } }));
   assert.throws(() => loadConfig({ userPath: seat("claude", "minimal") }), /thinking/);

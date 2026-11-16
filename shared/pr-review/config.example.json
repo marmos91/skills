@@ -57,5 +57,9 @@
   // pr-review-loop: pipe the open questions and to-dos to this command once a day (user config only).
   // "digest": { "command": "terminal-notifier -title pr-review" },
   // pr-converge: review rounds before the loop stops and reports (exit 5); it never merges at the cap.
-  "converge": { "max_rounds": 4 }
+  "converge": { "max_rounds": 4 },
+  // Price per million tokens of each model, as the seat names it: status and the run summary show the cost.
+  // No built-in prices; a model without one shows tokens only. Shape:
+  // "opus": { "input": 5, "output": 25, "cache_read": 0.5, "cache_write": 6.25 }
+  "prices": {}
 }

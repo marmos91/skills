@@ -212,7 +212,7 @@ export async function runChild({ seat, tools = "read", promptFile, outFile, work
   const output = async () => {
     const o = unwrapOutput(await readFile(outFile, "utf8").catch(() => ""));
     usage = addUsage(usage, o.usage);
-    try { writeFileSync(usageFile, JSON.stringify(usage) + "\n"); } catch {} // usage is a record only: it never fails a child
+    try { writeFileSync(usageFile, JSON.stringify({ ...usage, model: seat.model }) + "\n"); } catch {} // usage is a record only: it never fails a child
     return o;
   };
   for (let i = 0; i <= retries; i++) {

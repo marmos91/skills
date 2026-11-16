@@ -62,6 +62,9 @@ export const DEFAULTS = {
   respond: { max_rounds: 5 },
   // pr-converge: the review rounds before the loop stops and reports
   converge: { max_rounds: 4 },
+  // model (as a seat names it) -> price per million tokens: { input, output, cache_read, cache_write }.
+  // No built-in prices: a model without one shows tokens only.
+  prices: {},
 };
 
 // Repo level may set only these paths; "*" matches one lens name.
@@ -206,6 +209,8 @@ function validate(c, known) {
   need(isObj(c.converge) && posInt(c.converge.max_rounds), "converge.max_rounds", "a positive integer");
   // the user's own shell command (never the repo's: not in REPO_ALLOWED); doctor does not print it
   need(c.digest === undefined || (isObj(c.digest) && (c.digest.command === undefined || (typeof c.digest.command === "string" && c.digest.command))), "digest.command", "a non-empty string");
+  need(isObj(c.prices), "prices", "an object");
+  for (const [m, p] of Object.entries(c.prices)) for (const k of ["input", "output", "cache_read", "cache_write"]) need(isObj(p) && typeof p[k] === "number" && p[k] >= 0, `prices.${m}.${k}`, "a number >= 0");
   need(typeof c.review.sast === "boolean", "review.sast", "a boolean");
   need(["light", "full", "auto"].includes(c.review.depth), "review.depth", "light, full or auto");
   need(c.review.core_paths === undefined || strList(c.review.core_paths), "review.core_paths", "an array of strings");
