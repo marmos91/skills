@@ -35,4 +35,13 @@ export function learn(repoState, keys, reason, repo) {
   return lines;
 }
 
+/** Removes a key from the local file. -> true when it was there. The base-branch copy is the user's to edit. */
+export function forget(repoState, key) {
+  const text = read(local(repoState));
+  const kept = text.split("\n").filter((l) => !l.startsWith(`- ${key}`));
+  if (kept.length === text.split("\n").length) return false;
+  writeAtomic(local(repoState), kept.join("\n"));
+  return true;
+}
+
 export const suggestion = (lines) => `add to ${LEARNINGS} on the base branch so every review skips them:\n${lines.join("\n")}`;
