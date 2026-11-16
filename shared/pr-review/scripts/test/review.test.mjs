@@ -2440,6 +2440,14 @@ test("pre-existing: on a line the PR changed it takes a raised level and posts i
   assert.doesNotMatch(p.body, /pre-existing/);
 });
 
+test("pre-existing: on a line the PR changed it breaks the loop's unanimous zero", async () => {
+  const fx = fixture({ "b.js": "const b = open();\n" }); routes(fx);
+  const onA = { ...PRE, file: "a.js" };
+  // the judge merges nothing, so no agreed finding hides the unanimous-zero gate
+  const { r } = await go(fx, { ...preRun, all: { findings: [onA] }, merge: [], compose: { body: "Changes a.", comments: [] } }, { mode: "loop", effort: "medium" });
+  assert.ok(r.reasons.includes("loop: not unanimous zero"), r.reasons.join("; "));
+});
+
 test("pre-existing: one seat or the judge alone cannot turn a must into pre-existing", async () => {
   const fx = fixture(); routes(fx);
   await go(fx, happy({ "all~1": { findings: [F({ severity: "pre-existing" })] }, merge: (o) => [C("c1", { severity: "pre-existing", members: allFids(o) })] }));
