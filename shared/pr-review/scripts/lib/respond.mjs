@@ -168,20 +168,22 @@ export async function decide({ repo, n, threadId, gh, jev, show, fileDiff }) {
 
 /**
  * A short reason on the thread; the thread stays open for the reviewer. wrong (the finding is wrong, not only out
- * of scope) learns the finding with the reason, when the thread is our own council comment (its marker is ours,
- * not a copy in another author's comment). -> { action: "replied"|"skipped", learned: [lines] }
+ * of scope) learns the finding with the reason: only its own key (not folded ones), only from our own council
+ * comment, and only when every author in the thread is trusted. Also on a rerun. -> { action, learned: [lines] }
  */
 export async function decline({ repo, n, threadId, reason, wrong = false, gh }) {
   const [me, t] = [await gh.viewer(), await thread(gh, repo, n, threadId)];
-  if (handledNow(t, me, load(repo, n).handled)) return { action: "skipped" };
   const body = String(reason).trim();
   if (!body) throw new Error("decline needs a reason");
   if (!scanOutbound(body, { repo }).ok) throw new Error("the secret scan holds the reason; write it again without the secret");
+  const host = parseMarker(t.comments[0].body).learn.slice(0, 1);
+  const learned = wrong && t.comments[0].author === me && (await trusted(gh, repo, n, t, me)) ? learn(stateRoot(repo), host, `PR #${n}: ${body}`, repo) : [];
+  if (handledNow(t, me, load(repo, n).handled)) return { action: "skipped", learned };
   // a crash after the post and before markHandled must not post twice: the marker is the record on GitHub
   const key = sha1(`respond-decline\0${threadId}\0${lastOther(t, me)}`);
   if (!(await gh.findMarker(repo, n, key))) await gh.reply(repo, n, t.comments[0].id, `${body}\n\n<!-- pr-review key=${key} -->`);
   markHandled(repo, n, t, me);
-  return { action: "replied", learned: wrong && t.comments[0].author === me ? learn(stateRoot(repo), parseMarker(t.comments[0].body).learn, `PR #${n}: ${body}`) : [] };
+  return { action: "replied", learned };
 }
 
 /**

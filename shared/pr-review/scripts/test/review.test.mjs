@@ -951,6 +951,16 @@ test("7.4: an answer from an older sha is dropped with a note when the finding's
   }
 });
 
+test("a drop answer is learned when the next run applies it", async () => {
+  const fx = fixture(); routes(fx);
+  const first = await go(fx, split());
+  answer(fx.state, basename(first.r.questions[0], ".md"), "drop");
+  pushHead(fx, ["const a = 2;", "const b = 3;", "const c = 4;", "const d = 50;"]);
+  const { r } = await go(fx, split());
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(readFileSync(join(fx.state, "learnings.md"), "utf8"), `- ${learnKey(F())} PR #5: Off by one\n`);
+});
+
 test("7.4: a stale 'drop' never turns a must the whole council now agrees on into APPROVE", async () => {
   const fx = fixture(); routes(fx);
   const first = await go(fx, split());
@@ -963,6 +973,7 @@ test("7.4: a stale 'drop' never turns a must the whole council now agrees on int
   assert.equal(p.event, "REQUEST_CHANGES");
   assert.deepEqual(p.threads.map((t) => t.line), [2]);
   assert.ok(JSON.parse(readFileSync(join(fx.state, "questions", `${id}.json`), "utf8")).appliedAt);
+  assert.equal(existsSync(join(fx.state, "learnings.md")), false, "a stale drop is not learned");
 });
 
 test("7.4: a re-found split whose stale answer was dropped is asked again as a fresh question", async () => {

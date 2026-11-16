@@ -12,8 +12,7 @@ import { redact } from "./lib/secrets.mjs";
 import { askJev as realAskJev, findJev as realFindJev } from "./lib/decider.mjs";
 import { review, SetupError, STAGES } from "./lib/review.mjs";
 import { answer, markAsked, openQuestions, questionWarnings } from "./lib/questions.mjs";
-import { learn, suggestion, unlearn } from "./lib/learnings.mjs";
-import { learnKey } from "./lib/convergence.mjs";
+import { suggestion } from "./lib/learnings.mjs";
 import { FINAL_STAGE, Locked, VERSION, done, holderAlive, prState, stateRoot, usageByStage } from "./lib/state.mjs";
 import { remoteRepos } from "./lib/github.mjs";
 import { DEPTHS, setCorePaths } from "./lib/setup.mjs";
@@ -233,17 +232,8 @@ export async function main(argv, deps = {}) {
     if (rest.length > 2 || (id && !option)) throw new Usage(USAGE);
     const rs = stateRoot(repoOf(v.repo));
     if (!id) { console.log(JSON.stringify(listQuestions(rs), null, 2)); return 0; }
-    let q;
-    try { q = answer(rs, id, option); } catch (e) { throw new Usage(e.message); }
+    try { answer(rs, id, option); } catch (e) { throw new Usage(e.message); }
     console.log(`${id}: ${option}`);
-    // a drop of a council finding is learned, and another answer unlearns it; a loop question (kind) or a held
-    // secret is not about the finding
-    if (!q.finding?.kind && !q.finding?.secret) {
-      const key = learnKey(q.finding);
-      if (option !== "drop") unlearn(rs, [key]);
-      const lines = option === "drop" ? learn(rs, [key], `PR #${q.pr}: ${q.finding.title ?? ""}`) : [];
-      if (lines.length) console.log(suggestion(lines));
-    }
     return 0;
   }
   if (cmd === "status") {

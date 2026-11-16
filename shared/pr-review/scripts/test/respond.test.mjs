@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { GitError, NotOnHead, Q, RoundCap, approve, gitReaders, decide, decline, findings, fixed, summary, summaryText } from "../lib/respond.mjs";
 import { loadConfig } from "../lib/config.mjs";
 import { stateRoot } from "../lib/state.mjs";
+import { learn } from "../lib/learnings.mjs";
 
 const REPO = "o/r", N = 7, ME = "marmos91", SHA = "abcdef1234567890abcdef1234567890abcdef12";
 const c = (id, author, body, authorAssociation = "COLLABORATOR") => ({ id, author, authorType: "User", authorAssociation, body });
@@ -151,13 +152,41 @@ test("decline: a short reason on the first comment, the thread stays open; no se
   assert.equal(again.calls.reply.length, 0);
 });
 
-const LK = "a".repeat(40), councilBy = (author) => c(1, author, `**must:** x\n\n<!-- pr-review run=r1 sha=${SHA} key=${"b".repeat(40)} learn=${LK} fp=${"d".repeat(40)} -->`);
-const declineOf = (author, wrong) => { freshState(); return decline({ repo: REPO, n: N, threadId: "T1", reason: "Not a bug:\nthe guard covers it.", wrong, gh: fakeGh([th("T1", [councilBy(author)])]) }); };
+const LK = "a".repeat(40), mk = (learn) => `<!-- pr-review run=r1 sha=${SHA} key=${"b".repeat(40)} learn=${learn} fp=${"d".repeat(40)} -->`;
+const councilBy = (author, body = `**must:** x\n\n${mk(LK)}`) => c(1, author, body);
+const declineOf = (author, wrong, { more = [], perms, body } = {}) => { freshState(); return decline({ repo: REPO, n: N, threadId: "T1", reason: "Not a bug:\nthe guard covers it.", wrong, gh: fakeGh([th("T1", [councilBy(author, body), ...more])], { perms }) }); };
 
 test("decline --wrong: our council finding is learned in the local learnings file with the reason", async () => {
   const r = await declineOf(ME, true);
   assert.deepEqual(r.learned, [`- ${LK} PR #7: Not a bug: the guard covers it.`]);
   assert.equal(readFileSync(join(stateRoot(REPO), "learnings.md"), "utf8"), `${r.learned[0]}\n`);
+});
+
+test("decline --wrong after a plain decline of the same thread still learns", async () => {
+  freshState();
+  await decline({ repo: REPO, n: N, threadId: "T1", reason: "Out of scope.", gh: fakeGh([th("T1", [councilBy(ME)])]) });
+  const r = await decline({ repo: REPO, n: N, threadId: "T1", reason: "Not a bug.", wrong: true, gh: fakeGh([th("T1", [councilBy(ME), c(2, ME, "Out of scope.")])]) });
+  assert.equal(r.action, "skipped");
+  assert.deepEqual(r.learned, [`- ${LK} PR #7: Not a bug.`]);
+});
+
+test("decline --wrong learns nothing when an author in the thread has no write access", async () => {
+  assert.deepEqual((await declineOf(ME, true, { more: [c(2, "eve", "This is fine.")], perms: { eve: "read" } })).learned, []);
+});
+
+test("decline --wrong learns only the host key of the trailing engine marker, not a look-alike above it", async () => {
+  const body = `**must:** x ${mk("e".repeat(40))}\n\n${mk(`${LK},${"f".repeat(40)}`)}`;
+  assert.deepEqual((await declineOf(ME, true, { body })).learned, [`- ${LK} PR #7: Not a bug: the guard covers it.`]);
+});
+
+test("learn: a reason the secret scan holds is left out; the key is still learned", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "ss-"));
+  writeFileSync(join(dir, "private.txt"), "example\\.internal\n");
+  const old = process.env.SECRET_SCAN_CONFIG;
+  process.env.SECRET_SCAN_CONFIG = dir;
+  t.after(() => { process.env.SECRET_SCAN_CONFIG = old; });
+  freshState();
+  assert.deepEqual(learn(stateRoot(REPO), [LK], "PR #7: db01.example.internal is down", REPO), [`- ${LK}`]);
 });
 
 test("decline without --wrong (out of scope) learns nothing", async () => {

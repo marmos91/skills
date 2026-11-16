@@ -11,7 +11,7 @@ import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.
 import { tally } from "./tally.mjs";
 import { validate } from "./schema.mjs";
 import { allowedSeverities, filterNew, fingerprint, learnKey } from "./convergence.mjs";
-import { learnedKeys, parseMarker } from "./learnings.mjs";
+import { learn, learnedKeys, parseMarker, suggestion } from "./learnings.mjs";
 import { codeLink, diffLine, linkRefs, parseHunks, place } from "./hunks.mjs";
 import { verdict } from "./verdict.mjs";
 import { redact, scanOutbound } from "./secrets.mjs";
@@ -38,6 +38,12 @@ const inlineKeyOf = (sha, fp, file, line) => sha1(`inline\0${sha}\0${fp}\0${file
 const marker = (runId, sha, key, fp, learn) => `<!-- pr-review run=${runId} sha=${sha} key=${key}${learn ? ` learn=${learn}` : ""}${fp ? ` fp=${fp}` : ""} -->`;
 // Fields the seats and the judge see; engine bookkeeping stays out of prompts.
 const view = ({ seats, fp, answered, ...c }) => c;
+// A drop answer is learned when a run applies it, not when it is given: a stale answer is never learned.
+const learnDrop = (o, q) => {
+  if (q.answer !== "drop" || q.finding?.secret) return;
+  const lines = learn(o.repoState, [learnKey(q.finding)], `PR #${q.pr}: ${q.finding.title ?? ""}`, o.repo);
+  if (lines.length) o.log(suggestion(lines));
+};
 // GitHub text that the engine puts into a posted body: no markup, no mentions, no marker look-alikes.
 export const safeText = (s) => String(s ?? "").replace(/[<>@`]/g, "").replace(/\s+/g, " ").trim().slice(0, 80);
 // The masked hits (fp included, never the value) of an answered "post" that still hits after redaction.
@@ -441,6 +447,7 @@ async function once(o, restart) {
   };
   const take = (q, c) => {
     if (!applied.includes(q.id)) applied.push(q.id);
+    learnDrop(o, q);
     if (q.answer === "drop") rejected.push(c);
     else agreed.push({ ...c, ask_author: q.answer === "ask-author", answered: q.answer });
   };
@@ -844,6 +851,7 @@ async function followUp(o, head, pst, answered) {
     st.settled = [...new Set([...st.settled, ...already])];
     savePrState(repoState, n, st);
   }
+  for (const q of answered) if (!codeMoved(o.repoDir ?? process.cwd(), q, head)) learnDrop(o, q);
   for (const q of answered) appliedAnswer(repoState, q.id);
   // still held: ask again (an applied question comes back fresh); returned like a full run's questions
   const asked = held.map((q) => queueQuestion(repoState, { pr: n, sha: head, fingerprint: q.fingerprint, file: q.finding.file, line: q.finding.line, snippet: "", finding: q.finding, sides: q.sides, failure: q.finding.case }));

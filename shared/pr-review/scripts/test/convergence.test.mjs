@@ -36,6 +36,9 @@ test("a learned finding does not drop one whose title differs only in digits", (
   assert.equal(fingerprint(a), fingerprint(b));
   assert.deepEqual(filterNew([b], { reviewNumber: 1, settled: new Set(), changedLines: new Map(), learned: new Set([learnKey(a)]) }).keep, [b]);
 });
+test("learnKey ignores case and punctuation in the title", () => {
+  assert.equal(learnKey(f({ title: "Null deref in parse()." })), learnKey(f({ title: "null deref in Parse" })));
+});
 test("titles that normalize to empty fall back to the case", () => {
   assert.notEqual(fingerprint(f({ title: "1.", case: "a -> b" })), fingerprint(f({ title: "2!", case: "c -> d" })));
   assert.equal(fingerprint(f({ title: "1.", case: "a -> b" })), fingerprint(f({ title: "2!", case: "A -> b" })));

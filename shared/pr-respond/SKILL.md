@@ -46,7 +46,8 @@ the full command each time: zsh does not split a variable into words.
        why, then run `$P decline <id> "<reason>"`. The thread stays open for
        the reviewer. Add `--wrong` only when the finding is wrong, not when
        it is only out of scope: a council finding declined with `--wrong` is
-       learned, and later reviews never raise it again (`learned` in the
+       learned when every author in the thread has write access, and later
+       reviews never raise it again (`learned` in the
        output). Show the user the line to commit to
        `.pr-review/learnings.md` on the base branch;
      - it needs a design decision, or you cannot tell: ask the user (Claude Code: `AskUserQuestion`; pi:

@@ -13,7 +13,7 @@ export function fingerprint(f) {
 // The key of a rejected finding (learnings.mjs): the fingerprint inputs with the title's digits kept, so
 // "null check at line 3" and "at line 40" stay apart. A block across PRs must not catch a neighbour.
 export function learnKey(f) {
-  const title = String(f.title ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  const title = String(f.title ?? "").toLowerCase().replace(/\p{P}/gu, "").replace(/\s+/g, " ").trim();
   return createHash("sha1").update(["learn", f.lens, f.file, f.symbol ?? "", title].join("\u0000")).digest("hex");
 }
 
