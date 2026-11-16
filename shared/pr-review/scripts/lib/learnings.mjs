@@ -22,22 +22,23 @@ export function parseMarker(body) {
 }
 
 // Code in Markdown: a fence of 3+ ` or ~ after 0-3 spaces at line start, closed by the same char at least as long
-// (else it runs to the end; a ``` info string has no backtick), or an inline span on one line. A backslash-escaped backtick is a literal.
+// (a ``` info string has no backtick), or an inline span on one line. A backslash-escaped backtick is a literal.
 // shortcut: a span of 2+ backticks is not code here (its < shows as &lt;); match backtick runs if that matters.
-const CODE = /(?<![^\n]) {0,3}((`|~)\2{2,})(?:(?<=`)[^\n`]*|(?<=~)[^\n]*)(?=\n|$)(?:\n[\s\S]*?)?(?:\n {0,3}\1\2*[ \t]*(?=\n|$)|$)|(?<![\\`])`[^`\n]*`(?!`)/g;
+const OPEN = String.raw`(?<![^\n]) {0,3}((\`|~)\2{2,})(?!\2)(?:(?<=\`)[^\n\`]*|(?<=~)[^\n]*)(?=\n|$)`;
+const CODE = new RegExp(String.raw`${OPEN}(?:\n[\s\S]*?)?\n {0,3}\1\2*[ \t]*(?=\n|$)|(?<![\\\`])\`[^\`\n]*\`(?!\`)`, "g");
 const esc = (t) => t.replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 /** Model text of a posted comment with < and > escaped outside code, so it renders as written but holds no markup or
- * look-alike marker. Code keeps them: an entity there shows as text, and a suggestion must stay valid code. */
+ * look-alike marker. Code keeps them: an entity there shows as text, and a suggestion must stay valid code. Only a
+ * closed fence is code; an unclosed one is escaped, then closed, so the engine text after it is never code. */
 export function noMarkup(s) {
   s = String(s ?? "");
-  let out = "", at = 0;
-  for (const m of s.matchAll(CODE)) { out += esc(s.slice(at, m.index)) + m[0]; at = m.index + m[0].length; }
-  return out + esc(s.slice(at));
+  let out = "", at = 0, open = null;
+  const gap = (t) => { open ??= new RegExp(OPEN).exec(t)?.[1] ?? null; return esc(t); };
+  for (const m of s.matchAll(CODE)) { out += gap(s.slice(at, m.index)) + m[0]; at = m.index + m[0].length; }
+  out += gap(s.slice(at));
+  return open ? `${out}\n${open}` : out;
 }
-
-/** The text with its code removed: a marker quoted in code is not a marker. */
-export const outsideCode = (s) => String(s ?? "").replace(CODE, "");
 
 /** Adds the keys to the local file. A reason the secret scan holds is left out. -> the new lines, to suggest for the base branch. */
 export function learn(repoState, keys, reason, repo) {
