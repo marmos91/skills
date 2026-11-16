@@ -286,12 +286,13 @@ text (`scripts/lib/verdict.mjs`). The first row that matches wins.
 | An open question, a split, a failed lens, a dropped seat, any agreed finding, or red or unknown CI | `COMMENT` |
 | Pending CI and nothing else above or below | `COMMENT`; the loop approves by itself once CI is green at the same head |
 | Loop run, and the shell rule (Trust and isolation, item 3) does not hold or not every seat found zero | `COMMENT`, and an "approve?" question for you |
+| None of the above | `APPROVE` |
 
 When the event is `COMMENT`, no `must` blocks and it is not your own PR, the
 body has one engine line that says why it is not an approval, for example "Not
-approved yet: CI is still running. It is approved when CI passes." The loop
-posts the approval only at the same head with green CI.
-| None of the above | `APPROVE` |
+approved yet: CI is still running. It is approved when CI passes." Only
+pr-review-loop posts the approval, at the same head with green CI; an
+interactive review says so.
 
 ### 9. Post
 

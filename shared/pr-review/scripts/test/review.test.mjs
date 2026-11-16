@@ -1098,7 +1098,7 @@ test("CI is read again at post time: none at frame, red at post -> no APPROVE", 
 
 test("CI pending is the only reason: COMMENT, the approve is queued and the body says why (#82)", async () => {
   // interactive: CI alone, no human needed (answered post); loop with an untrusted author: the question stays open
-  for (const [mode, ask, why] of [["interactive", false, "CI is still running. It is approved when CI passes."], ["loop", true, "CI is still running and the loop approves only a trusted author. It is approved when CI passes and you answer post to the approve question."]]) {
+  for (const [mode, ask, why] of [["interactive", false, "CI is still running. pr-review-loop approves it when CI passes; or run pr-review again then."], ["loop", true, "CI is still running and the loop approves only a trusted author. It is approved when CI passes and you answer post to the approve question."]]) {
     const fx = fixture(); routes(fx);
     const gh = { ...github, checks: async () => ({ state: "pending", since: null, items: [] }) };
     const { r } = await go(fx, { all: { findings: [] }, compose: { verdict: "Nothing blocks.", body: "Fine.", comments: [] } }, { gh, mode });
@@ -1596,6 +1596,20 @@ test("split PR: a missed part blocks APPROVE only when fewer than 2 seats finish
   const p = posts(fx2)[0];
   assert.equal(p.event, "COMMENT");
   assert.match(p.body, /Not approved: 2 seats did not finish\./);
+});
+
+test("split PR: the why-not line counts distinct seats, and a resume records each miss once (#82)", async () => {
+  const misses = { "all~1@0": dropOf("turn limit"), "all~1@1": dropOf("turn limit"), "all~2@0": dropOf("timeout"), "all~2@1": dropOf("timeout") };
+  const clean = { all: { findings: [] }, compose: { body: "Fine.", comments: [] }, ...misses };
+  const fx = splitFixture({});
+  const { r } = await go(fx, clean, { until: "round1" });
+  assert.equal(r.exit, 0, r.summary);
+  rmSync(join(r.runDir, "post.done"), { force: true }); // crashed after round 1
+  const { r: r2 } = await go(fx, clean); // the resume runs the missed parts again, and they miss again
+  assert.equal(r2.exit, 0, r2.summary);
+  assert.equal(r2.runDir, r.runDir, "resumed");
+  assert.equal(runJson(r2).missed.length, 4);
+  assert.match(posts(fx)[0].body, /Not approved: 2 seats did not finish\./);
 });
 
 test("the next review removes the worktree of a finished run and keeps its ctx", async () => {

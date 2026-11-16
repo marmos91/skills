@@ -43,6 +43,7 @@ export function whyNotApproved({ event, queueApprove, reasons }, counts) {
   const why = reasons.map((r) => WHY[r]?.(counts) ?? (r.startsWith("ci ") ? "the CI state is unknown" : r));
   const list = why.length > 1 ? `${why.slice(0, -1).join(", ")} and ${why.at(-1)}` : why[0];
   if (!queueApprove) return `Not approved: ${list}.`;
-  if (reasons.join() === "ci pending") return `Not approved yet: ${list}. It is approved when CI passes.`;
+  // only the loop's tick posts the queued approval
+  if (reasons.join() === "ci pending") return counts.mode === "loop" ? `Not approved yet: ${list}. It is approved when CI passes.` : `Not approved yet: ${list}. pr-review-loop approves it when CI passes; or run pr-review again then.`;
   return `Not approved yet: ${list}. It is approved when ${reasons.includes("ci pending") ? "CI passes and " : ""}you answer post to the approve question.`;
 }

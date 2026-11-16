@@ -345,6 +345,7 @@ async function once(o, restart) {
   // A part a seat could not finish (split PR): recorded, retried on resume, and it blocks APPROVE like a drop.
   run.missed ??= [];
   const miss = (s, key, reason) => {
+    if (run.missed.some((m) => m.seat === seatId(s) && m.key === key)) return; // a resume misses the same part again
     run.missed.push({ seat: seatId(s), key, reason });
     save(runFile, run);
     log(`seat ${seatId(s)} missed part ${key} (${reason})`);
@@ -649,7 +650,7 @@ async function once(o, restart) {
         ? `${blocking.length} earlier must ${blocking.length === 1 ? "finding is" : "findings are"} still open, so the PR is blocked.`
         : "The must findings block the merge.")
       : one(composed.verdict),
-    whyNotApproved(v(), { questions: open.length, lenses: run.missing?.length ?? 0, seats: run.dropped.length + missedNow.length }),
+    whyNotApproved(v(), { questions: open.length, lenses: run.missing?.length ?? 0, seats: new Set([...run.dropped, ...missedNow].map((x) => x.seat)).size, mode }),
     // The setup stage (#38) sets f.checked: the depth and the checks run.
     f.checked ? `What was checked: ${one(f.checked)}` : "",
     depth === "full" ? proofLine(posted) : "",
