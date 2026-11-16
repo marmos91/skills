@@ -38,9 +38,13 @@ sh $SKILL_DIR/scripts/pr-land <pr>... [--dry-run]
      Questions are the finding questions that wait on a person or on a
      `pr-review` run to apply the answer: the marker counts them when it is
      posted, and when that review ran on this machine the live queue
-     replaces the count. Fetches and pushes go to the git remote whose URL is the
-     PR's repo on github.com (https, `git@github.com:`, or `ssh://` with a
-     port); with none, nothing is merged. The squash
+     replaces the count. A follow-up takes the full review's counts from
+     local state, else from the newest marker at the head on GitHub; with
+     neither (a review from before the counts) it writes `gaps=1`, and
+     `pr-land` asks for a full review. Fetches and pushes go to the git remote whose URL is the
+     PR's repo on the host `gh repo view` reports (github.com, or a GitHub
+     Enterprise host: https, `git@host:`, or `ssh://` with a port); with
+     none, nothing is merged. The squash
      title is the PR title with ` (#N)`; it must be a concise conventional
      title. Title and message get the AI-mention check (with the `allow`
      list of `.pr-open.json`, as `pr-open` uses it) and the secret scan
@@ -56,8 +60,9 @@ sh $SKILL_DIR/scripts/pr-land <pr>... [--dry-run]
    - **delete branch**, only when no open PR is based on it any more and it
      is still at the merged head; otherwise it is kept and reported.
    - **rebase children** that `pr-open` opened as stacked on this branch
-     (its parent marker): their own commits onto the new base, signed,
-     pushed with `--force-with-lease`. Any other child is retargeted only.
+     (its parent marker), or same-repo children whose history holds the
+     merged head: their own commits onto the new base, signed, pushed with
+     `--force-with-lease`. Any other child is retargeted only, with a note.
    - **issues**: tick the checklist line on the tracking issue with a link
      to the PR, close the issues the PR fixes if GitHub did not; a `#N`
      that cannot be read is noted and skipped.
@@ -68,9 +73,13 @@ sh $SKILL_DIR/scripts/pr-land <pr>... [--dry-run]
      leaves the issues done.
 3. **Report.** On `0`, show `landed` and any `notes`. On `2` or `4`, show
    `blocked` or `error`, `why`, and `done` against `notDone`. A merge is
-   never undone. Not ready: say why, merge nothing. A rebase conflict: the
-   rebase is aborted and the child's branch is untouched; the user rebases
-   it by hand.
+   never undone. Not ready: say why, merge nothing. A stop after the
+   merge also lists `retargeted`, `rebased` and `rebasePending` (children
+   not yet rebased). A rebase conflict: the rebase is aborted and the
+   child's branch is untouched; the user rebases it by hand, or fixes the
+   cause and runs `pr-land` on the merged PR again: a merged PR resumes
+   after the merge with the children still on its branch and the
+   retargeted ones whose history still holds its head.
 
 ## Rules
 

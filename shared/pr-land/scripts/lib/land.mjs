@@ -37,19 +37,20 @@ const ghJson = (dir, args) => JSON.parse(gh(dir, args) || "null");
 const URL_FORM = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]*@)?([^/:]+)(?::\d+)?\/(.+)$/i; // https://host[:port]/path, ssh://git@host[:port]/path
 const SCP_FORM = /^(?:[^@/]*@)?([^/:]+):(.+)$/; // git@host:path
 const GITHUB_HOSTS = ["github.com", "ssh.github.com"]; // ssh.github.com: SSH over port 443
-/** owner/repo (lower case) of a GitHub remote URL, or null for any other host, a local path or a longer path. */
-export function repoOfUrl(url) {
+/** owner/repo (lower case) of a remote URL on host (github.com, or the Enterprise host gh uses), or null for any other host, a local path or a longer path. */
+export function repoOfUrl(url, host = "github.com") {
   const m = URL_FORM.exec(url) ?? (url.includes("://") ? null : SCP_FORM.exec(url));
-  if (!m || !GITHUB_HOSTS.includes(m[1].toLowerCase())) return null;
+  const hosts = host.toLowerCase() === "github.com" ? GITHUB_HOSTS : [host.toLowerCase()];
+  if (!m || !hosts.includes(m[1].toLowerCase())) return null;
   const path = m[2].replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "");
   return /^[\w.-]+\/[\w.-]+$/.test(path) ? path.toLowerCase() : null;
 }
-/** The git remote whose URL is repo on GitHub: fetches and pushes go where gh merges. */
-function remoteOf(dir, repo) {
+/** The git remote whose URL is repo on host: fetches and pushes go where gh merges. */
+function remoteOf(dir, repo, host) {
   let lines = [];
   try { lines = git(dir, "config", "--get-regexp", "^remote\\..*\\.url$").split("\n"); } catch { /* no remotes */ }
-  const hit = lines.map((l) => l.split(" ")).find(([, url]) => repoOfUrl(url ?? "") === repo.toLowerCase());
-  if (!hit) throw new Blocked(`no git remote of this clone points at github.com/${repo}`);
+  const hit = lines.map((l) => l.split(" ")).find(([, url]) => repoOfUrl(url ?? "", host) === repo.toLowerCase());
+  if (!hit) throw new Blocked(`no git remote of this clone points at ${host}/${repo}`);
   return hit[0].slice("remote.".length, -".url".length);
 }
 
@@ -106,7 +107,7 @@ function reviewGaps(pr, me, localQuestions) {
   const out = [];
   if (must) out.push(`the newest pr-review review has ${must} open must`);
   if (q) out.push(`${q} pr-review question${q === 1 ? "" : "s"} not settled`);
-  if (gaps) out.push(`the newest pr-review review is incomplete: ${gaps} lens${gaps === 1 ? "" : "es"} or seat${gaps === 1 ? "" : "s"} missing`);
+  if (gaps) out.push(`the newest pr-review review is incomplete: ${gaps} lens${gaps === 1 ? "" : "es"} or seat${gaps === 1 ? "" : "s"} missing (a follow-up on a review without saved counts, or a failed seat): run a full pr-review on the head`);
   return out;
 }
 
@@ -116,6 +117,15 @@ function prsOn(dir, branch) {
   const prs = ghJson(dir, ["pr", "list", "--base", branch, "--state", "open", "--limit", String(LIMIT + 1), "--json", "number,headRefName,headRefOid,isCrossRepository,body"]);
   if (prs.length > LIMIT) throw new Blocked(`more than ${LIMIT} open PRs are based on ${branch}: retarget them by hand`);
   return prs;
+}
+
+// shortcut: fetches every same-repo PR branch on base; fine for a stack resume, slow on a repo with hundreds of open PRs.
+/** Same-repo open PRs on base whose history holds sha: the children an earlier run retargeted but did not rebase. */
+function stackedOn(dir, remote, base, sha) {
+  const prs = prsOn(dir, base).filter((c) => !c.isCrossRepository);
+  if (!prs.length) return [];
+  git(dir, "fetch", "-q", remote, ...prs.map((c) => `+refs/heads/${c.headRefName}:refs/remotes/${remote}/${c.headRefName}`));
+  return prs.filter((c) => gitOk(dir, "merge-base", "--is-ancestor", sha, `refs/remotes/${remote}/${c.headRefName}`)).map((c) => ({ ...c, onBase: true }));
 }
 
 /** Squash title and message: the PR title with (#N), the body without HTML comments. Blocked on a bad title, an AI mention or a secret. */
@@ -148,15 +158,32 @@ async function mergeAsync(dir, repo, pr, { title, message }) {
 
 /** Land PR n. Returns what was done; throws with err.done (step names) when a step fails. dryRun stops after the checks. */
 export async function land(dir, n, { dryRun = false } = {}) {
-  const done = [], notes = [];
+  const done = [], notes = [], retargeted = [], managed = [], rebased = [], skipped = [];
+  let pr, children = [], msg, remote, merged = false;
   const step = async (name, fn) => {
-    try { const r = await fn(); done.push(name); return r; } catch (e) { e.done = done; e.notes = notes; throw e; }
+    try { const r = await fn(); done.push(name); return r; } catch (e) {
+      e.done = done; e.notes = notes;
+      // Past the merge: say where each child is, so the user can fix it or rerun pr-land on this PR to resume.
+      if (done.includes("merge") && children.length) {
+        const pending = children.filter((c) => !rebased.includes(c.number) && !skipped.includes(c.number)).map((c) => c.number);
+        e.detail = { ...(e.detail ?? {}), retargeted, githubRetargeted: managed, rebased, rebasePending: pending };
+        notes.push(`#${n} is merged: run pr-land ${n} again to resume with the children`);
+      }
+      throw e;
+    }
   };
-  const { nameWithOwner: repo, defaultBranchRef: { name: def } } = ghJson(dir, ["repo", "view", "--json", "nameWithOwner,defaultBranchRef"]);
-  let pr, children, msg, remote;
+  const { nameWithOwner: repo, url, defaultBranchRef: { name: def } } = ghJson(dir, ["repo", "view", "--json", "nameWithOwner,url,defaultBranchRef"]);
+  const host = new URL(url).hostname;
+  if (host !== "github.com") process.env.GH_HOST = host; // gh api defaults to github.com; pr commands follow the remote
   await step("check", async () => {
     pr = ghJson(dir, ["pr", "view", String(n), "--json", PR_FIELDS]);
-    remote = remoteOf(dir, repo);
+    remote = remoteOf(dir, repo, host);
+    // A rerun after a stop past the merge resumes: the children still on the head, and those retargeted but not rebased.
+    if (pr.state === "MERGED") {
+      merged = true; msg = { title: pr.title };
+      if (!pr.isCrossRepository) children = [...prsOn(dir, pr.headRefName), ...stackedOn(dir, remote, pr.baseRefName, pr.headRefOid)];
+      return;
+    }
     const st = stateRoot(repo);
     // The same set the marker counts: questions waiting on a person or on a run to apply the answer.
     const localQuestions = (runId) => (existsSync(join(st, "pr", String(n), "runs", runId)) ? waitingQuestions(st, n).length : null);
@@ -167,20 +194,21 @@ export async function land(dir, n, { dryRun = false } = {}) {
     children = pr.isCrossRepository ? [] : prsOn(dir, pr.headRefName);
   });
   const { headRefName: head, baseRefName: base, headRefOid: sha } = pr;
-  if (dryRun) return { pr: n, dryRun: true, ...msg, base, children: children.map((c) => c.number), plan: STEPS.slice(1) };
+  if (dryRun) return { pr: n, dryRun: true, ...msg, base, children: children.map((c) => c.number), plan: STEPS.slice(merged ? 2 : 1) };
 
   // Merge first: a failed merge leaves every child where it was. The branch is deleted only after the retarget below.
   await step("merge", async () => {
+    if (merged) return notes.push(`#${n} was already merged: resumed after the merge`);
     // Keep the merged head locally: the rebase below needs it after the branch is gone.
     if (children.length) git(dir, "fetch", "-q", remote, `+refs/heads/${head}:refs/pr-land/${n}`);
     await mergeAsync(dir, repo, pr, msg);
   });
 
-  const managed = [];
   await step("retarget children", () => {
     for (const c of children) {
+      if (c.onBase) { retargeted.push(c.number); continue; }
       const r = ghRaw(dir, ["pr", "edit", String(c.number), "--base", base]);
-      if (r.status === 0) continue;
+      if (r.status === 0) { retargeted.push(c.number); continue; }
       if (/part of a stack/i.test(r.stderr)) managed.push(c.number); // GitHub retargets these itself after the merge
       else throw new Error(`gh pr edit ${c.number} --base ${base} failed: ${String(r.stderr).trim()}`);
     }
@@ -211,15 +239,16 @@ export async function land(dir, n, { dryRun = false } = {}) {
     if (r.status !== 0 && !/Reference does not exist/i.test(r.stdout + r.stderr)) throw new Error(`deleting ${head} failed: ${String(r.stderr).trim()}`);
   });
 
-  const rebased = [];
   await step("rebase children", () => {
     if (!children.length) return;
     git(dir, "fetch", "-q", remote, `+refs/heads/${base}:refs/remotes/${remote}/${base}`);
     for (const c of children) {
-      if (c.isCrossRepository) { notes.push(`#${c.number} is on a fork: not rebased`); continue; }
-      // A force-push rewrites someone's branch: only for a PR that pr-open opened as stacked on this head.
-      if (parentOf(c.body ?? "") !== head) { notes.push(`#${c.number} has no pr-open parent marker for ${head}: retargeted, not rebased`); continue; }
+      if (c.isCrossRepository) { skipped.push(c.number); notes.push(`#${c.number} is on a fork: not rebased`); continue; }
       git(dir, "fetch", "-q", remote, `+refs/heads/${c.headRefName}:refs/remotes/${remote}/${c.headRefName}`);
+      // A force-push rewrites someone's branch: only for a PR that pr-open opened as stacked on this head, or one whose history holds it.
+      if (parentOf(c.body ?? "") !== head && !gitOk(dir, "merge-base", "--is-ancestor", sha, `refs/remotes/${remote}/${c.headRefName}`)) {
+        skipped.push(c.number); notes.push(`#${c.number} is not stacked on ${head} (no pr-open parent marker, ${sha.slice(0, 7)} not in its history): retargeted, not rebased`); continue;
+      }
       const wt = mkdtempSync(join(tmpdir(), "pr-land-"));
       try {
         git(dir, "worktree", "add", "-q", "--detach", wt, `refs/remotes/${remote}/${c.headRefName}`);

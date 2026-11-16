@@ -43,7 +43,7 @@ test("notReady: each gap is named", () => {
     [{ reviews: [rv(mark("b".repeat(40)))] }, 0, /review is on bbbbbbb, the head is aaaaaaa/],
     [{ reviews: [rv(mark(HEAD, 1))] }, 0, /1 open must/],
     [{ reviews: [rv(mark(HEAD, 0, 2))] }, 0, /2 pr-review questions not settled/],
-    [{ reviews: [rv(mark(HEAD, 0, 0, 1))] }, 0, /incomplete: 1 lens or seat missing/],
+    [{ reviews: [rv(mark(HEAD, 0, 0, 1))] }, 0, /incomplete: 1 lens or seat missing .*run a full pr-review on the head/],
     // a marker pasted by anyone else does not count
     [{ reviews: [rv(mark(HEAD, 1)), rv(mark(HEAD), "mallory")] }, 0, /1 open must/],
     // a follow-up (no must=/questions=) does not hide the full review before it
@@ -92,6 +92,11 @@ test("repoOfUrl: GitHub https, scp and ssh forms with a port; no other host, no 
     "ssh://git@github.com:22/o/r.git", "ssh://git@ssh.github.com:443/o/r.git", "https://user@github.com/o/r.git"]) assert.equal(repoOfUrl(u), "o/r", u);
   for (const u of ["/home/me/github.com/o/r.git", "https://mygithub.com/o/r.git", "https://gitlab.com/mirror/github.com/o/r.git", "https://github.com.evil.io/o/r.git",
     "file:///srv/github.com/o/r.git", "https://github.com/x/o/r.git", "../r.git"]) assert.equal(repoOfUrl(u), null, u);
+});
+
+test("repoOfUrl: the Enterprise host gh uses for the repo, and then not github.com", () => {
+  for (const u of ["https://ghe.example.com/o/r.git", "git@ghe.example.com:o/r.git", "ssh://git@GHE.example.com:22/o/r"]) assert.equal(repoOfUrl(u, "ghe.example.com"), "o/r", u);
+  for (const u of ["https://github.com/o/r.git", "https://ghe.example.com.evil.io/o/r.git"]) assert.equal(repoOfUrl(u, "ghe.example.com"), null, u);
 });
 
 test("squash: the title gets (#N) once; bad titles, AI mentions and secrets are blocked", () => {
@@ -149,7 +154,7 @@ function stack({ conflict = false } = {}) {
 }
 
 const routes = ({ A, B }, extra = {}) => ({
-  "repo view": { stdout: { nameWithOwner: "o/r", defaultBranchRef: { name: "main" } } },
+  "repo view": { stdout: { nameWithOwner: "o/r", url: "https://github.com/o/r", defaultBranchRef: { name: "main" } } },
   "api user": { stdout: { login: ME } },
   "pr view 27": { stdout: ready({ headRefOid: A, reviews: [rv(mark(A))] }) },
   "graphql Threads": { stdout: { data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [{ isResolved: true, comments: { nodes: [] } }] } } } } } },
@@ -261,6 +266,9 @@ test("a child that conflicts: the rebase is aborted, its branch untouched, the r
   assert.equal(code, 2);
   assert.match(json.blocked, /#29 \(feat\/b\) conflicts with main/);
   assert.deepEqual(json.notDone, ["rebase children", "issues", "local cleanup"]);
+  // where each child is: retargeted, still to rebase, and how to resume
+  assert.deepEqual([json.retargeted, json.rebased, json.rebasePending], [[29], [], [29]]);
+  assert.ok(json.notes.includes("#27 is merged: run pr-land 27 again to resume with the children"));
   assert.equal(git(s.dir, "ls-remote", "upstream", "refs/heads/feat/b").split("\t")[0], s.B);
   assert.equal(git(s.dir, "worktree", "list").split("\n").length, 2); // the repo and the user's feat/a worktree: no temp one
 });
@@ -296,15 +304,53 @@ test("more children than one list holds: blocked before the merge", async (t) =>
   assert.deepEqual(mutations(gh), []);
 });
 
-test("a PR on the head without pr-open's parent marker: retargeted so it stays open, never rebased or force-pushed", async (t) => {
+test("a PR on the head without pr-open's parent marker and not built on it: retargeted so it stays open, never rebased or force-pushed", async (t) => {
   const s = stack();
-  const gh = ghStub(routes(s, { "pr list --base feat/a": [{ stdout: [{ number: 29, headRefName: "feat/b", headRefOid: s.B, isCrossRepository: false, body: "Unrelated work on feat/a." }] }, { stdout: [] }] }));
+  // feat/c branches off main before #27: the merged head is not in its history
+  git(s.dir, "checkout", "-q", "-b", "feat/c", "main~1");
+  const Cc = commit(s.dir, "c.txt", "c\n", "feat: c");
+  git(s.dir, "push", "-q", "upstream", "feat/c");
+  git(s.dir, "checkout", "-q", "main");
+  const gh = ghStub(routes(s, { "pr list --base feat/a": [{ stdout: [{ number: 29, headRefName: "feat/c", headRefOid: Cc, isCrossRepository: false, body: "Unrelated work on feat/a." }] }, { stdout: [] }] }));
   const { code, json } = await run(t, s.dir, ["27"]);
   assert.equal(code, 0, JSON.stringify(json));
   assert.deepEqual([json.landed[0].retargeted, json.landed[0].rebased], [[29], []]);
-  assert.ok(json.landed[0].notes.includes("#29 has no pr-open parent marker for feat/a: retargeted, not rebased"));
-  assert.equal(git(s.dir, "ls-remote", "upstream", "refs/heads/feat/b").split("\t")[0], s.B);
+  assert.ok(json.landed[0].notes.includes(`#29 is not stacked on feat/a (no pr-open parent marker, ${s.A.slice(0, 7)} not in its history): retargeted, not rebased`));
+  assert.equal(git(s.dir, "ls-remote", "upstream", "refs/heads/feat/c").split("\t")[0], Cc);
   assert.ok(at(gh, "pr edit 29") >= 0);
+});
+
+test("a PR on the head without the marker whose history holds the merged head: rebased like a marked child", async (t) => {
+  const s = stack();
+  ghStub(routes(s, { "pr list --base feat/a": [{ stdout: [{ number: 29, headRefName: "feat/b", headRefOid: s.B, isCrossRepository: false, body: "Built on feat/a." }] }, { stdout: [] }] }));
+  const { code, json } = await run(t, s.dir, ["27"]);
+  assert.equal(code, 0, JSON.stringify(json));
+  assert.deepEqual(json.landed[0].rebased, [29]);
+  const b = git(s.dir, "ls-remote", "upstream", "refs/heads/feat/b").split("\t")[0];
+  git(s.dir, "fetch", "-q", "upstream");
+  assert.equal(git(s.dir, "rev-parse", `${b}^`), git(s.dir, "rev-parse", "upstream/main"));
+});
+
+test("a rerun on a merged PR resumes with the children: no merge, the retargeted child still to rebase is rebased", async (t) => {
+  const s = stack();
+  git(s.dir, "checkout", "-q", "-b", "feat/z", "main~1");
+  const Z = commit(s.dir, "z.txt", "z\n", "feat: z");
+  git(s.dir, "push", "-q", "upstream", "feat/z");
+  git(s.dir, "checkout", "-q", "main");
+  const gh = ghStub(routes(s, {
+    "pr view 27": { stdout: ready({ headRefOid: s.A, state: "MERGED", reviews: [] }) },
+    "pr list --base feat/a": { stdout: [] },
+    // #29 was retargeted by the run that stopped; #30 on main is unrelated (its history lacks the merged head)
+    "pr list --base main": { stdout: [{ number: 29, headRefName: "feat/b", headRefOid: s.B, isCrossRepository: false, body: "" }, { number: 30, headRefName: "feat/z", headRefOid: Z, isCrossRepository: false, body: "" }] },
+    "api repos/o/r/git/ref/heads/feat/a": { stdout: { message: "Not Found" }, stderr: "HTTP 404", exit: 1 },
+  }));
+  git(s.dir, "push", "-q", "upstream", "--delete", "feat/a");
+  const { code, json } = await run(t, s.dir, ["27"]);
+  assert.equal(code, 0, JSON.stringify(json));
+  assert.deepEqual([json.landed[0].retargeted, json.landed[0].rebased], [[29], [29]]);
+  assert.equal(at(gh, "api -X PUT"), -1, "never merged again");
+  assert.equal(at(gh, "pr edit"), -1, "#29 is already on main");
+  assert.ok(json.landed[0].notes.includes("#27 was already merged: resumed after the merge"));
 });
 
 test("the delete: each path segment encoded, and only when the branch is still at the merged head", async (t) => {
