@@ -77,6 +77,15 @@ test("cwd is a neutral folder; the worktree is added via --add-dir", async () =>
   assert.match(readFileSync(join(dir, "argv"), "utf8"), new RegExp(`--add-dir ${wt} `));
 });
 
+// A killed process is reaped asynchronously; until then it is a zombie that still answers kill(pid, 0).
+const gone = async (pid) => {
+  for (let i = 0; i < 100; i++) {
+    try { process.kill(pid, 0); } catch (e) { return e.code === "ESRCH"; }
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  return false;
+};
+
 test("SIGTERM to the engine kills running seats", async () => {
   stub("claude", `echo $$ >"${dir}/live.pid"; sleep 300 & wait`);
   const mod = join(dirname(fileURLToPath(import.meta.url)), "..", "lib", "child.mjs");
@@ -89,7 +98,7 @@ test("SIGTERM to the engine kills running seats", async () => {
   const closed = new Promise((r) => parent.on("close", r));
   parent.kill("SIGTERM");
   await closed;
-  assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+  assert.ok(await gone(pid), `seat ${pid} still alive after 2s`);
 });
 
 test("claude adapter sends the prompt on stdin", async () => {
@@ -141,16 +150,7 @@ test("timeout kills the process group", async () => {
   await assert.rejects(runChild(base(claudeSeat, { timeoutMs: 500 })), ChildFailed);
   for (const f of ["gc.pid", "c.pid"]) {
     const pid = Number(readFileSync(join(dir, f), "utf8"));
-    // SIGKILL is delivered synchronously, but the orphaned grandchild is reaped by init
-    // asynchronously; until then it is a zombie that still answers kill(pid, 0).
-    const gone = async () => {
-      for (let i = 0; i < 100; i++) {
-        try { process.kill(pid, 0); } catch (e) { return e.code === "ESRCH"; }
-        await new Promise((r) => setTimeout(r, 20));
-      }
-      return false;
-    };
-    assert.ok(await gone(), `pid ${pid} (${f}) still alive after 2s`);
+    assert.ok(await gone(pid), `pid ${pid} (${f}) still alive after 2s`);
   }
 });
 
