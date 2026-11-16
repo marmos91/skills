@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// CLI: pr-review review|answer|tick|status|doctor|respond. Exit codes: 0 done, 1 usage or setup error, 3 questions wait, 4 a stage failed, 5 respond round cap.
+// CLI: pr-review review|answer|tick|digest|status|doctor|respond. Exit codes: 0 done, 1 usage or setup error, 3 questions wait, 4 a stage failed, 5 respond round cap.
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,6 +15,7 @@ import { answer, markAsked, openQuestions, questionWarnings } from "./lib/questi
 import { LEARNINGS, forget, suggestion } from "./lib/learnings.mjs";
 import { FINAL_STAGE, Locked, VERSION, done, holderAlive, prState, stateRoot, usageByStage } from "./lib/state.mjs";
 import { remoteRepos } from "./lib/github.mjs";
+import { digestText } from "./lib/digest.mjs";
 import { DEPTHS, setCorePaths } from "./lib/setup.mjs";
 
 // The one signal path: stop the children, then exit; the lock is released on exit.
@@ -27,6 +28,7 @@ const USAGE = `usage: pr-review review [<n|url>] [--repo owner/repo] [--dry-run]
        pr-review doctor [--config <file>]
        pr-review config core-paths <owner/repo> ['glob'...]
        pr-review tick [owner/repo]
+       pr-review digest [owner/repo]
        pr-review pause|resume [owner/repo]
        pr-review learnings forget <key> [--repo owner/repo]
        pr-review respond findings|decide <thread>|approve <thread>|decline <thread> <reason> [--wrong]|fixed <thread> <sha>|summary <points.json> [--pr <n|url>]`;
@@ -249,6 +251,12 @@ export async function main(argv, deps = {}) {
   if (cmd === "status") {
     if (rest.length > 1) throw new Usage(USAGE);
     console.log(JSON.stringify(status(repoOf(rest[0] ?? v.repo)), null, 2));
+    return 0;
+  }
+  if (cmd === "digest") {
+    if (rest.length > 1) throw new Usage(USAGE);
+    const repo = repoOf(rest[0] ?? v.repo);
+    console.log(digestText(repo, stateRoot(repo)) || `${repo}: no open questions or to-do items`);
     return 0;
   }
   if (cmd === "doctor") return doctor(v, deps);

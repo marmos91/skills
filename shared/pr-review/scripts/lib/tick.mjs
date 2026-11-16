@@ -14,6 +14,7 @@ import { limiter } from "./limit.mjs";
 import { settleCoreQuestions } from "./setup.mjs";
 import { appliedAnswer, openQuestions, pendingAnswers, queueQuestion, questionWarnings } from "./questions.mjs";
 import { withdraws } from "./verdict.mjs";
+import { sendDigest } from "./digest.mjs";
 
 const sha1 = (s) => createHash("sha1").update(s).digest("hex");
 // A corrupt journal or baseline file counts as missing, so one bad write cannot stop every later tick.
@@ -72,6 +73,7 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
     // reply-only runs end here, not in review(): sweep their worktrees too
     await sweep(rs);
     await run();
+    sendDigest({ repo, rs, config: loadCfg(), now, log });
   } finally { release(); }
   out.questions = openQuestions(rs).length;
   const todoFile = join(rs, "todo.md");

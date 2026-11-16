@@ -54,6 +54,8 @@
   "hygiene": { "enabled": true },
   // pr-respond: review rounds on your own PR before it stops and reports (exit 5).
   "respond": { "max_rounds": 5 },
+  // pr-review-loop: pipe the open questions and to-dos to this command once a day (user config only).
+  // "digest": { "command": "terminal-notifier -title pr-review" },
   // pr-converge: review rounds before the loop stops and reports (exit 5); it never merges at the cap.
   "converge": { "max_rounds": 4 }
 }

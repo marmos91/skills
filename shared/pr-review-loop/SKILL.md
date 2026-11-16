@@ -30,6 +30,13 @@ so in a fork clone they all act on the fork.
 After each tick, show what the engine printed: open questions, to-do items,
 and the PRs it reviewed or replied on. Do not repeat the posted text.
 
+## Daily digest
+
+`pr-review-loop digest [owner/repo]` prints the open questions and to-do
+items as one message. With `"digest": {"command": "..."}` in the user config,
+each tick pipes it to that command once a day (Slack webhook, push
+notification). Never show or store the command: it may hold a token.
+
 ## Pause and resume
 
 `pr-review-loop pause [owner/repo]` stops every tick for the repo until

@@ -869,6 +869,7 @@ State root: `${XDG_STATE_HOME:-~/.local/state}/pr-review/<owner>__<repo>/`.
 | `todo.md` | Points you accepted on your own PRs |
 | `tick.json` | Queue of the current tick: PRs done, PRs in progress |
 | `paused` | Present while the loop is paused |
+| `digest.json` | When `digest.command` last sent the daily digest |
 
 Fetches and worktree changes write the clone's `.git`. They take a short
 lock in the clone (`.git/pr-review/lock`) and wait up to 60 s for it.
@@ -1046,6 +1047,25 @@ The next tick applies the answers.
 pr-review-loop pause
 pr-review-loop resume
 ```
+
+### Daily digest
+
+`pr-review-loop digest [owner/repo]` prints the open questions (with links to
+the PR, the review thread and the question file) and the open items of
+`todo.md` as one plain-text message. To get it once a day, set a command in
+your user config (`~/.config/pr-review/config.json`; a repo's
+`.pr-review.json` cannot set it):
+
+```jsonc
+"digest": { "command": "terminal-notifier -title pr-review" }
+```
+
+The tick pipes the message to the command on stdin, at most once every 24
+hours and only when something is open. Any shell command works, for example
+a `curl` to a Slack incoming webhook that reads the URL from a file or an
+environment variable. The tick logs only the exit status of the command,
+never the command or its output. A failed send is retried on the next tick.
+The last send time is in `digest.json` in the repo state.
 
 ### See what is going on
 

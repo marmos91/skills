@@ -204,6 +204,8 @@ function validate(c, known) {
   need(isObj(c.hygiene) && typeof c.hygiene.enabled === "boolean", "hygiene.enabled", "a boolean");
   need(isObj(c.respond) && posInt(c.respond.max_rounds), "respond.max_rounds", "a positive integer");
   need(isObj(c.converge) && posInt(c.converge.max_rounds), "converge.max_rounds", "a positive integer");
+  // the user's own shell command (never the repo's: not in REPO_ALLOWED); doctor does not print it
+  need(c.digest === undefined || (isObj(c.digest) && (c.digest.command === undefined || (typeof c.digest.command === "string" && c.digest.command))), "digest.command", "a non-empty string");
   need(typeof c.review.sast === "boolean", "review.sast", "a boolean");
   need(["light", "full", "auto"].includes(c.review.depth), "review.depth", "light, full or auto");
   need(c.review.core_paths === undefined || strList(c.review.core_paths), "review.core_paths", "an array of strings");

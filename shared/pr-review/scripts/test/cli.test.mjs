@@ -354,3 +354,28 @@ test("review passes --depth to the engine", async () => {
   try { await main(["review", "5", "--depth", "full"], { review: async (o) => { got = o; return { exit: 0, summary: "" }; } }); } finally { process.chdir(cwd); }
   assert.equal(got.depth, "full");
 });
+
+test("digest prints the open questions (PR, thread and question file links) and the open to-dos", () => {
+  const fx = fixture();
+  let r = cli(fx, "digest");
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, "O/R: no open questions or to-do items\n");
+  process.env.XDG_STATE_HOME = fx.env.XDG_STATE_HOME;
+  const rs = stateRoot("o/r");
+  queueQuestion(rs, { ...QUESTION, fingerprint: "feedface0000", finding: { kind: "reply", title: "Review thread needs your answer", case: "c", threadId: "T", commentId: 99 } });
+  writeFileSync(join(rs, "todo.md"), "- [x] old\n- [ ] rename the flag\n");
+  r = cli(fx, "digest");
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, `pr-review-loop digest for O/R
+
+1 open question(s). Answer with "pr-review-loop answer".
+- 7-feedface: PR #7: Review thread needs your answer
+  https://github.com/O/R/pull/7
+  https://github.com/O/R/pull/7#discussion_r99
+  ${join(rs, "questions", "7-feedface.md")}
+
+1 to-do item(s) in ${join(rs, "todo.md")}:
+- [ ] rename the flag
+
+`);
+});
