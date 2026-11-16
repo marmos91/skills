@@ -2356,3 +2356,30 @@ test("2 split clusters with one fingerprint at 2 lines get a question each; an a
   assert.equal(again.r.exit, 3, "line 3 still waits for its own answer");
   assert.deepEqual(openQuestions(fx.state).map((q) => q.finding.line), [3]);
 });
+
+// #69: a problem in code the PR touches but did not cause.
+const PRE = { lens: "correctness", severity: "pre-existing", file: "b.js", line: 1, title: "Old leak", case: "b never closes", evidence: "trace", fix: "close b" };
+const preRun = { all: { findings: [PRE] }, merge: [{ ...PRE, id: "c1", found: [S0, S1] }], "v~2": [keep("c1")], compose: { body: "Changes a.", comments: [] } };
+
+test("pre-existing: posts once, collapsed at the end of the summary, never inline, and does not block", async () => {
+  const fx = fixture({ "b.js": "const b = open();\n" }); routes(fx);
+  const { r } = await go(fx, preRun);
+  assert.equal(r.exit, 0, r.summary);
+  const p = posts(fx)[0];
+  assert.equal(p.event, "APPROVE");
+  assert.equal(p.threads.length, 0);
+  assert.match(p.body, /<details><summary>1 pre-existing finding: in code this PR touches, not caused by it\. Not blocking\.<\/summary>\n\n- Old leak \(\[`b\.js`\]\([^)]+b\.js#L1\)\): b never closes\n<\/details>\n\n<!-- pr-review [^\n]+ -->$/);
+  assert.deepEqual(counts(p.body), { must: 0, questions: 0, gaps: 0 });
+  assert.ok(prState(fx.state, N).settled.includes(fingerprint(PRE)));
+});
+
+test("pre-existing: a later pass does not raise it again", async () => {
+  const fx = fixture({ "b.js": "const b = open();\n" }); routes(fx);
+  await go(fx, preRun);
+  assert.match(posts(fx)[0].body, /1 pre-existing finding/);
+  savePrState(fx.state, N, { ...prState(fx.state, N), lastReviewedSha: fx.base });
+  const { r, run } = await go(fx, { ...preRun, all: { findings: [PRE], earlier: [] }, compose: { body: "No new findings.", comments: [] } });
+  assert.equal(r.exit, 0, r.summary);
+  assert.ok(!run.calls.some((c) => c.k === "v~2"), "dropped before the vote");
+  assert.doesNotMatch(posts(fx)[1].body, /pre-existing/);
+});

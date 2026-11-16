@@ -28,7 +28,7 @@ export const settledKey = (fp, line, anchor) => (anchor ? `${fp}@${createHash("s
 const isSettled = (settled, fp, line, anchor) => settled.has(fp) || settled.has(findingKey(fp, line)) || settled.has(settledKey(fp, line, anchor));
 
 export function allowedSeverities(reviewNumber) {
-  return new Set(reviewNumber <= 1 ? ["must", "should", "nit"] : reviewNumber === 2 ? ["must", "should"] : ["must"]);
+  return new Set(reviewNumber <= 1 ? ["must", "should", "nit", "pre-existing"] : reviewNumber === 2 ? ["must", "should"] : ["must"]);
 }
 
 // learned: learn keys rejected on any PR of the repo (learnings.mjs). Dropped wherever they are, changed lines too.

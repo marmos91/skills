@@ -25,7 +25,7 @@ import { cherryPicked, coreCandidates, depthLine, pickDepth, queueCoreQuestion, 
 import { FINAL_STAGE, VERSION, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, commitStatus, summaryMarker, usageByStage, writeAtomic } from "./state.mjs";
 
 export const STAGES = ["frame", "setup", "round1", "merge", "round2", "tally", "decide", "compose", "post"];
-const RANK = { must: 0, should: 1, nit: 2 };
+const RANK = { must: 0, should: 1, nit: 2, "pre-existing": 3 };
 const sha1 = (s) => createHash("sha1").update(s).digest("hex");
 const readJson = (f) => JSON.parse(readFileSync(f, "utf8"));
 const save = (f, v) => writeAtomic(f, JSON.stringify(v, null, 2) + "\n");
@@ -529,10 +529,13 @@ async function once(o, restart) {
   const floor = allowedSeverities(f.reviewNumber);
   const forced = agreed.filter((c) => c.answered);
   const ranked = agreed.filter((c) => !c.answered && allowed.has(c.severity) && floor.has(c.severity)).sort((a, b) => RANK[a.severity] - RANK[b.severity]);
-  const posted = [...forced, ...ranked.slice(0, Math.max(0, (config.post.maxFindings ?? Infinity) - forced.length))];
+  const chosen = [...forced, ...ranked.slice(0, Math.max(0, (config.post.maxFindings ?? Infinity) - forced.length))];
+  // A pre-existing finding (#69) posts once, collapsed in the summary, never inline; it never counts for the verdict.
+  const pre = (c) => c.severity === "pre-existing";
+  const posted = chosen.filter((c) => !pre(c)), older = chosen.filter(pre);
   // below the floor here is only a must that proof lowered: a higher effort would not post it
   const belowFloor = agreed.filter((c) => !c.answered && !floor.has(c.severity)).length;
-  const leftOut = agreed.length - posted.length - belowFloor;
+  const leftOut = agreed.length - chosen.length - belowFloor;
   // Hygiene obeys the same severity floor and settled list as council findings (spec 7.5).
   const hygNew = filterNew(hyg.findings.map((h) => ({ ...h, file: "", line: null })), { reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: new Map(), learned }).keep;
   const hygItems = hygNew.filter((h) => allowed.has(h.severity)).map((h, i) => ({ ...h, id: `h${i + 1}`, fp: fingerprint(h) }));
@@ -596,7 +599,7 @@ async function once(o, restart) {
   const missedNow = run.missed.filter((m) => !done(runDir, "round1", m.key) && !isDropped(m.seat));
   let ci = ciOf(f);
   const v = () => verdict({
-    agreed: [...agreed, ...hygItems], earlierMustOpen: blocking.length,
+    agreed: [...agreed, ...hygItems].filter((c) => !pre(c)), earlierMustOpen: blocking.length,
     openQuestions: open.length, failedLenses: run.missing?.length ?? 0, droppedSeats: run.dropped.length + missedNow.length, ci: ci.state, mode, trustedAuthor: f.shellOk, unanimousZero, ownPr: f.ownPr,
   });
   // The verdict's inputs, for pr-land: open musts (earlier, inline, off-diff), questions waiting, lenses and seats missing.
@@ -650,7 +653,9 @@ async function once(o, restart) {
     belowFloor ? `${belowFloor} unproven ${belowFloor === 1 ? "finding was" : "findings were"} left out: review ${f.reviewNumber} posts only must findings.` : "",
     run.missing?.length ? `Lenses not run: ${run.missing.join(", ")}.` : "",
     // Dropped seats and missed parts stay out of the body: they are in run.json and the run log.
-    ci.line ?? "", summaryMarker(runId, f.headSha, key, counts()),
+    ci.line ?? "",
+    older.length ? `<details><summary>${older.length} pre-existing ${older.length === 1 ? "finding" : "findings"}: in code this PR touches, not caused by it. Not blocking.</summary>\n\n${older.map((c) => `- ${one(c.title)} ${at(c.file, c.line)}: ${one(c.case)}`).join("\n")}\n</details>` : "",
+    summaryMarker(runId, f.headSha, key, counts()),
   ].filter(Boolean).join("\n\n");
 
   const warnings = (hyg.warnings ?? []).map((w) => `warning: ${w}`);
@@ -755,7 +760,7 @@ async function once(o, restart) {
   const recorded = [...clean, ...folded.filter((c) => clean.some((h) => h.id === hostOf.get(c.id)))];
   let st = prState(repoState, n);
   if (st.lastRunId !== runId) { // a rerun after a crash here must not count the review twice
-    const fps = [...recorded, ...rejected, ...hygItems].map((c) => settledKey(c.fp, c.line, anchor(c.file, c.line)));
+    const fps = [...recorded, ...older, ...rejected, ...hygItems].map((c) => settledKey(c.fp, c.line, anchor(c.file, c.line)));
     Object.assign(st, {
       reviews: st.reviews + 1, lastReviewedSha: f.headSha, lastRunId: runId, settled: [...new Set([...st.settled, ...fps])],
       counts: { sha: f.headSha, ...counts() }, // a follow-up at this head starts from these

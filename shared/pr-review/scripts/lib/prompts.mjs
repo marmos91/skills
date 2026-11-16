@@ -127,6 +127,7 @@ export function round1Prompt(frame, lenses, maxTurns, part) {
     "## Rules",
     `- Allowed severities: ${sev.join(", ")}. Do not report a finding at another severity.`,
     "- must: a bug, a security hole, data loss, or a break at the expected load. should: risky code with no test, real slowness, code that should not exist. nit: a small, clear gain.",
+    ...(sev.includes("pre-existing") ? ["- pre-existing: a real problem in code the PR touches whose cause is in lines the PR did not change. It never blocks. Use it instead of must, should or nit for such a finding."] : []),
     isAncestor && base
       ? `- This is a delta review. Only the delta can get new findings: the lines that \`git -C ${frame.worktree} diff ${base}..${frame.headSha}\` changes. The council reviewed the other lines before. Report them only when the delta changes their behavior.`
       : "- Review each line that the diff adds or changes. Read other code only to judge those lines.",
@@ -212,7 +213,7 @@ export function mergePrompt(frame, findingsBySeat, earlierAgreed = [], maxTurns)
     "",
     "## Output",
     OUT,
-    '[{"id": "c1", "lens": "<lens>", "severity": "must|should|nit", "file": "path", "line": 42, "symbol": "optional", "title": "...", "case": "...", "evidence": "...", "fix": "...", "found": ["<seat id>"], "members": ["f1"], "reverses": "<earlier id>"}]',
+    '[{"id": "c1", "lens": "<lens>", "severity": "must|should|nit|pre-existing", "file": "path", "line": 42, "symbol": "optional", "title": "...", "case": "...", "evidence": "...", "fix": "...", "found": ["<seat id>"], "members": ["f1"], "reverses": "<earlier id>"}]',
   ].join("\n");
 }
 

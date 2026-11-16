@@ -161,7 +161,8 @@ nothing.
 
 The lens prompts are in `shared/pr-review/lenses/`. Every finding needs a
 concrete case: an input or situation and the wrong result. No case, no
-finding. A finding has `lens`, `severity` (`must`, `should`, `nit`), `file`,
+finding. A finding has `lens`, `severity` (`must`, `should`, `nit`,
+`pre-existing`), `file`,
 `line`, `title`, `case`, `evidence` and `fix`.
 
 ### 3. Merge
@@ -261,6 +262,10 @@ Compose gets only the repo's review guidance: `REVIEW.md` and the files in
   never lets the verdict say "Nothing blocks." while it blocks. Otherwise the body says "No new
   findings." Fixed earlier findings get their link in the thread.
 - A finding off the diff lines is listed once, under "Outside the diff".
+- A `pre-existing` finding (a real problem in code the PR touches, caused
+  by lines it did not change) is listed once, collapsed at the end of the
+  summary, never inline. It never blocks and never counts for the verdict
+  or for `pr-land`.
 - A finding from a single seat, or one the author must clarify, is written
   as a question to the author.
 - The effort level caps the severities and the count (see
@@ -371,7 +376,8 @@ They apply to a manual `review` and to the loop.
 1. **Scope shrinks.** A re-review raises new findings only on the delta.
    Code that the council already reviewed gets no new findings, unless a new
    commit changes its behaviour.
-2. **Severity rises.** Review 1 can raise `must`, `should`, `nit`. Review 2
+2. **Severity rises.** Review 1 can raise `must`, `should`, `nit`,
+   `pre-existing`. Review 2
    only `must` and `should`. Review 3 and later only `must`.
 3. **Settled stays settled.** Each finding has a fingerprint: lens, file,
    symbol, normalized title (no line number, so a moved line keeps its
