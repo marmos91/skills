@@ -12,9 +12,10 @@ export function fingerprint(f) {
 
 // The key of a rejected finding (learnings.mjs): the fingerprint inputs with the title's digits kept, so
 // "timeout of 3s" and "of 30s" stay apart. A block across PRs must not catch a neighbour. Only an explicit line
-// number leaves the title, so moved code keeps its key: "line 42", "lines 3-5", "at L42" or "#L42", "a.js:42".
-// A bare number, "L2 cache" or "16:9" stays.
-const LINE_REF = /\blines?\s+\d+(?:\s*[-\u2013]\s*\d+)?\b|(?<=(?:\b(?:at|on|near|see)\s+|#))L\d+(?:-L?\d+)?\b|(?<=\w\.[a-z]\w*):\d+(?::\d+)?\b/gi;
+// number leaves the title, so moved code keeps its key: "line 42", "lines 3-5", "#L42", "a.js:42" (a source
+// extension). A bare number, "on L2 cache", a port ("db.local:6379", "api.example.com:8080") or "16:9" stays.
+const SRC = "c|cc|cpp|cs|css|go|h|hpp|html|java|js|jsx|kt|lua|md|mjs|cjs|nix|php|py|rb|rs|scss|sh|sql|swift|toml|ts|tsx|vue|ya?ml|json";
+const LINE_REF = new RegExp(`\\blines?\\s+\\d+(?:\\s*[-\\u2013]\\s*\\d+)?\\b|#L\\d+(?:-L?\\d+)?\\b|(?<=\\w\\.(?:${SRC})):\\d+(?::\\d+)?\\b`, "gi");
 const keyOfTitle = (f, title) => createHash("sha1").update(["learn", f.lens, f.file, f.symbol ?? "", String(title ?? "").toLowerCase().replace(/\p{P}/gu, "").replace(/\s+/g, " ").trim()].join("\u0000")).digest("hex");
 export const learnKey = (f) => keyOfTitle(f, String(f.title ?? "").replace(LINE_REF, ""));
 // The key before line numbers left the title: lines learned, and learn= markers posted, by an older engine.
