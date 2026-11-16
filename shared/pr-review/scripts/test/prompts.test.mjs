@@ -222,7 +222,7 @@ test("reply: the draft block uses the frame nonce", () => {
   assert.ok(r.includes("<<<SEAT-DATA-feedbeef\n") && r.includes("<<<PR-DATA-feedbeef\n"));
 });
 
-test("merge: pre-existing is offered on review 1 only", () => {
+test("merge: pre-existing is offered on every review", () => {
   assert.match(mergePrompt(frame(), {}), /"severity": "must\|should\|nit\|pre-existing"/);
-  assert.doesNotMatch(mergePrompt(frame({ reviewNumber: 2 }), {}), /pre-existing/);
+  assert.match(mergePrompt(frame({ reviewNumber: 3 }), {}), /"severity": "must\|pre-existing"/);
 });

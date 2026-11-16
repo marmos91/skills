@@ -2429,6 +2429,17 @@ test("pre-existing: \"No new findings.\" is dropped when the body lists one", as
   assert.doesNotMatch(posts(fx)[0].body, /No new findings/);
 });
 
+test("pre-existing: on a line the PR changed it takes a raised level and posts inline", async () => {
+  const fx = fixture({ "b.js": "const b = open();\n" }); routes(fx);
+  // a.js line 1 is added by the PR: every seat calling it pre-existing is not enough
+  const onA = { ...PRE, file: "a.js" };
+  const { r } = await go(fx, { ...preRun, all: { findings: [onA] }, merge: (o) => [{ ...onA, id: "c1", found: [S0, S1], members: allFids(o) }], compose: { body: "Changes a.", comments: [{ id: "c1", body: "**should:** leak" }] } });
+  assert.equal(r.exit, 0, r.summary);
+  const p = posts(fx)[0];
+  assert.equal(p.threads.length, 1);
+  assert.doesNotMatch(p.body, /pre-existing/);
+});
+
 test("pre-existing: one seat or the judge alone cannot turn a must into pre-existing", async () => {
   const fx = fixture(); routes(fx);
   await go(fx, happy({ "all~1": { findings: [F({ severity: "pre-existing" })] }, merge: (o) => [C("c1", { severity: "pre-existing", members: allFids(o) })] }));
