@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { GitError, NotOnHead, Q, RoundCap, approve, gitReaders, decide, decline, findings, fixed, summary, summaryText } from "../lib/respond.mjs";
+import { GitError, NotOnHead, Q, RoundCap, approve, gitReaders, decide, decline, findings, fixed, recordedPoints, summary, summaryText } from "../lib/respond.mjs";
 import { loadConfig } from "../lib/config.mjs";
 import { stateRoot } from "../lib/state.mjs";
 import { learn } from "../lib/learnings.mjs";
@@ -262,6 +262,21 @@ test("summary: opens with the count, answers point by point; once per head", asy
   assert.equal((await summary({ repo: REPO, n: N, points: pts, gh })).action, "posted");
   assert.match(gh.calls.comment[0], /<!-- pr-review sha=h1 key=[0-9a-f]{40} -->$/);
   assert.equal((await summary({ repo: REPO, n: N, points: pts, gh: fakeGh([], { marker: true }) })).action, "skipped");
+});
+
+test("the fingerprints come from our own council marker: findings list them, summary records them per head", async () => {
+  freshState();
+  const [f1, f2, k] = ["1", "2", "9"].map((x) => x.repeat(40));
+  const ours = th("T1", [c(1, ME, `**must:** x\n\n<!-- pr-review run=r1 sha=h0 key=${k} fp=${f1},${f2} -->`)]);
+  // a marker pasted by someone else carries no fingerprint
+  const pasted = th("T2", [c(2, "mallory", `y\n\n<!-- pr-review run=r1 sha=h0 key=${k} fp=${f1} -->`)]);
+  const gh = fakeGh([ours, pasted]);
+  assert.deepEqual((await findings({ repo: REPO, n: N, gh, config: loadConfig() })).findings.map((f) => f.fps), [[f1, f2], []]);
+  const pts = [{ n: 1, status: "done", sha: SHA, thread: "T1", text: "fixed." }, { n: 2, status: "open", thread: "T2", text: "no." }];
+  assert.deepEqual((await summary({ repo: REPO, n: N, points: pts, gh })).points.map((p) => p.fps), [[f1, f2], []]);
+  assert.deepEqual(recordedPoints(REPO, N, "h1").map((p) => p.fps), [[f1, f2], []]);
+  assert.equal(recordedPoints(REPO, N, "h0"), null);
+  await assert.rejects(summary({ repo: REPO, n: N, points: [{ ...pts[0], thread: "T9" }], gh }), /thread T9 not found/);
 });
 
 test("git readers: a failed git throws; only exit 1 of merge-base means not in the head", () => {
