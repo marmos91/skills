@@ -10,12 +10,13 @@ metadata:
 The `pr-land` command does every step; you (the agent) read its JSON and
 tell the user what happened. `$SKILL_DIR` is the folder of this file.
 
-Run it in a clone of the repo. It prints JSON. Exit codes: `0` done, `1`
+Run it in a clone of the repo. `--repo owner/repo` names the repo when the
+clone has several remotes (a fork); the clone needs a remote for it. It prints JSON. Exit codes: `0` done, `1`
 usage error, `2` blocked (not ready, a scan hit, a rebase conflict), `4` a
 `git` or `gh` step failed.
 
 ```sh
-sh $SKILL_DIR/scripts/pr-land <pr>... [--dry-run]
+sh $SKILL_DIR/scripts/pr-land <pr>... [--repo owner/repo] [--dry-run]
 ```
 
 ## Steps
