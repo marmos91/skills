@@ -84,6 +84,7 @@ function routes(fx, { head = fx.head, body = "Changes a.", threads = [], pending
     "api -X POST repos/o/r/pulls/5/comments/11/replies --input -": { stdout: {} },
     "api -X PATCH repos/o/r/pulls/comments/12 --input -": { stdout: {} },
     "api -X PATCH repos/o/r/pulls/comments/13 --input -": { stdout: {} },
+    ...Object.fromEntries([fx.head, head].map((sha) => [`api -X POST repos/o/r/statuses/${sha} --input -`, { stdout: {} }])),
     "graphql ResolveThread": { stdout: { data: { resolveReviewThread: { thread: { id: "T1", isResolved: true } } } } },
   };
   writeFileSync(join(fx.stubDir, "routes.json"), JSON.stringify(r));
@@ -91,6 +92,8 @@ function routes(fx, { head = fx.head, body = "Changes a.", threads = [], pending
 
 const mutations = (fx) => (existsSync(join(fx.stubDir, "mutations.jsonl")) ? readFileSync(join(fx.stubDir, "mutations.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l)) : []);
 const posts = (fx) => mutations(fx).filter((m) => m.key === "graphql PostReview").map((m) => m.input.variables.input);
+
+const statuses = (fx) => mutations(fx).filter((m) => m.key.startsWith("api -X POST repos/o/r/statuses/")).map((m) => ({ sha: m.argv[3].split("/").pop(), ...m.input }));
 
 const F = (over = {}) => ({ lens: "correctness", severity: "must", file: "a.js", line: 2, title: "Off by one", case: "b = 3 -> wrong total", evidence: "trace", fix: "use 2", ...over });
 const C = (id, over = {}) => ({ ...F(), id, found: [S0, S1], ...over });
@@ -158,6 +161,121 @@ test("learnings: a fingerprint in .pr-review/learnings.md on the base branch, or
   learn(fx2.state, [learnKey(F())], "PR #3: not a bug");
   const b = await go(fx2, happy());
   assert.ok(!b.run.calls.some((c) => c.k === "v~2"), "local file");
+});
+
+test("commit status: failure with the counts for an open must, success for a clean pass", async () => {
+  let fx = fixture(); routes(fx);
+  await go(fx, happy());
+  assert.deepEqual(statuses(fx), [{ sha: fx.head, state: "failure", description: "1 must", target_url: "https://github.com/o/r/pull/5#pullrequestreview-1", context: "pr-review" }]);
+  fx = fixture(); routes(fx);
+  const { r } = await go(fx, { all: { findings: [] }, merge: [], compose: { body: "Changes a.", comments: [] } });
+  assert.equal(r.exit, 0, r.summary);
+  assert.deepEqual(statuses(fx).map((x) => [x.sha, x.state, x.description]), [[fx.head, "success", "no open must, question or gap"]]);
+});
+
+test("commit status goes on the reviewed head, not the head the PR has now", async () => {
+  const fx = fixture(); routes(fx);
+  const moved = "f".repeat(40);
+  // the author pushes right after the review is posted
+  const gh = { ...github, postReview: async (...a) => { const out = await github.postReview(...a); routes(fx, { head: moved }); return out; } };
+  await go(fx, happy(), { gh });
+  assert.deepEqual(statuses(fx).map((x) => x.sha), [fx.head]);
+});
+
+const lastStatus = (fx) => { const x = statuses(fx).at(-1); return x && [x.sha, x.state, x.description]; };
+
+test("commit status: a failed status call is logged and the review stays posted", async () => {
+  const fx = fixture(); routes(fx);
+  const lines = [];
+  const gh = { ...github, status: async () => { throw new Error("HTTP 403"); } };
+  const { r } = await go(fx, happy(), { gh, log: (l) => lines.push(l) });
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(r.url, "https://github.com/o/r/pull/5#pullrequestreview-1");
+  assert.ok(lines.some((l) => /^commit status failed: HTTP 403/.test(l)), lines.join("\n"));
+});
+
+test("commit status leaves out a question the same run answers", async () => {
+  const fx = fixture(); routes(fx);
+  const first = await go(fx, split());
+  answer(fx.state, basename(first.r.questions[0], ".md"), "post");
+  await go(fx, split());
+  assert.deepEqual(lastStatus(fx), [fx.head, "failure", "1 must"]);
+});
+
+test("commit status: an answer-only drop of a question clears the failure", async () => {
+  const fx = fixture(); routes(fx);
+  const answers = split({
+    merge: [C("c1", { found: [S0] }), C("c2", { severity: "should", line: 3, title: "Slow loop" })], "v~1": [keep("c1")], "v~2": [drop("c1"), keep("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c2", body: "**should:** slow" }] },
+  });
+  await go(fx, answers, { mode: "loop", effort: "medium" });
+  assert.deepEqual(lastStatus(fx), [fx.head, "failure", "1 question"]);
+  for (const q of openQuestions(fx.state)) answer(fx.state, q.id, "drop");
+  await go(fx, answers);
+  assert.equal(posts(fx).length, 1, "nothing posted");
+  assert.deepEqual(lastStatus(fx), [fx.head, "success", "no open must, question or gap"]);
+});
+
+test("commit status: dropping a must the secret scan held removes it from the count", async () => {
+  const fx = fixture(); routes(fx);
+  const token = "ghp_" + "D".repeat(36);
+  await go(fx, happy({ compose: { body: "Summary.", comments: [{ id: "c1", body: `**must:** ${token}` }] } }));
+  assert.deepEqual(lastStatus(fx), [fx.head, "failure", "1 must, 1 question"]);
+  answer(fx.state, openQuestions(fx.state)[0].id, "drop");
+  await go(fx, happy());
+  assert.deepEqual(lastStatus(fx), [fx.head, "success", "no open must, question or gap"]);
+});
+
+test("commit status: posting a must the secret scan held counts it once", async () => {
+  const fx = fixture(); routes(fx);
+  const token = "ghp_" + "E".repeat(36);
+  const held = happy({ compose: { body: "Summary.", comments: [{ id: "c1", body: `**must:** token ${token} leaks` }] } });
+  await go(fx, held);
+  answer(fx.state, openQuestions(fx.state)[0].id, "post");
+  await go(fx, held);
+  assert.equal(posts(fx).length, 2);
+  assert.deepEqual(counts(posts(fx)[1].body), { must: 1, questions: 0, gaps: 0 });
+  assert.deepEqual(lastStatus(fx), [fx.head, "failure", "1 must"]);
+});
+
+test("commit status: dropping a must held at an older head keeps this head's must", async () => {
+  const fx = fixture(); routes(fx);
+  const token = "ghp_" + "F".repeat(36);
+  await go(fx, happy({ compose: { body: "Summary.", comments: [{ id: "c1", body: `**must:** ${token}` }] } }));
+  const [q] = openQuestions(fx.state);
+  // the author pushes B: the held finding is gone, another must is found
+  git(fx.seed, "checkout", "-q", "feat");
+  const b = commit(fx.seed, { "a.js": "const a = 2;\nconst b = 3;\nconst c = 9;\nconst d = 5;\n" }, "fix: c");
+  git(fx.seed, "push", "-qf", fx.origin, "HEAD:refs/pull/5/head");
+  routes(fx, { head: b });
+  const other = F({ line: 3, title: "Wrong c" });
+  await go(fx, { all: { findings: [other] }, merge: [C("c1", { ...other })], "v~2": [keep("c1")], compose: { body: "Summary.", comments: [{ id: "c1", body: "**must:** wrong c" }] } });
+  assert.deepEqual(lastStatus(fx), [b, "failure", "1 must, 1 question"]);
+  answer(fx.state, q.id, "drop");
+  await go(fx, happy());
+  assert.deepEqual(lastStatus(fx), [b, "failure", "1 must"]);
+});
+
+test("commit status: a rerun after a follow-up crashed before its bookkeeping still counts the must it posted", async () => {
+  const fx = fixture(); routes(fx);
+  const answers = split({
+    merge: [C("c1", { found: [S0] }), C("c2", { severity: "must", line: 3, title: "Must one" })], "v~1": [keep("c1")], "v~2": [drop("c1"), keep("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c2", body: "**must:** one" }] },
+  });
+  await go(fx, answers, { mode: "loop", effort: "medium" });
+  const [q] = openQuestions(fx.state);
+  answer(fx.state, q.id, "post");
+  const stFile = join(fx.state, "pr", "5", "state.json"), before = readFileSync(stFile, "utf8");
+  await go(fx, answers);
+  assert.deepEqual(lastStatus(fx), [fx.head, "failure", "2 must"]);
+  // crash right after the post: no state saved, the answer not applied, the follow-up is on GitHub
+  writeFileSync(stFile, before);
+  const qf = join(fx.state, "questions", `${q.id}.json`);
+  const rec = JSON.parse(readFileSync(qf, "utf8")); delete rec.appliedAt; writeFileSync(qf, JSON.stringify(rec));
+  routes(fx, { reviews: [{ body: posts(fx)[1].body, user: { login: ME }, state: "COMMENTED" }], reviewComments: [{ body: posts(fx)[1].threads[0].body, user: { login: ME } }] });
+  await go(fx, answers);
+  assert.equal(posts(fx).length, 2, "not posted twice");
+  assert.deepEqual(lastStatus(fx), [fx.head, "failure", "2 must"]);
 });
 
 test("rerun after a crash before markDone(post) does not post again", async () => {

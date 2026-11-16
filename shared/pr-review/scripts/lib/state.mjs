@@ -210,6 +210,11 @@ export function usageByStage(dir) {
 
 // The summary marker of a full review carries the verdict's inputs; pr-land gates a merge on them. Follow-ups and replies have none.
 export const summaryMarker = (runId, sha, key, { must, questions, gaps }) => `<!-- pr-review run=${runId} sha=${sha} key=${key} must=${must} questions=${questions} gaps=${gaps} -->`;
+// The commit status of a review, from the same counts as its marker: any open must, question or gap fails it.
+export function commitStatus({ must, questions, gaps }) {
+  const parts = [[must, "must", "must"], [questions, "question", "questions"], [gaps, "gap", "gaps"]].filter(([k]) => k).map(([k, one, many]) => `${k} ${k === 1 ? one : many}`);
+  return { state: parts.length ? "failure" : "success", description: parts.join(", ") || "no open must, question or gap" };
+}
 // Only the engine's marker counts: the last line of the body. A marker that model text put earlier in the body is ignored.
 const SUMMARY = /(?:^|\n)<!-- pr-review run=(\S+) sha=([0-9a-f]+) key=([0-9a-f]+) must=(\d+) questions=(\d+) gaps=(\d+) -->\s*$/;
 /** { runId, sha, key, must, questions, gaps } from the last line of a full review's body, or null. */

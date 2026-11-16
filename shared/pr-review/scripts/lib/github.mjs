@@ -186,7 +186,9 @@ export async function checks(repo, n, sha) {
   if (head.headRefOid !== sha) return { state: "pending", since: null, items: [], stale: true }; // head moved: CI of the pinned sha is unknown
   const { stdout, stderr, code } = await run(["pr", "checks", String(n), "-R", repo, "--json", "name,state,link,bucket,startedAt"], { okCodes: [0, 1, 8] });
   let rows = [];
-  if (stdout.trim()) rows = JSON.parse(stdout);
+  // Our own status is not CI: it is named pr-review and links this PR or one of its reviews. A CI job named pr-review still counts.
+  const own = new RegExp(`^https://github\\.com/${repo.replace(/[.]/g, "\\.")}/pull/${n}(?:#pullrequestreview-\\d+)?$`);
+  if (stdout.trim()) rows = JSON.parse(stdout).filter((r) => !(r.name === "pr-review" && own.test(r.link ?? "")));
   else if (code === 1 && !/no checks reported/i.test(stderr)) throw new GhError(`gh pr checks exited 1: ${redact(stderr.trim())}`, { code, stderr: redact(stderr.trim()) });
   const items = rows.map((r) => ({ name: r.name, state: r.bucket, url: r.link, runId: /\/actions\/runs\/(\d+)/.exec(r.link ?? "")?.[1] ?? null }));
   const pend = rows.filter((r) => !RED.has(r.bucket) && !OK.has(r.bucket));
@@ -199,4 +201,9 @@ export async function checks(repo, n, sha) {
 export async function failedLog(repo, runId, lines = 80) {
   const { stdout } = await run(["run", "view", String(runId), "-R", repo, "--log-failed"]);
   return stdout.replace(/\n+$/, "").split("\n").slice(-lines).join("\n");
+}
+
+/** A commit status on `sha` (context `pr-review`), so branch protection can require it. */
+export async function status(repo, sha, { state, description, target_url }) {
+  return json(["api", "-X", "POST", `repos/${repo}/statuses/${sha}`, "--input", "-"], { input: JSON.stringify({ state, description, target_url, context: "pr-review" }) });
 }
