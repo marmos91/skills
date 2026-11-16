@@ -8,8 +8,13 @@ defaults can rest on data.
 Nothing is posted. The engine stops after the vote tally (`until: "tally"`), so
 no decide, compose or post stage runs, and jev is never asked. The engine
 keeps its state in a temporary `XDG_STATE_HOME`, not in your own pr-review
-state. Old review threads are hidden from the seats, so they cannot read an
-earlier finding on the same bug.
+state. Each case runs in a fresh clone that holds only the case's commits: its
+origin has the base branch at the case base and the PR ref at the head, so the
+fix and every later commit are out of reach of the seats, and the diff is
+exactly base...head. The runner builds it, and checks the PR head on GitHub and
+that the base is an ancestor of the head, before any model call. Old review
+threads are hidden from the seats, so they cannot read an earlier finding on the
+same bug.
 
 The benchmark is not part of the npm package (`bench/` is not in `files`) and
 CI does not run it. CI runs only the scorer tests (`test/score.test.mjs`).
@@ -58,15 +63,18 @@ node bench/pr-review/run.mjs --effort medium --config mix-opus-only.json --label
   pr-review config applies.
 - `--depth full` runs the setup checks too. The default is `light`.
 - `--slack N` (default 3): a finding up to N lines outside a bug's range still finds it.
-- `--clones <dir>` keeps the clones of the case repos (default `~/.cache/pr-review-bench`).
+- `--state <dir>` is the engine state and the case clones (default: a new temp folder).
+- `--only a,b` runs those cases; an id that is no case is an error.
 
 Each run writes `results/<label>.json` (every cluster, with its file, line, severity and
-vote status) and `results/<label>.md`, and prints the table.
+vote status) and `results/<label>.md` (git ignores `results/`), and prints the table.
 
 ## The numbers
 
-- **bugs found (agreed)**: bugs that an agreed finding overlaps (same file, line in the
-  range plus the slack, any severity). This is what a review would post.
+- **found by an agreed finding**: bugs that an agreed finding overlaps (same file, line in
+  the range plus the slack, any severity). Agreed is what the vote keeps. Compose can
+  still leave some out (the effort's severities and post limit, `post.maxFindings`), so
+  this is an upper bound on what a review posts.
 - **found before the vote**: the same over every merged cluster. The gap between the two
   is what the vote filters out.
 - **FP must/should**: agreed `must` and `should` findings that overlap no known bug. A case

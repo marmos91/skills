@@ -2,3 +2,4 @@
 *.bak
 __pycache__/
 node_modules/
+bench/pr-review/results/

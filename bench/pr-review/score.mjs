@@ -31,6 +31,20 @@ export function checkCases(cases) {
   return cases;
 }
 
+/** Checks the runner's flags. -> { slack, cases } (the cases --only picks). Throws a usage error. */
+export function checkArgs(v, cases) {
+  if (!["low", "medium", "high", "max"].includes(v.effort)) throw new Error("--effort must be low|medium|high|max (auto would pick per case)");
+  if (!["tally", "frame"].includes(v.until)) throw new Error("--until must be tally or frame");
+  if (!["light", "full"].includes(v.depth)) throw new Error("--depth must be light or full");
+  // Number("3l") is NaN, and a NaN slack matches no finding: every hit would score as a false positive
+  if (!/^\d+$/.test(String(v.slack))) throw new Error("--slack must be a non-negative integer");
+  if (v.only === undefined) return { slack: Number(v.slack), cases };
+  const only = v.only.split(",").map((s) => s.trim()).filter(Boolean);
+  const unknown = only.filter((id) => !cases.some((c) => c.id === id));
+  if (!only.length || unknown.length) throw new Error(`--only: no case ${unknown.join(", ") || "named"}; cases: ${cases.map((c) => c.id).join(", ")}`);
+  return { slack: Number(v.slack), cases: cases.filter((c) => only.includes(c.id)) };
+}
+
 // slack: a finding a few lines off the range names the same code (seats cite the call, the bug sits above it)
 const hits = (f, b, slack) => f.file === b.file && f.line >= b.lines[0] - slack && f.line <= b.lines[1] + slack;
 const serious = (f) => f.severity === "must" || f.severity === "should";
@@ -83,7 +97,7 @@ export function markdown(label, rows) {
     : `| ${r.id} | ${r.agreed.found}/${r.bugs} | ${r.prevote.found}/${r.bugs} | ${r.agreed.fp} (${r.prevote.fp}) | ${r.clusters.agreed}/${r.clusters.split}/${r.clusters.rejected} | ${tokensIn(r.tokens)}/${r.tokens?.output ?? 0} | ${Math.round(r.wallMs / 1000)} |`;
   return [
     `## ${label}`, "",
-    "| case | bugs found (agreed) | found before the vote | FP must/should agreed (before) | clusters agreed/split/rejected | tokens in/out | wall s |",
+    "| case | found by an agreed finding | found before the vote | FP must/should agreed (before) | clusters agreed/split/rejected | tokens in/out | wall s |",
     "|---|---|---|---|---|---|---|",
     ...rows.map(line),
     `| **total** | ${pct(t.recall)} | ${pct(t.recallPrevote)} | ${t.fp} (${t.fpPrevote}) | | ${t.tokensIn}/${t.tokensOut} | ${t.wallS} |`,
