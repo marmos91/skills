@@ -681,7 +681,7 @@ async function once(o, restart) {
     }
     // A later "post" answer posts this engine-final body (checked, marked). A held host keeps its own finding
     // only: its folded findings went out on their own.
-    save(join(runDir, "held", `${x.fp}.json`), { body: redact(x.fps.length > 1 ? (await checked(own(x))).body : x.body) });
+    save(join(runDir, "held", `${x.fp}-${x.line}.json`), { body: redact(x.fps.length > 1 ? (await checked(own(x))).body : x.body) });
     // Held back. The question keeps the fingerprint and the rule ids only: never the text, which holds the secret.
     open.push(queueQuestion(repoState, {
       pr: n, sha: f.headSha, fingerprint: x.fp, file: x.file, line: x.line, snippet: "",
@@ -798,8 +798,8 @@ async function postStatus(gh, repo, n, sha, counts, url, log) {
 }
 
 // The engine-final body of a comment that an earlier run held back by the secret scan, redacted; null when gone.
-function heldText(repoState, n, runId, fp) {
-  try { return readJson(join(repoState, "pr", String(n), "runs", runId ?? "", "held", `${fp}.json`)).body; } catch { return null; }
+function heldText(repoState, n, runId, fp, line) {
+  try { return readJson(join(repoState, "pr", String(n), "runs", runId ?? "", "held", `${fp}-${line}.json`)).body; } catch { return null; }
 }
 
 /**
@@ -832,7 +832,7 @@ async function followUp(o, head, pst, answered) {
     // full depth (proven is set): a suggestion the follow-up cannot test says so, like one the time cap cut
     const fix = f.fix && f.proven !== undefined && suggestionOf(f.fix) ? uncheckedNote(f.fix, "a follow-up runs no test") : f.fix;
     const base = `**${f.severity}:** ${f.title}\n\n${f.case}${fix ? `\n\n${fix}` : ""}${q.answer === "ask-author" ? "\n\nCan you confirm this case?" : ""}`;
-    const text = f.secret ? heldText(repoState, n, pst.lastRunId, q.fingerprint) : f.proven === false ? markUnproven(base, !diffLine(hunks, f.file, f.line)) : base;
+    const text = f.secret ? heldText(repoState, n, pst.lastRunId, q.fingerprint, f.line) : f.proven === false ? markUnproven(base, !diffLine(hunks, f.file, f.line)) : base;
     if (!text) continue;
     const s = scanOutbound(text, { repo });
     if (s.ok) items.push({ q, text: linkRefs(text, `https://github.com/${repo}/blob/${head}`, (p) => headFile(o.repoDir ?? process.cwd(), head, p)) });
@@ -840,7 +840,8 @@ async function followUp(o, head, pst, answered) {
   }
   let url = null;
   if (items.length) {
-    const fps = items.map((x) => x.q.fingerprint).sort();
+    // by line too: a later answer for another line of one fp is a new follow-up
+    const fps = items.map((x) => findingKey(x.q.fingerprint, x.q.finding.line)).sort();
     const key = sha1(`followup\0${head}\0${fps.join(",")}`);
     const p = place(items.map(({ q, text }) => ({ file: q.finding.file, line: q.finding.line, body: `${text}\n\n${marker(runId, head, inlineKeyOf(head, q.fingerprint, q.finding.file, q.finding.line), q.fingerprint, learnKey(q.finding))}` })), hunks, `https://github.com/${repo}/blob/${head}`);
     // The follow-up's marker is the new state of the head for pr-land: the full review's counts, plus the musts posted
@@ -858,7 +859,7 @@ async function followUp(o, head, pst, answered) {
     }
     const st = prState(repoState, n);
     st.counts = { sha: head, ...counts };
-    st.settled = [...new Set([...st.settled, ...items.map(({ q }) => findingKey(q.fingerprint, q.finding.line))])];
+    st.settled = [...new Set([...st.settled, ...fps])];
     // posted findings join agreed too, so a reworded repeat on the same line still links (same lens)
     st.agreed = [...(st.agreed ?? []), ...items.map(({ q }) => ({ id: q.fingerprint, lens: q.finding.lens, severity: q.finding.severity, file: q.finding.file, line: q.finding.line, title: q.finding.title }))];
     savePrState(repoState, n, st);

@@ -6,7 +6,7 @@ function finding(f, p, errs) {
   if (!str(f.lens)) errs.push(`${p}.lens: required`);
   if (!SEV.includes(f.severity)) errs.push(`${p}.severity: must be ${SEV.join("|")}`);
   if (!str(f.file)) errs.push(`${p}.file: required`);
-  if (typeof f.line !== "number") errs.push(`${p}.line: must be a number`);
+  if (!Number.isInteger(f.line)) errs.push(`${p}.line: must be an integer`);
   if (!str(f.title)) errs.push(`${p}.title: required`);
   if (!str(f.case)) errs.push(`${p}.case: required, non-empty`);
   if (typeof f.fix !== "string") errs.push(`${p}.fix: must be a string`);
@@ -42,7 +42,7 @@ const stages = {
       ids.add(x?.id);
       for (const k of ["id", "lens", "file", "title"]) if (!str(x?.[k])) errs.push(`${p}.${k}: required`);
       if (!SEV.includes(x?.severity)) errs.push(`${p}.severity: must be ${SEV.join("|")}`);
-      if (typeof x?.line !== "number") errs.push(`${p}.line: must be a number`);
+      if (!Number.isInteger(x?.line)) errs.push(`${p}.line: must be an integer`);
       if (!Array.isArray(x?.found)) errs.push(`${p}.found: must be an array`);
       if (x?.reverses !== undefined && !str(x.reverses)) errs.push(`${p}.reverses: must be a non-empty string`);
       if (x?.members !== undefined && !(Array.isArray(x.members) && x.members.every(str))) errs.push(`${p}.members: must be an array of finding ids`);

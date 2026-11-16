@@ -7,6 +7,10 @@ const f = { lens: "correctness", severity: "must", file: "a.js", line: 3, title:
 test("validate(round1) accepts a good finding", () => {
   assert.deepEqual(validate("round1", { findings: [f] }), []);
 });
+test("validate rejects a fractional line: it would name a question id the engine cannot load", () => {
+  assert.match(validate("round1", { findings: [{ ...f, line: 12.5 }] }).join(), /line: must be an integer/);
+  assert.match(validate("merge", [{ ...f, id: "c1", found: [] , line: 12.5 }]).join(), /line: must be an integer/);
+});
 test("validate(round1) rejects a finding with no case", () => {
   assert.ok(validate("round1", { findings: [{ ...f, case: "" }] }).length > 0);
 });

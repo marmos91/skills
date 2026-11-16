@@ -963,6 +963,42 @@ test("answer-only rerun: the follow-up links file:line and RFC references too", 
   assert.doesNotMatch(t, /§/);
 });
 
+// 2 agreed clusters with one fp at lines 2 and 3, and the answers that ask about each
+const twoLines = (over = {}) => split({ merge: [C("c1", { found: [S0] }), C("c2", { found: [S0], line: 3 })], "v~1": [keep("c1"), keep("c2")], "v~2": [drop("c1"), drop("c2")],
+  compose: { body: "Summary.", comments: [] }, ...over });
+
+test("follow-up: a 'post' for the second line of one fp posts too, after the first line's follow-up", async () => {
+  const fx = fixture(); routes(fx);
+  await go(fx, twoLines(), { mode: "loop", effort: "medium" });
+  const qs = openQuestions(fx.state);
+  answer(fx.state, qs.find((q) => q.finding.line === 2).id, "post");
+  await go(fx, twoLines());
+  const first = posts(fx).at(-1);
+  // GitHub now holds the first follow-up and its inline comment
+  routes(fx, { reviews: [{ body: first.body, user: { login: ME }, state: "COMMENTED" }], reviewComments: first.threads.map((t) => ({ body: t.body, user: { login: ME } })) });
+  answer(fx.state, qs.find((q) => q.finding.line === 3).id, "post");
+  const again = await go(fx, twoLines());
+  assert.equal(again.r.exit, 0, again.r.summary);
+  assert.deepEqual(posts(fx).at(-1).threads.map((t) => t.line), [3]);
+});
+
+test("a full run posts the second line of one fp although the first line's comment is on GitHub", async () => {
+  const fx = fixture();
+  const key = createHash("sha1").update(`inline\0${fx.head}\0${fingerprint(F())}\0a.js\0${2}`).digest("hex");
+  routes(fx, { reviewComments: [{ body: `<!-- pr-review run=x sha=${fx.head} key=${key} fp=${fingerprint(F())} -->`, user: { login: ME } }] });
+  await go(fx, happy({ merge: [C("c1"), C("c2", { line: 3 })], "v~2": [keep("c1"), keep("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c1", body: "**must:** two" }, { id: "c2", body: "**must:** three" }] } }));
+  assert.deepEqual(posts(fx)[0].threads.map((t) => t.line), [3]);
+});
+
+test("held comments of one fp at 2 lines keep a body each", async () => {
+  const fx = fixture(); routes(fx);
+  const token = "ghp_" + "A".repeat(36);
+  const { r } = await go(fx, happy({ merge: [C("c1"), C("c2", { line: 3 })], "v~2": [keep("c1"), keep("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c1", body: `**must:** ${token} two` }, { id: "c2", body: `**must:** ${token} three` }] } }), { mode: "loop" });
+  assert.equal(readdirSync(join(r.runDir, "held")).length, 2);
+});
+
 test("answer-only rerun: 'post' goes out as one small COMMENT follow-up, never twice", async () => {
   const fx = fixture(); routes(fx);
   const answers = split({

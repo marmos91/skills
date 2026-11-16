@@ -21,6 +21,14 @@ export function learnKey(f) {
 // a file stay 2. A bare fingerprint in an older settled list still matches.
 export const findingKey = (fp, line) => `${fp}:${line}`;
 
+// A fp settled at one line stays settled when that line moves (code added above it). A fp settled at several
+// lines matches only those lines: there the line is what tells the findings apart.
+function isSettled(settled, fp, line) {
+  if (settled.has(fp)) return true;
+  const lines = [...settled].filter((k) => k.startsWith(`${fp}:`));
+  return lines.length === 1 || lines.includes(findingKey(fp, line));
+}
+
 export function allowedSeverities(reviewNumber) {
   return new Set(reviewNumber <= 1 ? ["must", "should", "nit"] : reviewNumber === 2 ? ["must", "should"] : ["must"]);
 }
@@ -33,7 +41,7 @@ export function filterNew(findings, { reviewNumber, settled, changedLines, learn
   for (const finding of findings) {
     if (!allowed.has(finding.severity)) dropped.push({ finding, reason: "severity floor" });
     else if (learned.has(learnKey(finding))) dropped.push({ finding, reason: "learned" });
-    else if ([fingerprint(finding), findingKey(fingerprint(finding), finding.line)].some((k) => settled.has(k)) && !changedLines.get(finding.file)?.has(finding.line)) dropped.push({ finding, reason: "settled" });
+    else if (isSettled(settled, fingerprint(finding), finding.line) && !changedLines.get(finding.file)?.has(finding.line)) dropped.push({ finding, reason: "settled" });
     else keep.push(finding);
   }
   return { keep, dropped };
