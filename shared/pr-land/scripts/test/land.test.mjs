@@ -150,7 +150,7 @@ function stack({ conflict = false } = {}) {
   git(dir, "remote", "add", "origin", join(dir, "..", "no-such-fork.git"));
   const wt = join(dir, "..", `wt-${Date.now()}-${Math.random()}`);
   git(dir, "worktree", "add", "-q", wt, "feat/a");
-  return { dir, A, B, wt };
+  return { dir, A, B, wt, bare };
 }
 
 const routes = ({ A, B }, extra = {}) => ({
@@ -241,7 +241,8 @@ test("a child GitHub manages as a stack: the edit is refused, GitHub's retarget 
   }));
   const { code, json } = await run(t, s.dir, ["27"]);
   assert.equal(code, 0, JSON.stringify(json));
-  assert.deepEqual(json.landed[0].githubRetargeted, [29]);
+  // GitHub moved it, not pr-land: the same split as a run that stops
+  assert.deepEqual([json.landed[0].retargeted, json.landed[0].githubRetargeted], [[], [29]]);
   assert.ok(at(gh, "api -X PUT") < at(gh, "pr view 29") && at(gh, "pr view 29") < at(gh, "api -X DELETE"));
   assert.deepEqual(json.landed[0].rebased, [29]);
 });
@@ -269,7 +270,7 @@ test("a child that conflicts: the rebase is aborted, its branch untouched, the r
   // where each child is: retargeted, still to rebase, and how to resume
   assert.deepEqual([json.retargeted, json.rebased, json.rebasePending], [[29], [], [29]]);
   assert.ok(json.notes.includes("#27 is merged: run pr-land 27 again to resume with the children"));
-  assert.deepEqual(JSON.parse(readFileSync(join(stateRoot("o/r"), "land", "27.json"), "utf8")), { children: [29], rebased: [] }, "the resume reads this record");
+  assert.deepEqual(JSON.parse(readFileSync(recPath(), "utf8")), { children: [29], rebased: [] }, "the resume reads this record");
   assert.equal(git(s.dir, "ls-remote", "upstream", "refs/heads/feat/b").split("\t")[0], s.B);
   assert.equal(git(s.dir, "worktree", "list").split("\n").length, 2); // the repo and the user's feat/a worktree: no temp one
 });
@@ -333,9 +334,10 @@ test("a PR on the head without the marker whose history holds the merged head: r
 });
 
 // What the run that stopped after the merge left in pr-land's state.
-const record = (rec) => {
+function recPath(host = "github.com") { return join(stateRoot("o/r"), "land", `${host}__27.json`); }
+const record = (rec, host = "github.com") => {
   mkdirSync(join(stateRoot("o/r"), "land"), { recursive: true });
-  writeFileSync(join(stateRoot("o/r"), "land", "27.json"), JSON.stringify(rec));
+  writeFileSync(recPath(host), JSON.stringify(rec));
 };
 const resumeRoutes = (s, extra = {}) => routes(s, {
   "pr view 27": { stdout: ready({ headRefOid: s.A, state: "MERGED", reviews: [] }) },
@@ -359,7 +361,7 @@ test("a rerun on a merged PR resumes with the recorded children only: no merge, 
   assert.equal(at(gh, "pr edit"), -1, "#29 is already on main");
   assert.equal(at(gh, "pr list --base main"), -1, "other PRs on the base are never read");
   assert.ok(json.landed[0].notes.includes("#27 was already merged: resumed after the merge"));
-  assert.ok(!existsSync(join(stateRoot("o/r"), "land", "27.json")), "the record goes once every child is rebased");
+  assert.ok(!existsSync(recPath()), "the record goes once every child is rebased");
 });
 
 test("a rerun on a PR merged by a merge commit or a fast-forward: no PR is pushed, recorded or not", async (t) => {
@@ -383,6 +385,77 @@ test("a rerun on a PR merged by a merge commit or a fast-forward: no PR is pushe
     assert.equal(git(s.dir, "ls-remote", "upstream", "refs/heads/feat/b").split("\t")[0], s.B, how);
     assert.equal(git(s.dir, "ls-remote", "upstream", "refs/heads/feat/x").split("\t")[0], X, how);
   }
+});
+
+test("a rerun after the child was rebased by hand: it holds the merge commit, so it is done, not rebased again", async (t) => {
+  const s = stack();
+  const M = git(s.dir, "rev-parse", "main"); // the squash of #27
+  git(s.dir, "checkout", "-q", "-b", "byhand", M);
+  const H = commit(s.dir, "a.txt", "b\n", "feat: b");
+  git(s.dir, "push", "-q", "-f", "upstream", "byhand:feat/b");
+  git(s.dir, "checkout", "-q", "main");
+  commit(s.dir, "z.txt", "z\n", "fix: z");
+  git(s.dir, "push", "-q", "upstream", "main");
+  record({ children: [29], rebased: [] });
+  ghStub(resumeRoutes(s, {
+    "pr view 27": { stdout: ready({ headRefOid: s.A, state: "MERGED", reviews: [], mergeCommit: { oid: M } }) },
+    "pr view 29": { stdout: { number: 29, state: "OPEN", baseRefName: "main", headRefName: "feat/b", headRefOid: H, isCrossRepository: false, body: "<!-- pr-open parent: feat/a -->" } },
+  }));
+  const { code, json } = await run(t, s.dir, ["27"]);
+  assert.equal(code, 0, JSON.stringify(json));
+  assert.deepEqual(json.landed[0].rebased, []);
+  assert.ok(json.landed[0].notes.includes("#29 already holds the merge of #27: not rebased again"));
+  assert.equal(git(s.dir, "ls-remote", "upstream", "refs/heads/feat/b").split("\t")[0], H);
+  assert.ok(!existsSync(recPath()));
+});
+
+test("a rerun with no child left: the record is deleted", async (t) => {
+  const s = stack();
+  record({ children: [29], rebased: [] });
+  ghStub(resumeRoutes(s, { "pr view 29": { stdout: { number: 29, state: "CLOSED", baseRefName: "main", headRefName: "feat/b", headRefOid: s.B, isCrossRepository: false, body: "" } } }));
+  const { code, json } = await run(t, s.dir, ["27"]);
+  assert.equal(code, 0, JSON.stringify(json));
+  assert.ok(json.landed[0].notes.includes("#29 is closed on main: left alone"));
+  assert.ok(!existsSync(recPath()));
+});
+
+// The upstream remote and gh both on an Enterprise host.
+const GHE = { "repo view": { stdout: { nameWithOwner: "o/r", url: "https://ghe.example.com/o/r", defaultBranchRef: { name: "main" } } } };
+function ghe(s) {
+  git(s.dir, "remote", "set-url", "upstream", "https://ghe.example.com/o/r.git");
+  git(s.dir, "config", `url.${s.bare}.insteadOf`, "https://ghe.example.com/o/r.git");
+}
+
+test("a GitHub Enterprise repo end to end: the remote on its host is used and gh is pointed at that host", async (t) => {
+  const s = stack();
+  ghe(s);
+  const gh = ghStub(routes(s, GHE));
+  const { code, json } = await run(t, s.dir, ["27"]);
+  assert.equal(code, 0, JSON.stringify(json));
+  assert.equal(process.env.GH_HOST, "ghe.example.com");
+  assert.ok(at(gh, "api -X PUT repos/o/r/pulls/27/merge-async") >= 0);
+  assert.deepEqual(json.landed[0].rebased, [29]);
+});
+
+test("the land record is per host: an Enterprise resume ignores the record a github.com run of the same owner/repo left", async (t) => {
+  const s = stack({ conflict: true });
+  ghStub(routes(s));
+  assert.equal((await run(t, s.dir, ["27"])).code, 2, "github.com: stops on the conflict, its record kept");
+  ghe(s);
+  const gh = ghStub(resumeRoutes(s, GHE));
+  const { code, json } = await run(t, s.dir, ["27"]);
+  assert.equal(code, 0, JSON.stringify(json));
+  assert.equal(at(gh, "pr view 29"), -1);
+  rmSync(join(stateRoot("o/r"), "land"), { recursive: true, force: true });
+});
+
+test("an exported GH_HOST for another host is replaced by the repo's own host", async (t) => {
+  const s = stack();
+  process.env.GH_HOST = "ghe.example.com";
+  ghStub(routes(s));
+  const { code, json } = await run(t, s.dir, ["27", "--dry-run"]);
+  assert.equal(code, 0, JSON.stringify(json));
+  assert.equal(process.env.GH_HOST, "github.com");
 });
 
 test("the delete: each path segment encoded, and only when the branch is still at the merged head", async (t) => {

@@ -44,7 +44,8 @@ sh $SKILL_DIR/scripts/pr-land <pr>... [--dry-run]
      `pr-land` asks for a full review. Fetches and pushes go to the git remote whose URL is the
      PR's repo on the host `gh repo view` reports (github.com, or a GitHub
      Enterprise host: https, `git@host:`, or `ssh://` with a port); with
-     none, nothing is merged. The squash
+     none, nothing is merged. Every `gh` call goes to that host (`GH_HOST`
+     is set to it, over any exported value). The squash
      title is the PR title with ` (#N)`; it must be a concise conventional
      title. Title and message get the AI-mention check (with the `allow`
      list of `.pr-open.json`, as `pr-open` uses it) and the secret scan
@@ -78,10 +79,12 @@ sh $SKILL_DIR/scripts/pr-land <pr>... [--dry-run]
    not yet rebased). A rebase conflict: the rebase is aborted and the
    child's branch is untouched; the user rebases it by hand, or fixes the
    cause and runs `pr-land` on the merged PR again. The merge records its
-   children in pr-land's state; a merged PR resumes after the merge with
-   only the children still on its branch and the recorded ones not yet
-   rebased, never other PRs on the base. When the base already holds the
-   merged head (a merge commit or a fast-forward), no child is rebased.
+   children in pr-land's state (per host and PR); a merged PR resumes after
+   the merge with only the children still on its branch and the recorded
+   ones not yet rebased, never other PRs on the base. A child that already
+   holds the merge commit (rebased by hand) counts as done. When the base
+   already holds the merged head (a merge commit or a fast-forward), no
+   child is rebased. The record goes when no child is left.
 
 ## Rules
 
