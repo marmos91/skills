@@ -270,6 +270,29 @@ test("the end summary has one comment per PR: a rerun with another body edits it
   assert.deepEqual(edited.map((e) => [e.id, e.body.split("\n")[0]]), [[1, "The PR converged and is merged."]]);
 });
 
+test("the end summary reads a comment list over 1 MiB", async (t) => {
+  const { dir } = setup(t);
+  const big = join(dir, "comments.json"), gh = join(dir, "gh"), log = join(dir, "log");
+  writeFileSync(big, JSON.stringify([Array.from({ length: 300 }, (_, i) => ({ id: i, user: { login: "bot" }, body: "x".repeat(4096) }))]));
+  writeFileSync(gh, `#!/bin/sh\necho "$@" >> '${log}'\ncase "$*" in "api user") echo '{"login":"me"}' ;; *--paginate*) cat '${big}' ;; *) cat >/dev/null; echo '{}' ;; esac\n`);
+  chmodSync(gh, 0o755);
+  const old = process.env.GH_BIN; process.env.GH_BIN = gh;
+  t.after(() => { if (old === undefined) delete process.env.GH_BIN; else process.env.GH_BIN = old; });
+  process.env.PR_CONVERGE_SECRET_SCAN = "pr-converge-no-such-scanner";
+  await realDeps(REPO, 7).post("hello");
+  assert.match(readFileSync(log, "utf8"), /issues\/7\/comments/);
+});
+
+test("--pushed with no summary recorded at that head warns how to fix it", async (t) => {
+  setup(t);
+  const f = fakes([{ findings: [finding("m1", "must")] }, { findings: [] }]);
+  delete f.deps.respond;
+  assert.equal(await run(f.deps, "--merge"), 2);
+  f.moveHead(sha("b"));
+  assert.equal(await run(f.deps, "--pushed", sha("b")), 5);
+  assert.match(console.error.mock.calls.map((c) => c.arguments[0]).join("\n"), /no pr-respond summary was recorded at bbbbbbb.*--points/);
+});
+
 test("--config and --effort reach every pr-review round", async (t) => {
   const { dir } = setup(t);
   const f = fakes([]);

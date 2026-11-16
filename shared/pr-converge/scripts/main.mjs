@@ -38,7 +38,8 @@ function secretHits(text) {
   return r.status === 0 ? [] : [String(r.stderr || "secret-scan: hit").trim()];
 }
 
-const ghJson = (args, input) => JSON.parse(execFileSync(process.env.GH_BIN || "gh", args, { encoding: "utf8", input, stdio: ["pipe", "pipe", "pipe"] }) || "null");
+// 64 MiB, as pr-land: a PR with many comments passes the 1 MiB default of execFileSync
+const ghJson = (args, input) => JSON.parse(execFileSync(process.env.GH_BIN || "gh", args, { encoding: "utf8", input, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 64 << 20 }) || "null");
 const ghIssues = {
   viewer: github.viewer, comment: github.comment,
   comments: async (repo, n) => ghJson(["api", "--paginate", "--slurp", `repos/${repo}/issues/${n}/comments`]).flat(),
@@ -115,6 +116,7 @@ export function applyFlags(s, v, recorded = () => null) {
   for (const k of ["pushed", "rebased"]) if (v[k] !== undefined && !SHA.test(v[k])) throw new Usage(`--${k} needs the full 40-character sha`);
   if (v.pushed && s.phase !== "respond") throw new Usage(`--pushed is for the end of a respond step; the loop is at ${s.phase}`);
   if (v.points && !v.pushed) throw new Usage("--points goes with --pushed");
+  if (v.pushed && !v.points && !recorded(v.pushed)) console.error(`pr-converge: no pr-respond summary was recorded at ${v.pushed.slice(0, 7)}, so no point counts and a must stays open: run pr-respond summary at that head, or pass --points`);
   if (v.pushed) s.pushed = { sha: v.pushed, points: v.points ? readPoints(v.points) : recorded(v.pushed) ?? [] };
   if (v.rebased) { s.head = v.rebased; s.pause = null; } // a rebase that only resolves conflicts: same round, no review
   if (v.resume && s.pause) {
