@@ -34,7 +34,7 @@
     "!**/__pycache__/"
   ],
   "scripts": {
-    "test": "node --test test/*.test.mjs shared/pr-review/scripts/test/*.test.mjs shared/pr-open/scripts/test/*.test.mjs shared/pr-land/scripts/test/*.test.mjs shared/pr-respond/scripts/test/*.test.mjs shared/secret-scan/scripts/test/*.test.mjs shared/pr-converge/scripts/test/*.test.mjs && python3 -m unittest discover shared/jev && sh shared/repo-audit-fix/scripts/test/jev-gate.test.sh",
+    "test": "node --test test/*.test.mjs shared/pr-review/scripts/test/*.test.mjs shared/pr-open/scripts/test/*.test.mjs shared/pr-land/scripts/test/*.test.mjs shared/pr-respond/scripts/test/*.test.mjs shared/secret-scan/scripts/test/*.test.mjs shared/pr-converge/scripts/test/*.test.mjs bench/pr-review/test/*.test.mjs && python3 -m unittest discover shared/jev && sh shared/repo-audit-fix/scripts/test/jev-gate.test.sh",
     "check-pack": "node tools/check-pack.mjs",
     "smoke": "sh tools/smoke.sh"
   },

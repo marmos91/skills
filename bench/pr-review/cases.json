@@ -1,0 +1,62 @@
+[
+  {
+    "id": "skills-44-respond-config",
+    "repo": "marmos91/skills",
+    "pr": 44,
+    "base": "c9e1b0979e3d177d4d39fd5b8955c07a556460cb",
+    "head": "a02cd35731d010eb8f3c05754a487c02d1621915",
+    "fix": "e933a3131879bba6c3ae554d8cfa29d4794a333b",
+    "bugs": [
+      {
+        "file": "shared/pr-review/scripts/main.mjs",
+        "lines": [179, 179],
+        "what": "respondCmd calls loadConfig and userConfigPath, which main.mjs does not import, so every pr-review respond command fails with a ReferenceError turned into a usage error."
+      }
+    ]
+  },
+  {
+    "id": "skills-47-setup-reset",
+    "repo": "marmos91/skills",
+    "pr": 47,
+    "base": "55e3ae8b2b4c9c3c0edc8076e70a861a29420334",
+    "head": "20934f6a20c18d477b0388d06bfb9dc7f4f8dfe4",
+    "fix": "6017930de8a73fdbc5cbfd3578e07164fbcb1326",
+    "bugs": [
+      {
+        "file": "shared/pr-review/scripts/lib/setup.mjs",
+        "lines": [171, 185],
+        "what": "runSetup returns the cached result of a finished setup before it resets the worktree, so a resumed run lets the seats read a worktree that a check left dirty."
+      },
+      {
+        "file": "shared/pr-review/scripts/lib/setup.mjs",
+        "lines": [180, 180],
+        "what": "git clean -fdxq leaves a nested git repository that a check created; it needs -ff, so the next check and the seats see it."
+      }
+    ]
+  },
+  {
+    "id": "skills-48-proof",
+    "repo": "marmos91/skills",
+    "pr": 48,
+    "base": "ef564934084bb925692832d633915f4ee3bb7eab",
+    "head": "1b8bf00573ab93d4b49f7e1e9088254c41eb7520",
+    "fix": "1048e5156a1b544bf2e488ddd457f7fa00e188ae",
+    "bugs": [
+      {
+        "file": "shared/pr-review/scripts/lib/proof.mjs",
+        "lines": [247, 249],
+        "what": "applyProof finds the tally by fingerprint only; two clusters can share a fingerprint (it has no line), so a finding gets the other cluster's tally and its proof and severity are wrong."
+      },
+      {
+        "file": "shared/pr-review/scripts/lib/review.mjs",
+        "lines": [539, 539],
+        "what": "The Unproven mark is appended at the end of the body, but a finding off the diff posts only its first line, so the mark is lost."
+      },
+      {
+        "file": "shared/pr-review/scripts/lib/review.mjs",
+        "lines": [495, 497],
+        "what": "leftOut counts a must that proof lowered below the review-3 severity floor as left out by the effort limit, which a higher effort would not post either."
+      }
+    ]
+  }
+]
