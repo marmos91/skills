@@ -1,11 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initRepo, commit, git } from "../../../pr-open/scripts/test/repo.mjs";
 import { ghStub } from "../../../pr-open/scripts/test/gh.mjs";
-import { notReady, repoOfUrl, squash, stackOrder, Blocked } from "../lib/land.mjs";
+import { land, notReady, repoOfUrl, squash, stackOrder, Blocked } from "../lib/land.mjs";
 import { main } from "../main.mjs";
 import { answer, appliedAnswer, queueQuestion } from "../../../pr-review/scripts/lib/questions.mjs";
 import { stateRoot, summaryMarker } from "../../../pr-review/scripts/lib/state.mjs";
@@ -103,6 +103,19 @@ test("squash: the title gets (#N) once; bad titles, AI mentions and secrets are 
   assert.throws(() => squash(ready({ body: `token ${TOKEN}` })), (e) => e instanceof Blocked && !JSON.stringify(e.detail).includes(TOKEN));
 });
 
+test("squash: the private-repos opt-out applies only when the PR's repo and the push target are listed", (t) => {
+  const cfg = mkdtempSync(join(tmpdir(), "pr-land-ss-"));
+  writeFileSync(join(cfg, "private.txt"), "example\\.internal\n");
+  writeFileSync(join(cfg, "private-repos.txt"), "o/r\n");
+  const old = process.env.SECRET_SCAN_CONFIG;
+  process.env.SECRET_SCAN_CONFIG = cfg;
+  t.after(() => (old === undefined ? delete process.env.SECRET_SCAN_CONFIG : (process.env.SECRET_SCAN_CONFIG = old)));
+  const pr = ready({ body: "Moves the cache to db01.example.internal." });
+  assert.equal(squash(pr, [], ["o/r", "o/r"]).title, "feat(x): a (#27)");
+  assert.throws(() => squash(pr, [], ["o/r", null]), /secret scan/); // a push target off GitHub: strict
+  assert.throws(() => squash(pr), /secret scan/);
+});
+
 test("stackOrder: parents first, whatever the order given", () => {
   const p = (number, headRefName, baseRefName) => ({ number, headRefName, baseRefName });
   assert.deepEqual(stackOrder([p(29, "c", "b"), p(28, "b", "a"), p(27, "a", "main")]), [27, 28, 29]);
@@ -164,6 +177,23 @@ async function run(t, dir, args) {
 }
 const at = (gh, key) => gh.calls().findIndex((c) => c.key.startsWith(key));
 const mutations = (gh) => (existsSync(join(gh.dir, "mutations.jsonl")) ? readFileSync(join(gh.dir, "mutations.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
+
+test("land() passes the scanner --repo for the PR's repo and what a push to the PR's remote reaches", async (t) => {
+  const s = stack();
+  git(s.dir, "config", "--unset", git(s.dir, "config", "--get-regexp", "^url\\.").split(" ")[0]); // the push URL is on GitHub again
+  ghStub(routes(s));
+  const bin = join(mkdtempSync(join(tmpdir(), "pr-land-scan-")), "scan");
+  writeFileSync(bin, '#!/bin/sh\necho "args: $*" >&2\nexit 1\n');
+  chmodSync(bin, 0o755);
+  const old = process.env.PR_LAND_SECRET_SCAN;
+  process.env.PR_LAND_SECRET_SCAN = bin;
+  t.after(() => { process.env.PR_LAND_SECRET_SCAN = old; });
+  const args = async () => { try { await land(s.dir, 27, { dryRun: true }); } catch (e) { return e.detail?.hits?.[0]; } };
+  // the PR's remote is "upstream" (o/r); "origin" is a local path and must not be what is checked
+  assert.equal(await args(), "args: --repo o/r --repo o/r");
+  git(s.dir, "config", "remote.upstream.pushurl", "https://gitlab.example.internal/o/r.git");
+  assert.equal(await args(), "args: --repo o/r --repo"); // a push off GitHub: an empty --repo, strict
+});
 
 test("a stacked child: retargeted after the merge and before the delete, kept open, rebased on the new base; the tracking item ticked and the issue closed", async (t) => {
   const s = stack();

@@ -103,6 +103,15 @@ test("install of secret-scan brings pr-review, whose scan it runs", (t) => {
   assert.match(s.stderr, /^github-token: ghp_…/m);
 });
 
+test("install of pr-respond brings pr-open, whose pushRepos and resolveBase its scan imports", (t) => {
+  const { env, run } = setup(t);
+  assert.equal(run(REPO, "install", "--claude", "pr-respond").status, 0);
+  assert.deepEqual(readdirSync(env.CLAUDE_DIR).sort(), ["pr-open", "pr-respond", "pr-review", "secret-scan"]);
+  // a bad flag exits 2 after the imports load; a missing module would exit 1
+  const s = spawnSync(join(env.BIN_DIR, "pr-respond"), ["scan", "--no-such-flag"], { env, cwd: REPO, encoding: "utf8" });
+  assert.equal(s.status, 2, s.stderr);
+});
+
 test("install of pr-converge brings the skills it drives: pr-review, pr-respond and pr-land", (t) => {
   const { env, run } = setup(t);
   assert.equal(run(REPO, "install", "--claude", "pr-converge").status, 0);

@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, chmodSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileValues, scanOutbound, redact } from "../lib/secrets.mjs";
+import { fileValues, repoArgs, scanOutbound, redact } from "../lib/secrets.mjs";
 
 // A developer's own ~/.config/secret-scan must not change these results.
 process.env.SECRET_SCAN_CONFIG = mkdtempSync(join(tmpdir(), "ss-empty-"));
@@ -199,6 +199,36 @@ test("allow.txt: the reason is verbatim, a # in it does not cut it", (t) => {
   assert.deepEqual(scanOutbound("see db01.example.internal"), { ok: true, hits: [] });
   writeFileSync(join(dir, "allow.txt"), `${fp}\n# ${fp} commented out\n`);
   assert.equal(scanOutbound("see db01.example.internal").ok, false);
+});
+
+test("allow.txt clears a gitleaks hit by its fp (rule and line), and only that line", (t) => {
+  const dir = withConfig(t, {});
+  withStub(`cat >/dev/null; ${getReport}; echo '[{"RuleID":"generic-api-key","Secret":"REDACTED","StartLine":2,"EndLine":2}]' > "$p"; exit 1`, () => {
+    const text = "intro\nkey = zz-not-printed\n";
+    const hit = scanOutbound(text).hits[0];
+    assert.match(hit, /^generic-api-key: REDA… \(line 2, fp [0-9a-f]{12}\)$/);
+    writeFileSync(join(dir, "allow.txt"), `${/fp (\w+)/.exec(hit)[1]} test fixture\n`);
+    assert.deepEqual(scanOutbound(text), { ok: true, hits: [] });
+    assert.equal(scanOutbound("intro\nkey = zz-other-value\n").ok, false);
+  });
+});
+
+test("a part of a multi-line sops value is found: each line of a multi-line leaf is a value", (t) => {
+  const line = "TUlJQ" + "x9".repeat(10);
+  const leaf = `-----BEGIN CERTIFICATE-----\n${line}\n-----END CERTIFICATE-----\n`;
+  withConfig(t, { "creds.json": JSON.stringify({ cert: leaf }), "sops-files.txt": "creds.json\n" });
+  const res = scanOutbound(`pasted ${line} here`);
+  assert.equal(res.ok, false);
+  assert.match(res.hits[0], /^sops-value: /);
+  assert.ok(!res.hits[0].includes(line));
+});
+
+test("fileValues: valid JSON never falls back to the line parser, even when its multi-line leaves give no value", () => {
+  assert.deepEqual(fileValues(JSON.stringify({ a: "x\ny" })), []);
+});
+
+test("repoArgs: one --repo per repo; a repo off GitHub (null) is an empty --repo, so the scan stays strict", () => {
+  assert.deepEqual(repoArgs(["o/r", null]), ["--repo", "o/r", "--repo", ""]);
 });
 
 test("a dangling link in sops-files.txt (a secret that did not render) blocks", (t) => {

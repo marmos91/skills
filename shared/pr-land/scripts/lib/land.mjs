@@ -4,14 +4,14 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { scanOutbound } from "../../../pr-review/scripts/lib/secrets.mjs";
+import { repoArgs, scanOutbound } from "../../../pr-review/scripts/lib/secrets.mjs";
 import { threads } from "../../../pr-review/scripts/lib/github.mjs";
 import { waitingQuestions } from "../../../pr-review/scripts/lib/questions.mjs";
 import { readSummaryMarker, stateRoot } from "../../../pr-review/scripts/lib/state.mjs";
 import { aiMentions } from "../../../pr-open/scripts/lib/check.mjs";
 import { Blocked, Usage } from "../../../pr-open/scripts/lib/counts.mjs";
 import { readOverride } from "../../../pr-open/scripts/lib/detect.mjs";
-import { parentOf } from "../../../pr-open/scripts/lib/open.mjs";
+import { parentOf, pushRepos } from "../../../pr-open/scripts/lib/open.mjs";
 
 export { Blocked, Usage };
 export const STEPS = ["check", "merge", "retarget children", "delete branch", "rebase children", "issues", "local cleanup"];
@@ -54,9 +54,10 @@ function remoteOf(dir, repo) {
 }
 
 // secret-scan (#39) when installed, else the pr-review scan; the same contract as pr-open.
-function secretHits(text) {
-  const r = spawnSync(process.env.PR_LAND_SECRET_SCAN || "secret-scan", [], { input: text, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
-  if (r.error?.code === "ENOENT") return scanOutbound(text).hits;
+// repos: the PR's repo and what a push to its remote reaches; the private-repos opt-out needs every one listed.
+function secretHits(text, repos = [null]) {
+  const r = spawnSync(process.env.PR_LAND_SECRET_SCAN || "secret-scan", repoArgs(repos), { input: text, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+  if (r.error?.code === "ENOENT") return scanOutbound(text, { repo: repos }).hits;
   if (r.error) return [`secret-scan: ${r.error.message}`];
   return r.status === 0 ? [] : [String(r.stderr || "secret-scan: hit").trim()];
 }
@@ -118,13 +119,13 @@ function prsOn(dir, branch) {
 }
 
 /** Squash title and message: the PR title with (#N), the body without HTML comments. Blocked on a bad title, an AI mention or a secret. */
-export function squash(pr, allow = []) {
+export function squash(pr, allow = [], repos = [null]) {
   const title = `${pr.title.replace(/\s*\(#\d+\)\s*$/, "")} (#${pr.number})`;
   const message = (pr.body ?? "").replace(/<!--[\s\S]*?-->/g, "").trim();
   if (!/^[a-z]+(\([\w./-]+\))?!?: \S/.test(title) || title.length > 72) throw new Blocked(`retitle the PR as a concise conventional title (72 chars max): ${title}`);
   const ai = aiMentions(`${title}\n${message}`, allow); // the allow list of .pr-open.json, as pr-open checks
   if (ai.length) throw new Blocked("AI or tool mentions in the squash title or message", { ai });
-  const hits = secretHits(`${title}\n${message}`);
+  const hits = secretHits(`${title}\n${message}`, repos);
   if (hits.length) throw new Blocked("the secret scan found a hit in the squash title or message", { hits });
   return { title, message };
 }
@@ -161,7 +162,7 @@ export async function land(dir, n, { dryRun = false } = {}) {
     const localQuestions = (runId) => (existsSync(join(st, "pr", String(n), "runs", runId)) ? waitingQuestions(st, n).length : null);
     const why = notReady(pr, (await threads(repo, n)).filter((t) => !t.isResolved).length, ghJson(dir, ["api", "user"]).login, localQuestions);
     if (why.length) throw new Blocked(`#${n} is not ready`, { why });
-    msg = squash(pr, readOverride(dir).allow ?? []);
+    msg = squash(pr, readOverride(dir).allow ?? [], [repo, ...pushRepos(dir, remote)]);
     // A base is always a branch of this repo, so a fork PR's head is nobody's base.
     children = pr.isCrossRepository ? [] : prsOn(dir, pr.headRefName);
   });

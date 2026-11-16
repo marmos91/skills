@@ -57,13 +57,12 @@ the full command each time: zsh does not split a variable into words.
    the fix, see the test fail, put the fix back.
 4. Run the full test suite. Commit signed (`git commit -S`) with a concise
    message, in the repo's commit style. Do not name an AI or a tool. Before
-   the push, scan every commit since the PR base (this works on a branch
-   with no upstream too):
-   `b=$(gh pr view --json baseRefName --jq .baseRefName) && t=$(gh repo view --json nameWithOwner --jq .nameWithOwner) && o=$(gh repo view "$(git remote get-url origin)" --json nameWithOwner --jq .nameWithOwner) && git fetch -q origin "+refs/heads/${b}:refs/remotes/origin/${b}" && secret-scan --repo "$t" --repo "$o" --range "origin/${b}..HEAD"`.
-   Both repos: the private-repos opt-out applies only when the PR target and
-   the origin you push to are both listed.
-   `--range` builds the same input as pr-open (the `secret-scan` skill
-   says how); the explicit refspec works in a single-branch clone.
+   the push, run `$P scan`: it fetches the PR base and runs `secret-scan`
+   on every commit since it (this works on a branch with no upstream too),
+   with `--repo` for the PR target and for each repo a push to origin
+   really reaches, the same rule as pr-open. The private-repos opt-out
+   applies only when all are listed; when origin does not push only to
+   github.com the scan is strict and says so.
    Any non-zero exit blocks the push (a git error too). Remove the hit, or
    allow a false one as the `secret-scan` skill says. Push.
 5. For each fixed thread, run `$P fixed <id> <sha>` with the sha of the

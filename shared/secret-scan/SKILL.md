@@ -57,9 +57,9 @@ never passes without its lists. Keep the folder out of every repo.
 | File | Line |
 |---|---|
 | `private.txt` | a regex, case-insensitive (a line that is not a valid regex is a literal). It can be rendered there by sops-nix, so the list lives encrypted in your dotfiles. |
-| `sops-files.txt` | the path of a file sops-nix renders (for example a kubeconfig or `~/.aws/credentials`). A relative path is in the config folder. JSON leaves, and per line the whole line and the value of `key = value`, `key: value`, `export KEY=value` or `- item` (an inline ` #` or ` ;` comment and quotes removed) count; keys, values under 12 characters and values with spaces do not. A missing file is skipped. |
-| `allow.txt` | `<fp> <reason>`: the hit with that fingerprint does not block. A line without a reason allows nothing. gitleaks hits have no fingerprint (its report is redacted, so the value never touches the disk): allow one with a `gitleaks:allow` comment on the line, or an allowlist in the gitleaks config (`GITLEAKS_CONFIG`). |
-| `private-repos.txt` | `owner/repo`: a private repo where the `private.txt` set is skipped. Secrets and sops values are still checked. Remove the line if the repo goes public. The CLI opts out only with `--repo`; without it the scan is strict (the folder's origin can be a private fork of a public repo). `--repo` can be given more than once (the PR target and the push remote): the opt-out needs every one listed. pr-review and pr-respond pass the PR's repo; pr-open passes the repo `gh` opens the PR in and the origin it pushes to (`--repo` twice). Text sent to jev has no repo and gets the strict set. |
+| `sops-files.txt` | the path of a file sops-nix renders (for example a kubeconfig or `~/.aws/credentials`). A relative path is in the config folder. JSON leaves, and per line the whole line and the value of `key = value`, `key: value`, `export KEY=value` or `- item` (an inline ` #` or ` ;` comment and quotes removed) count; keys, values under 12 characters and values with spaces do not. A multi-line value (a PEM block in JSON) counts line by line, the same way. A missing file is skipped. |
+| `allow.txt` | `<fp> <reason>`: the hit with that fingerprint does not block. A line without a reason allows nothing. A gitleaks hit's fingerprint covers its rule and its whole line as scanned (its report is redacted, so the value never touches the disk): a change to that line, or the same line in a diff and in a plain file, needs its own line. A `gitleaks:allow` comment on the line, or an allowlist in the gitleaks config (`GITLEAKS_CONFIG`), works too. |
+| `private-repos.txt` | `owner/repo`: a private repo where the `private.txt` set is skipped. Secrets and sops values are still checked. Remove the line if the repo goes public. The CLI opts out only with `--repo`; without it the scan is strict (the folder's origin can be a private fork of a public repo). `--repo` can be given more than once (the PR target and the push remote): the opt-out needs every one listed. pr-review and pr-respond pass the PR's repo; pr-open, `pr-respond scan` and pr-land pass the PR's repo and each github.com repo a push to the remote reaches (a push URL off github.com: strict). Text sent to jev has no repo and gets the strict set. |
 
 ## Steps
 
@@ -74,7 +74,8 @@ never passes without its lists. Keep the folder out of every repo.
 
 - `pr-review` and `pr-respond` scan every comment, reply and summary before
   they post it with the same code (`pr-review/scripts/lib/secrets.mjs`).
-- `pr-respond` runs `secret-scan` on the commits before each push.
+- `pr-respond scan` runs `secret-scan` on the commits before each push.
+- `pr-land` scans the squash title and message.
 - `pr-open` pipes the pushed commits, the title and the body into
   `secret-scan --repo <target>` (`PR_OPEN_SECRET_SCAN` overrides the path).
 - When pr-review holds a comment and you answer "post", the built-in
