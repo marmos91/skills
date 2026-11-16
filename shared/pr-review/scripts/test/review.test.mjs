@@ -1163,6 +1163,50 @@ test("answer-only rerun: a finding already posted inline at this head is not pos
   assert.ok(JSON.parse(readFileSync(join(fx.state, "questions", `${q.id}.json`), "utf8")).appliedAt);
 });
 
+test("a comment posted under the key of an engine before #75 (sha and fp only) is not posted again", async () => {
+  const fx = fixture();
+  const old = createHash("sha1").update(`inline\0${fx.head}\0${fingerprint(F())}`).digest("hex");
+  routes(fx, { reviewComments: [{ body: `x\n\n<!-- pr-review run=r sha=${fx.head} key=${old} fp=${fingerprint(F())} -->`, user: { login: ME } }] });
+  const { r } = await go(fx, happy());
+  assert.equal(r.exit, 0, r.summary);
+  assert.deepEqual(posts(fx)[0].threads, []);
+});
+
+test("answer-only rerun: a finding posted under the old key at this head is not posted again", async () => {
+  const fx = fixture(); routes(fx);
+  const answers = split({
+    merge: [C("c1", { found: [S0] }), C("c2", { severity: "must", line: 3, title: "Must one" })], "v~1": [keep("c1")], "v~2": [drop("c1"), keep("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c2", body: "**must:** one" }] },
+  });
+  await go(fx, answers, { mode: "loop", effort: "medium" });
+  const [q] = openQuestions(fx.state);
+  answer(fx.state, q.id, "post");
+  const old = createHash("sha1").update(`inline\0${fx.head}\0${q.fingerprint}`).digest("hex");
+  routes(fx, { reviewComments: [{ body: `x\n\n<!-- pr-review run=r sha=${fx.head} key=${old} fp=${q.fingerprint} -->`, user: { login: ME } }] });
+  const again = await go(fx, answers);
+  assert.equal(again.r.exit, 0, again.r.summary);
+  assert.equal(posts(fx).length, 1);
+});
+
+test("follow-up: a posted finding ends with its done when, and the marker carries a state with it", async () => {
+  const fx = fixture(); routes(fx);
+  const answers = split({
+    merge: [C("c1", { found: [S0], done_when: "a test sums a and b" }), C("c2", { severity: "must", line: 3, title: "Must one" })], "v~1": [keep("c1")], "v~2": [drop("c1"), keep("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c2", body: "**must:** one" }] },
+  });
+  await go(fx, answers, { mode: "loop", effort: "medium" });
+  const [q] = openQuestions(fx.state);
+  answer(fx.state, q.id, "post");
+  routes(fx, { reviews: [{ body: posts(fx)[0].body, user: { login: ME }, state: "CHANGES_REQUESTED" }] });
+  const again = await go(fx, answers);
+  assert.equal(again.r.exit, 0, again.r.summary);
+  const p = posts(fx)[1];
+  assert.match(p.threads[0].body, /\n\nDone when: a test sums a and b\n\n<!-- pr-review /);
+  const { state } = readSummaryMarker(p.body);
+  assert.equal(state.next, "fix");
+  assert.deepEqual(state.items.map((i) => [i.line, i.status, i.done_when]), [[3, "new", undefined], [2, "new", "a test sums a and b"]]);
+});
+
 test("CI is read again at post time: none at frame, red at post -> no APPROVE", async () => {
   const fx = fixture(); routes(fx);
   const states = [{ state: "none", since: null, items: [] }, { state: "red", since: null, items: [{ name: "build", state: "fail", url: null, runId: null }] }];
@@ -1932,6 +1976,19 @@ test("once posted, the body index links each thread to its inline comment, with 
   assert.equal(edit.id, "PRR_1");
   assert.match(edit.body, /\n- Fix the total\. \(\[thread\]\(https:\/\/github\.com\/o\/r\/pull\/5#discussion_r900\)\)\n/);
   assert.doesNotMatch(edit.body, /\bL\d|a\.js:\d/);
+});
+
+test("a failed edit of the summary is tried once more, so the thread links still land", async () => {
+  const fx = fixture();
+  const key = createHash("sha1").update(`inline\0${fx.head}\0${fingerprint(F())}\0a.js\0${2}`).digest("hex");
+  routes(fx, { posted: [{ url: "https://github.com/o/r/pull/5#discussion_r900", body: `x\n\n<!-- pr-review run=x sha=${fx.head} key=${key} fp=y -->` }] });
+  const rs = JSON.parse(readFileSync(join(fx.stubDir, "routes.json"), "utf8"));
+  rs["graphql EditReview"] = [{ stderr: "boom", exit: 1 }, rs["graphql EditReview"]];
+  writeFileSync(join(fx.stubDir, "routes.json"), JSON.stringify(rs));
+  const compose = { verdict: "Blocks.", body: "", index: [{ theme: "T", items: [{ id: "c1", text: "Fix it." }] }], comments: [{ id: "c1", body: "**must:** off by one" }] };
+  const { r } = await go(fx, happy({ compose }));
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(mutations(fx).filter((m) => m.key === "graphql EditReview").length, 2);
 });
 
 test("2 posted findings with one fingerprint each link their own thread in the index", async () => {

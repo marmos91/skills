@@ -35,8 +35,11 @@ const save = (f, v) => writeAtomic(f, JSON.stringify(v, null, 2) + "\n");
 const headFile = (dir, sha, p) => { try { return /^100\d{3} blob /.test(git(dir, ["ls-tree", sha, "--", p])); } catch { return false; } };
 // The dedupe key of an inline comment: a fingerprint can post at 2 lines (split clusters), each its own thread.
 const inlineKeyOf = (sha, fp, file, line) => sha1(`inline\0${sha}\0${fp}\0${file}\0${line}`);
+// An engine before #75 keyed a comment by sha and fp only: a rerun at that head finds it under either key.
+const seenInline = (seen, sha, fp, file, line) => seen.has(inlineKeyOf(sha, fp, file, line)) || seen.has(sha1(`inline\0${sha}\0${fp}`));
 // learn= carries the learn key of each finding, which a decline learns (learnings.mjs).
 const marker = (runId, sha, key, fp, learn) => `<!-- pr-review run=${runId} sha=${sha} key=${key}${learn ? ` learn=${learn}` : ""}${fp ? ` fp=${fp}` : ""} -->`;
+const oneLine = (t) => String(t).replace(/\s+/g, " ").trim();
 // Fields the seats and the judge see; engine bookkeeping stays out of prompts.
 const view = ({ seats, fp, answered, ...c }) => c;
 // A drop answer is learned when a run applies it, not when it is given: a stale answer is never learned.
@@ -757,7 +760,7 @@ async function once(o, restart) {
   const inlineKey = (x) => inlineKeyOf(f.headSha, x.fp, x.file, x.line);
   const fresh = [];
   const seen = await gh.markerKeys(repo, n); // one fetch for every check of this post phase
-  for (const x of clean) if (!seen.has(inlineKey(x))) fresh.push(x);
+  for (const x of clean) if (!seenInline(seen, f.headSha, x.fp, x.file, x.line)) fresh.push(x);
   const p = place(fresh.map((x) => ({ file: x.file, line: x.line, body: `${noMarkup(x.body)}\n\n${marker(runId, f.headSha, inlineKey(x), x.fps.join(","), x.learns.join(","))}` })), hunks, permalink);
   const key = sha1(`review\0${runId}`);
   const body = bodyOf(p.body, key, clean.filter((x) => !offDiff(x)));
@@ -791,7 +794,8 @@ async function once(o, restart) {
     const urls = new Map(fresh.flatMap((x) => { const c = res.comments?.find((c) => c.body?.includes(inlineKey(x))); return c ? [[x.id, c.url]] : []; }));
     if (urls.size) {
       const withLinks = bodyOf(p.body, key, clean.filter((x) => !offDiff(x)), urls);
-      if (withLinks !== body) await gh.editReview(res.id, withLinks).catch((e) => log(`review body links not added: ${e.message}`));
+      // one retry: a failed edit leaves the code links in place of the thread links
+      if (withLinks !== body) await gh.editReview(res.id, withLinks).catch(() => gh.editReview(res.id, withLinks)).catch((e) => log(`review body links not added: ${e.message}`));
     }
   }
   // Same fingerprint and record as tick.mjs: a rerun (or the tick after it) finds the question and adds nothing.
@@ -919,12 +923,12 @@ async function followUp(o, head, pst, answered) {
   const diff = join(repoState, "pr", String(n), "runs", runId, "ctx", "diff.patch");
   const hunks = parseHunks(existsSync(diff) ? readFileSync(diff, "utf8") : "");
   for (const q of answered.filter((x) => x.answer !== "drop")) {
-    if (seen.has(inlineKeyOf(head, q.fingerprint, q.finding?.file, q.finding?.line))) { already.push(q); continue; }
+    if (seenInline(seen, head, q.fingerprint, q.finding?.file, q.finding?.line)) { already.push(q); continue; }
     if (codeMoved(o.repoDir ?? process.cwd(), q, head)) { o.log(`question ${q.id}: the code at ${q.finding?.file}:${q.finding?.line} changed since ${q.sha}; its answer is dropped`); continue; }
     const f = q.finding;
     // full depth (proven is set): a suggestion the follow-up cannot test says so, like one the time cap cut
     const fix = f.fix && f.proven !== undefined && suggestionOf(f.fix) ? uncheckedNote(f.fix, "a follow-up runs no test") : f.fix;
-    const base = `**${f.severity}:** ${f.title}\n\n${f.case}${fix ? `\n\n${fix}` : ""}${q.answer === "ask-author" ? "\n\nCan you confirm this case?" : ""}`;
+    const base = `**${f.severity}:** ${f.title}\n\n${f.case}${fix ? `\n\n${fix}` : ""}${q.answer === "ask-author" ? "\n\nCan you confirm this case?" : ""}${f.done_when ? `\n\nDone when: ${oneLine(f.done_when)}` : ""}`;
     const text = f.secret ? heldText(repoState, n, pst.lastRunId, q.fingerprint, f.line) : f.proven === false ? markUnproven(base, !diffLine(hunks, f.file, f.line)) : base;
     if (!text) continue;
     const s = scanOutbound(text, { repo });
@@ -945,7 +949,11 @@ async function followUp(o, head, pst, answered) {
     const fps = items.map((x) => findingKey(x.q.fingerprint, x.q.finding.line)).sort();
     const key = sha1(`followup\0${head}\0${fps.join(",")}`);
     const p = place(items.map(({ q, text }) => ({ file: q.finding.file, line: q.finding.line, body: `${noMarkup(text)}\n\n${marker(runId, head, inlineKeyOf(head, q.fingerprint, q.finding.file, q.finding.line), q.fingerprint, learnKey(q.finding))}` })), hunks, `https://github.com/${repo}/blob/${head}`);
-    const body = [`Follow-up on the review of ${head}: points settled by the maintainer.`, p.body.length ? p.body.map((l) => `- ${l}`).join("\n") : "", summaryMarker(runId, head, key, counts)].filter(Boolean).join("\n\n");
+    // state (#65) like a full review's: the open items of the full review at this head, plus the findings posted now
+    const prior = (was?.state !== undefined ? was : await gh.markerCounts(repo, n, head).catch(() => null))?.state;
+    const all = [...(prior?.items ?? []), ...items.map(({ q: { fingerprint: fp, finding: x } }) => ({ fp, severity: x.severity, file: x.file || null, line: x.line ?? null, status: "new", url: null, ...(x.done_when && { done_when: oneLine(x.done_when) }) }))];
+    const state = { verdict: "COMMENT", ...prior, next: nextStep(counts, all, prior?.ci), items: all };
+    const body = [`Follow-up on the review of ${head}: points settled by the maintainer.`, p.body.length ? p.body.map((l) => `- ${l}`).join("\n") : "", summaryMarker(runId, head, key, counts, state)].filter(Boolean).join("\n\n");
     if (!scanOutbound(body, { repo }).ok) return { exit: 4, skipped: true, summary: "follow-up blocked by the secret scan" };
     if (!seen.has(key)) {
       if (await gh.pendingReview(repo, n)) return { exit: 0, skipped: true, summary: "skipped: you have a pending review on this PR; submit or delete it, then run again" };

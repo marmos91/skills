@@ -208,7 +208,7 @@ export function usageByStage(dir) {
   return out;
 }
 
-// The summary marker of a full review carries the verdict's inputs; pr-land gates a merge on them. Follow-ups and replies have none.
+// The summary marker of a full review carries the verdict's inputs; pr-land gates a merge on them. A follow-up carries the head's new ones; replies have none.
 // state (#65): JSON for agents (verdict, next step, open items); < and > escaped, so no text can close the comment.
 const stateJson = (st) => JSON.stringify(st).replace(/[<>]/g, (c) => (c === "<" ? "\\u003c" : "\\u003e"));
 export const summaryMarker = (runId, sha, key, { must, questions, gaps }, state) => `<!-- pr-review run=${runId} sha=${sha} key=${key} must=${must} questions=${questions} gaps=${gaps}${state ? ` state=${stateJson(state)}` : ""} -->`;
