@@ -112,3 +112,7 @@ test("an off-diff permalink escapes the file: ( ) # in the path, markup in the l
   assert.equal(codeLink(base, "x` [docs](https://evil.example) `y.js", 1), `[\`x docs(https://evil.example) y.js\`](${base}/x%60%20%5Bdocs%5D%28https%3A//evil.example%29%20%60y.js#L1)`);
   assert.equal(codeLink(base, "../../../../evil/repo/blob/main/README.md", 1), "`../../../../evil/repo/blob/main/README.md`");
 });
+
+test("linkRefs never rewrites a link it built: a path that starts with rfcNNNN stays one link", () => {
+  assert.equal(linkRefs("rfc9110.md:3 and §2", base, (p) => p === "rfc9110.md"), `[\`rfc9110.md\`](${base}/rfc9110.md#L3) and section 2`);
+});

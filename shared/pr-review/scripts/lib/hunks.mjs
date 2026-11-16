@@ -90,7 +90,8 @@ export function place(findings, hunks, permalinkBase) {
 const FILE_LINE = /`?((?:[\w.-]+\/)*[\w.-]+\.\w+):(\d+)(?:-(\d+))?`?/g;
 const SPAN = /((`+)[^]*?\2(?!`)|\[[^\]]*\]\([^)]*\))/;
 const PATH_SPAN = /^`(?:[\w.-]+\/)*[\w.-]+\.\w+:\d+(?:-\d+)?`$/;
-const RFC = /(?<![[\w/-])RFC ?(\d{3,5})(?![\w])(?:,? ?(?:§|section) ?(\d+(?:\.\d+)*))?/gi;
+const RFC = /(?<![[\w/-])RFC ?(\d{3,5})(?![\w])(?:,? ?(?:§|section) ?(\d+(?:\.\d+)*))?/;
+const REF = new RegExp(`${FILE_LINE.source}|${RFC.source}|§\\s*`, "gi");
 
 /**
  * Readable references for posted text (#65): `a.js:42` becomes a permalink at the head when isFile(path),
@@ -100,10 +101,11 @@ const RFC = /(?<![[\w/-])RFC ?(\d{3,5})(?![\w])(?:,? ?(?:§|section) ?(\d+(?:\.\
 export function linkRefs(text, permalinkBase, isFile) {
   const lines = String(text).split("\n"), code = new Set();
   for (const b of fences(text)) for (let i = b.start; i <= b.end; i++) code.add(i);
-  const plain = (s) => s
-    .replace(FILE_LINE, (m, p, a, b) => (isFile(p) ? codeLink(permalinkBase, p, a, b) : m))
-    .replace(RFC, (_, n, s) => `[RFC ${n}${s ? `, section ${s}` : ""}](https://www.rfc-editor.org/rfc/rfc${n}${s ? `#section-${s}` : ""})`)
-    .replace(/§\s*/g, "section ");
+  // One pass, so a link built here is never scanned again (a path such as rfc9110.md:3 stays one link).
+  const plain = (s) => s.replace(REF, (m, p, a, b, n, sec) =>
+    p ? (isFile(p) ? codeLink(permalinkBase, p, a, b) : m)
+      : n ? `[RFC ${n}${sec ? `, section ${sec}` : ""}](https://www.rfc-editor.org/rfc/rfc${n}${sec ? `#section-${sec}` : ""})`
+        : "section ");
   // split keeps 2 groups per span (the span, its backtick run): parts go text, span, run, text, ...
   return lines.map((l, i) => code.has(i) ? l : l.split(SPAN)
     .map((part, j) => (j % 3 === 2 ? "" : j % 3 === 0 || PATH_SPAN.test(part) ? plain(part ?? "") : part)).join("")).join("\n");

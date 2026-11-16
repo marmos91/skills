@@ -6,7 +6,7 @@ import { basename, join, resolve, sep } from "node:path";
 import * as github from "./github.mjs";
 import { runChild as realRunChild, ChildFailed, SeatDropped, stopping, harnessFor } from "./child.mjs";
 import { WHOLE_PR_LENSES, applyEffort, loadUserConfig, lowerEffort, pickEffort, plannedChildren, seatId, seatsForLens, withLimits } from "./config.mjs";
-import { frame as realFrame, git, gitOk, readTree, cleanupWorktree, HeadMoved, DiffTooLarge } from "./frame.mjs";
+import { frame as realFrame, git, readTree, cleanupWorktree, HeadMoved, DiffTooLarge } from "./frame.mjs";
 import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.mjs";
 import { tally } from "./tally.mjs";
 import { validate } from "./schema.mjs";
@@ -29,6 +29,8 @@ const sha1 = (s) => createHash("sha1").update(s).digest("hex");
 const readJson = (f) => JSON.parse(readFileSync(f, "utf8"));
 const save = (f, v) => writeAtomic(f, JSON.stringify(v, null, 2) + "\n");
 // fp= on inline comments lets a later run link a thread to its findings (spec 6.4), one fp per finding the comment covers; key= is the dedupe key.
+// A regular file of the head tree, asked of git: a PR symlink never makes the review touch a host path.
+const headFile = (dir, sha, p) => { try { return /^100\d{3} blob /.test(git(dir, ["ls-tree", sha, "--", p])); } catch { return false; } };
 // The dedupe key of an inline comment: a fingerprint can post at 2 lines (split clusters), each its own thread.
 const inlineKeyOf = (sha, fp, file, line) => sha1(`inline\0${sha}\0${fp}\0${file}\0${line}`);
 const marker = (runId, sha, key, fp) => `<!-- pr-review run=${runId} sha=${sha} key=${key}${fp ? ` fp=${fp}` : ""} -->`;
@@ -536,7 +538,7 @@ async function once(o, restart) {
 
   // Posted text links its references (#65): file:line to a permalink at the head, an RFC to its section.
   const permalink = `https://github.com/${repo}/blob/${f.headSha}`;
-  const refs = (t) => linkRefs(t, permalink, (p) => !p.split("/").includes("..") && existsSync(join(f.worktree, p)));
+  const refs = (t) => linkRefs(t, permalink, (p) => headFile(f.worktree, f.headSha, p));
   const text = new Map(composed.comments.map((x) => [x.id, refs(x.body)]));
   // One comment for findings with one root cause and one fix (compose `also`) on the same line, where a later
   // repeat of either links to the thread. The host carries every fp. An id with its own comment is never folded,
@@ -806,7 +808,7 @@ async function followUp(o, head, pst, answered) {
     const text = f.secret ? heldText(repoState, n, pst.lastRunId, q.fingerprint) : f.proven === false ? markUnproven(base, !diffLine(hunks, f.file, f.line)) : base;
     if (!text) continue;
     const s = scanOutbound(text, { repo });
-    if (s.ok) items.push({ q, text: linkRefs(text, `https://github.com/${repo}/blob/${head}`, (p) => gitOk(o.repoDir ?? process.cwd(), ["cat-file", "-e", `${head}:${p}`])) });
+    if (s.ok) items.push({ q, text: linkRefs(text, `https://github.com/${repo}/blob/${head}`, (p) => headFile(o.repoDir ?? process.cwd(), head, p)) });
     else { o.log(stillHeld(`question ${q.id}`, s.hits)); held.push(q); }
   }
   let url = null;

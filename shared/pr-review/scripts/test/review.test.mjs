@@ -2,7 +2,7 @@ import "./hermetic.mjs";
 import test from "node:test";
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync, existsSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync, existsSync, readdirSync, rmSync, symlinkSync } from "node:fs";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname, basename } from "node:path";
@@ -1558,6 +1558,20 @@ test("2 posted findings with one fingerprint each link their own thread in the i
   assert.deepEqual(posts(fx)[0].threads.map((t) => t.line).sort(), [2, 3]);
   const edit = mutations(fx).find((m) => m.key === "graphql EditReview").input.variables.body;
   assert.match(edit, /- First\. \(\[thread\]\(https:\/\/github\.com\/o\/r\/pull\/5#discussion_r200\)\)\n- Second\. \(\[thread\]\(https:\/\/github\.com\/o\/r\/pull\/5#discussion_r300\)\)/);
+});
+
+test("a PR symlink to a host path gets no link: the head check asks git, never the file system", async () => {
+  const fx = fixture();
+  writeFileSync(join(fx.root, "host.txt"), "host\n");
+  symlinkSync(join(fx.root, "host.txt"), join(fx.seed, "probe.js"));
+  const head = commit(fx.seed, {}, "add a symlink");
+  git(fx.seed, "push", "-qf", fx.origin, "HEAD:refs/pull/5/head");
+  routes(fx, { head });
+  const compose = { verdict: "The off by one blocks.", body: "", comments: [{ id: "c1", body: "**must:** off by one (read probe.js:1 and a.js:1)" }] };
+  const { r } = await go(fx, happy({ compose }));
+  assert.equal(r.exit, 0, r.summary);
+  const t = posts(fx)[0].threads[0].body;
+  assert.match(t, /\(read probe\.js:1 and \[`a\.js`\]/);
 });
 
 test("posted text links file:line and RFC references, and no section sign is left", async () => {
