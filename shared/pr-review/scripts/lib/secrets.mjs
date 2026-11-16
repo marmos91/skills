@@ -48,7 +48,7 @@ function gitleaksHits(text, timeoutMs) {
     if (res.error || (res.status !== 0 && res.status !== 1)) return [SCANNER_ERROR];
     const findings = JSON.parse(readFileSync(report, "utf8"));
     if (!Array.isArray(findings)) return [SCANNER_ERROR];
-    return findings.map((f) => ({ rule: f.RuleID ?? "gitleaks", masked: mask(f.Secret ?? f.Match ?? ""), line: f.StartLine }));
+    return findings.map((f) => ({ rule: f.RuleID ?? "gitleaks", masked: mask(f.Secret ?? f.Match ?? ""), line: f.StartLine, end: f.EndLine ?? f.StartLine }));
   } catch {
     return [SCANNER_ERROR]; // missing or invalid report
   } finally {
@@ -99,6 +99,8 @@ export function fileValues(text) {
   let raw = [];
   // JSON only for an object or array; a number keeps its source text (a 16+ digit value or `1e400` would change)
   try { const j = JSON.parse(text, (k, v, ctx) => (typeof v === "number" ? ctx.source : v)); if (j && typeof j === "object") raw = leaves(j); } catch { /* not JSON */ }
+  // a multi-line leaf (a PEM block, an embedded kubeconfig): its lines count as a file of their own
+  raw = raw.flatMap((v) => (v.includes("\n") ? fileValues(v) : [v]));
   if (!raw.length) {
     raw = text.split(/\r?\n/).flatMap((l) => {
       const t = l.trim();
@@ -148,7 +150,9 @@ export function findings(text, { timeoutMs = 30000, repo = null, label = null } 
     while (lo < hi) { const m = (lo + hi + 1) >> 1; if (starts[m] <= i) lo = m; else hi = m - 1; }
     return lo + 1;
   };
-  const out = gitleaksHits(text, timeoutMs).map(({ line, ...h }) => ({ ...h, where: line ? where(line) : null, fp: null }));
+  // gitleaks redacts its report, so a gitleaks fp hashes the rule and the lines of the hit as scanned, in memory
+  const lineText = (a, b) => text.slice(starts[a - 1], b < starts.length ? starts[b] - 1 : text.length);
+  const out = gitleaksHits(text, timeoutMs).map(({ line, end, ...h }) => ({ ...h, where: line ? where(line) : null, fp: line > 0 && line <= starts.length ? fingerprint(h.rule, lineText(line, Math.max(line, end))) : null }));
   const add = (rule, value, i) => out.push({ rule, masked: mask(value), where: where(lineOf(i)), fp: fingerprint(rule, value) });
   for (const [kind, re] of PATTERNS) for (const m of text.matchAll(re)) add(kind, m[0], m.index);
   let allowed = new Set();
