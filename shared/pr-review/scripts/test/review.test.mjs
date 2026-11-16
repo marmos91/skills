@@ -156,10 +156,12 @@ test("happy path posts one review with inline comments and the marker", async ()
   assert.equal(existsSync(join(r.runDir, "post.done")), true);
 });
 
-test("noMarkup: an escaped backtick is a literal, so HTML between escaped backticks is escaped; a span may cross one newline", () => {
+test("noMarkup: an escaped backtick is a literal; a span never crosses a newline; only a fence at line start is code", () => {
   assert.equal(noMarkup("hide \\`<img>\\` and <b>x</b>"), "hide \\`&lt;img&gt;\\` and &lt;b&gt;x&lt;/b&gt;");
-  assert.equal(noMarkup("span `a\n<b>` out <i>"), "span `a\n<b>` out &lt;i&gt;");
-  assert.equal(noMarkup("not `a\n\n<b>` x"), "not `a\n\n&lt;b&gt;` x");
+  assert.equal(noMarkup("span `a\n<img src=x>` out"), "span `a\n&lt;img src=x&gt;` out");
+  assert.equal(noMarkup("x ```<b>```"), "x ```&lt;b&gt;```");
+  assert.equal(noMarkup("```<img>`"), "```&lt;img&gt;`", "an unclosed run is literal, not a span");
+  assert.equal(noMarkup("`a < b`\n```js\nif (a < b) {}\n```"), "`a < b`\n```js\nif (a < b) {}\n```");
 });
 
 test("a posted comment escapes < and > in model text, so it cannot hold a look-alike marker; code keeps them", async () => {

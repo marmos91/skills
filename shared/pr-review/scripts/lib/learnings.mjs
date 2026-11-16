@@ -23,9 +23,10 @@ export function parseMarker(body) {
 
 /** Model text of a posted comment with < and > escaped, so it renders as written but holds no markup or look-alike
  * marker. Code spans and fences keep theirs: an entity there shows as text, and a suggestion must stay valid code.
- * A backslash-escaped backtick is a literal (GitHub renders it so), never a span delimiter; a span may cross one
- * newline, not a blank line. */
-export const noMarkup = (s) => String(s ?? "").split(/((?<!\\)```[\s\S]*?```|(?<!\\)`(?:[^`\n]|\n(?![ \t]*\n))*`)/).map((x, i) => (i % 2 ? x : x.replace(/</g, "&lt;").replace(/>/g, "&gt;"))).join("");
+ * Only a fence at the start of a line, and an inline span on one line, count as code: a span across a newline could
+ * hide a block of HTML. A backslash-escaped backtick is a literal, never a span delimiter.
+ * shortcut: a span of 2+ backticks is escaped too (shows &lt; in code); match backtick runs if that matters. */
+export const noMarkup = (s) => String(s ?? "").split(/((?<![^\n])```[\s\S]*?```|(?<![\\`])`[^`\n]*`(?!`))/).map((x, i) => (i % 2 ? x : x.replace(/</g, "&lt;").replace(/>/g, "&gt;"))).join("");
 
 /** Adds the keys to the local file. A reason the secret scan holds is left out. -> the new lines, to suggest for the base branch. */
 export function learn(repoState, keys, reason, repo) {
