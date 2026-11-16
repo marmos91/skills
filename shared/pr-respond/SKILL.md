@@ -90,8 +90,8 @@ order):
 ```json
 [
   { "n": 1, "status": "done", "sha": "<fixing commit>", "thread": "<id>", "text": "as you wrote it." },
-  { "n": 2, "status": "done", "sha": "<fixing commit>", "text": "a guard instead of the rewrite: the caller already checks." },
-  { "n": 3, "status": "open", "text": "(read src/a.js:10) the API is public; the options are to deprecate it or keep it." }
+  { "n": 2, "status": "done", "sha": "<fixing commit>", "thread": "<id>", "text": "a guard instead of the rewrite: the caller already checks." },
+  { "n": 3, "status": "open", "thread": "<id>", "text": "(read src/a.js:10) the API is public; the options are to deprecate it or keep it." }
 ]
 ```
 

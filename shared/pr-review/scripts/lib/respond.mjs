@@ -238,7 +238,8 @@ export function summaryText(repo, points) {
 
 /**
  * Posts the summary once per head (a marker key). A point that names its thread (the finding's id) gets the
- * fingerprints of that thread's findings (fps), recorded per head for pr-converge. -> { action: "posted"|"skipped", points }
+ * fingerprints of that thread's findings (fps), recorded per head for pr-converge. The first summary at a head wins:
+ * the recorded points stay those of the posted comment. -> { action: "posted"|"skipped", points }
  */
 export async function summary({ repo, n, points: given, gh }) {
   const { headSha } = await gh.pr(repo, n);
@@ -249,12 +250,13 @@ export async function summary({ repo, n, points: given, gh }) {
     if (!t) throw new Error(`point ${p.n}: thread ${p.thread} not found on ${repo}#${n}`);
     return { ...p, fps: fpsOf(t, named[0]) };
   });
-  const st = load(repo, n);
-  save(repo, n, { ...st, points: { ...st.points, [headSha]: points } });
   const key = sha1(`respond-summary\0${headSha}`);
   const body = `${summaryText(repo, points)}\n\n<!-- pr-review sha=${headSha} key=${key} -->`;
   if (!scanOutbound(body, { repo }).ok) throw new Error("the secret scan holds the summary");
-  if (await gh.findMarker(repo, n, key)) return { action: "skipped", points };
+  if (await gh.findMarker(repo, n, key)) return { action: "skipped", points: recordedPoints(repo, n, headSha) ?? points };
+  // recorded before the post: a crash between them leaves no marker, so the rerun records and posts again
+  const st = load(repo, n);
+  save(repo, n, { ...st, points: { ...st.points, [headSha]: points } });
   await gh.comment(repo, n, body);
   return { action: "posted", points };
 }

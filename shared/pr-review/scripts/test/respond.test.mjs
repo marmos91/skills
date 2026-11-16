@@ -279,6 +279,15 @@ test("the fingerprints come from our own council marker: findings list them, sum
   await assert.rejects(summary({ repo: REPO, n: N, points: [{ ...pts[0], thread: "T9" }], gh }), /thread T9 not found/);
 });
 
+test("summary: a rerun at the same head keeps the points of the posted comment", async () => {
+  freshState();
+  const first = [{ n: 1, status: "open", text: "kept open." }];
+  assert.equal((await summary({ repo: REPO, n: N, points: first, gh: fakeGh([]) })).action, "posted");
+  const again = await summary({ repo: REPO, n: N, points: [{ n: 1, status: "done", sha: SHA, text: "done." }], gh: fakeGh([], { marker: true }) });
+  assert.equal(again.action, "skipped");
+  assert.deepEqual([again.points[0].status, recordedPoints(REPO, N, "h1")[0].status], ["open", "open"]);
+});
+
 test("git readers: a failed git throws; only exit 1 of merge-base means not in the head", () => {
   const fake = (codes) => (...a) => ({ status: codes[a[0]] ?? 0, stdout: `out ${a.join(" ")}`, stderr: "fatal: bad revision" });
   assert.throws(() => gitReaders(fake({ diff: 128 })).fileDiff("main", "h1", "a.js"), GitError);
