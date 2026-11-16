@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
+import { readSummaryMarker } from "./state.mjs";
 
 const GH_URL = /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/;
 /** owner/repo of each GitHub remote of the current folder, origin first. */
@@ -103,6 +104,13 @@ export async function markerKeys(repo, n) {
     }
   }
   return keys;
+}
+
+/** The counts in the newest summary marker of the viewer's reviews at sha, or null: a follow-up's fallback when local state has none. */
+export async function markerCounts(repo, n, sha) {
+  const me = await viewer();
+  const marks = (await json(["api", "--paginate", "--slurp", `repos/${repo}/pulls/${n}/reviews`])).flat().filter((r) => r?.user?.login === me).map((r) => readSummaryMarker(r.body));
+  return marks.filter((m) => m?.sha === sha).at(-1) ?? null;
 }
 
 // Same full paging as markerKeys: a GraphQL walk caps comments per review at 100, and a missed marker means a duplicate post.

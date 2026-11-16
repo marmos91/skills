@@ -842,7 +842,8 @@ async function followUp(o, head, pst, answered) {
   const anchor = anchors(o.repoDir ?? process.cwd(), head);
   const doneKey = (q) => settledKey(q.fingerprint, q.finding?.line, anchor(q.finding?.file, q.finding?.line));
   const runId = pst.lastRunId ?? "followup";
-  const was = pst.counts?.sha === head ? pst.counts : null;
+  // No local counts (reviewed on another machine): the newest marker at this head on GitHub has them.
+  const was = pst.counts?.sha === head ? pst.counts : await gh.markerCounts(repo, n, head);
   const must = (q) => q.finding?.severity === "must";
   // A must the secret scan held is in the count of the full run at this head only when that run held it (its held
   // file): posting it then adds none, dropping it removes it. A must held at an older head was never in this count.
@@ -873,7 +874,7 @@ async function followUp(o, head, pst, answered) {
     const key = sha1(`followup\0${head}\0${fps.join(",")}`);
     const p = place(items.map(({ q, text }) => ({ file: q.finding.file, line: q.finding.line, body: `${text}\n\n${marker(runId, head, inlineKeyOf(head, q.fingerprint, q.finding.file, q.finding.line), q.fingerprint, learnKey(q.finding))}` })), hunks, `https://github.com/${repo}/blob/${head}`);
     // The follow-up's marker is the new state of the head for pr-land: the full review's counts, plus the musts posted
-    // now, minus the questions answered now. Without the full review's counts here, gaps=1 holds the merge until a full review.
+    // now, minus the questions answered now. With no counts anywhere (a review before counts existed), gaps=1 holds the merge until a full review.
     const counts = {
       must: mustNow(items.map((x) => x.q)),
       questions: waitingQuestions(repoState, n).filter((q) => !answered.some((a) => a.id === q.id)).length,
