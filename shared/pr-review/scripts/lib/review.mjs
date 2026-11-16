@@ -203,20 +203,29 @@ export function codeMoved(repoDir, q, head) {
   return shift !== 0;
 }
 
-// The trimmed text of file:line at sha, "" when git cannot show it: the code anchor of a settled entry.
+// The trimmed text of file:line at sha, "" when git cannot show it, null past the end of the file: the code anchor
+// of a settled entry.
 function anchors(dir, sha) {
   const files = new Map();
   return (file, line) => {
     if (!file || !Number.isInteger(line)) return "";
-    if (!files.has(file)) { let t = ""; try { t = git(dir, ["show", `${sha}:${file}`]); } catch { /* no anchor */ } files.set(file, t.split("\n")); }
-    return files.get(file)[line - 1]?.trim() ?? "";
+    if (!files.has(file)) { let t = null; try { t = git(dir, ["show", `${sha}:${file}`]).replace(/\n$/, "").split("\n"); } catch { /* no anchor */ } files.set(file, t); }
+    const lines = files.get(file);
+    return !lines ? "" : line > lines.length ? null : lines[line - 1].trim();
   };
 }
 
+// Files where indentation changes meaning: a whitespace edit there still unsettles a finding.
+const WHITESPACE_SIGNIFICANT = /(\.(py|pyi|ya?ml|mk|haml|pug|slim|coffee|nim|fsx?|sass|styl)|(^|\/)(GNU)?[Mm]akefile)$/;
+
+// The lines changed since the review: they unsettle a settled finding. Whitespace edits are left out (delta-w.patch)
+// except in whitespace-significant files.
 function changedLines(f) {
-  const out = new Map();
-  for (const [file, h] of parseHunks(readFileSync(scopePatch(f), "utf8"))) out.set(file, new Set([...h.right].filter(([, k]) => k === "add").map(([l]) => l)));
-  return out;
+  const added = (file) => new Map([...parseHunks(readFileSync(file, "utf8"))].map(([p, h]) => [p, new Set([...h.right].filter(([, k]) => k === "add").map(([l]) => l))]));
+  const all = added(scopePatch(f)), w = join(f.ctxDir, "delta-w.patch");
+  if (!existsSync(w)) return all;
+  const blind = added(w);
+  return new Map([...all.keys()].map((p) => [p, WHITESPACE_SIGNIFICANT.test(p) ? all.get(p) : blind.get(p) ?? new Set()]));
 }
 
 function ciOf(f) {
@@ -787,7 +796,8 @@ async function once(o, restart) {
   const recorded = [...clean, ...folded.filter((c) => clean.some((h) => h.id === hostOf.get(c.id)))];
   let st = prState(repoState, n);
   if (st.lastRunId !== runId) { // a rerun after a crash here must not count the review twice
-    const fps = [...recorded, ...older, ...rejected, ...hygItems].map((c) => settledKey(c.fp, c.line, anchor(c.file, c.line)));
+    // a finding still settled by an entry an older engine wrote (fp:line) gets its anchored key, so it stays settled once it moves
+    const fps = [...recorded, ...older, ...rejected, ...hygItems, ...dropped.filter((d) => d.reason === "settled").map((d) => d.finding)].map((c) => settledKey(c.fp, c.line, anchor(c.file, c.line)));
     Object.assign(st, {
       reviews: st.reviews + 1, lastReviewedSha: f.headSha, lastRunId: runId, settled: [...new Set([...st.settled, ...fps])],
       counts: { sha: f.headSha, ...counts() }, // a follow-up at this head starts from these

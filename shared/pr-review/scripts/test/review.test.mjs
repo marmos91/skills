@@ -12,7 +12,7 @@ import { ChildFailed } from "../lib/child.mjs";
 import { decide as realDecide } from "../lib/decider.mjs";
 import { answer, openQuestions, pendingAnswers } from "../lib/questions.mjs";
 import { stateRoot, prState, readSummaryMarker, savePrState } from "../lib/state.mjs";
-import { fingerprint, learnKey, settledKey as keyOf } from "../lib/convergence.mjs";
+import { fingerprint, findingKey, learnKey, settledKey as keyOf } from "../lib/convergence.mjs";
 import { learn } from "../lib/learnings.mjs";
 import * as github from "../lib/github.mjs";
 import { queueCoreQuestion, saveCorePaths } from "../lib/setup.mjs";
@@ -100,6 +100,8 @@ const F = (over = {}) => ({ lens: "correctness", severity: "must", file: "a.js",
 // the settled list keys a finding by fingerprint and its code anchor: the trimmed text of its line at the head
 const HEAD_LINES = ["const a = 2;", "const b = 3;", "const c = 4;", "const d = 5;"];
 const settledKey = (over) => keyOf(fingerprint(F(over)), F(over).line, HEAD_LINES[F(over).line - 1] ?? "");
+const OFF = { file: "b.js", line: 1 }; // an unchanged file of the base: off the diff, inside the file
+const OFF_FILES = { "b.js": "const b = open();\n" };
 const C = (id, over = {}) => ({ ...F(), id, found: [S0, S1], ...over });
 const keep = (id) => ({ id, vote: "keep", counter_case: "" });
 const drop = (id) => ({ id, vote: "drop", counter_case: "the guard at a.js:1 stops it" });
@@ -1862,8 +1864,8 @@ test("compose gets outside: true on a finding off the diff lines, and only there
 });
 
 test("the body index lists only threads that went inline, at their real line, Critical first", async () => {
-  const fx = fixture(); routes(fx);
-  const c2 = C("c2", { line: 99, severity: "should", title: "Off diff" }), c3 = C("c3", { line: 3, severity: "should", title: "Name" });
+  const fx = fixture(OFF_FILES); routes(fx);
+  const c2 = C("c2", { ...OFF, severity: "should", title: "Off diff" }), c3 = C("c3", { line: 3, severity: "should", title: "Name" });
   const compose = {
     verdict: "The off by one blocks.", body: "", praise: "The test covers the edge.",
     index: [{ theme: "Totals", items: [{ id: "c3", text: "Rename c." }, { id: "c1", text: "Fix the total." }, { id: "c2", text: "Off-diff item." }, { id: "c9", text: "Made up." }] }],
@@ -1928,9 +1930,9 @@ test("posted text links file:line and RFC references, and no section sign is lef
 });
 
 test("the body marker counts a must off the diff, for pr-land", async () => {
-  const fx = fixture(); routes(fx);
+  const fx = fixture(OFF_FILES); routes(fx);
   const compose = { verdict: "The off-diff bug blocks.", body: "", comments: [{ id: "c1", body: "**must:** off by one" }, { id: "c2", body: "**must:** off diff" }] };
-  const { r } = await go(fx, { all: { findings: [F()] }, merge: [C("c1"), C("c2", { line: 99, title: "Off diff" })], "v~2": [keep("c1"), keep("c2")], compose });
+  const { r } = await go(fx, { all: { findings: [F()] }, merge: [C("c1"), C("c2", { ...OFF, title: "Off diff" })], "v~2": [keep("c1"), keep("c2")], compose });
   assert.equal(r.exit, 0, r.summary);
   assert.match(posts(fx)[0].body, /Outside the diff:/);
   assert.deepEqual(counts(posts(fx)[0].body), { must: 2, questions: 0, gaps: 0 });
@@ -2414,22 +2416,22 @@ test("full depth: an answered finding posted by a follow-up says its suggestion 
 });
 
 test("full depth: an unproven finding off the diff keeps its mark in the summary line", async () => {
-  const fx = fixture(); routes(fx); trusted(fx);
-  const { r } = await go(fx, happy({ merge: [C("c1"), C("c2", { line: 99, title: "Off diff" })], "v~2": [keep("c1"), keep("c2")],
+  const fx = fixture(OFF_FILES); routes(fx); trusted(fx);
+  const { r } = await go(fx, happy({ merge: [C("c1"), C("c2", { ...OFF, title: "Off diff" })], "v~2": [keep("c1"), keep("c2")],
     compose: { body: "Changes a.", comments: [{ id: "c1", body: "**must:** one" }, { id: "c2", body: "**must:** two\n\nmore" }] } }), { depth: "full" });
   assert.equal(r.exit, 0, r.summary);
-  assert.match(posts(fx)[0].body, /\[`a\.js`\]\(https:\/\/github\.com\/o\/r\/blob\/\w+\/a\.js#L99\): \*\*must:\*\* two \(unproven\)/);
+  assert.match(posts(fx)[0].body, /\[`b\.js`\]\(https:\/\/github\.com\/o\/r\/blob\/\w+\/b\.js#L1\): \*\*must:\*\* two \(unproven\)/);
 });
 
 test("full depth: an unproven finding off the diff keeps its mark in a follow-up", async () => {
-  const fx = fixture(); routes(fx); trusted(fx);
-  const answers = split({ merge: [C("c1", { found: [S0], line: 99 })] });
+  const fx = fixture(OFF_FILES); routes(fx); trusted(fx);
+  const answers = split({ merge: [C("c1", { found: [S0], ...OFF })] });
   await go(fx, answers, { mode: "loop", depth: "full", decide: async () => ({ decision: "unsure", raw: null }) });
   const [q] = openQuestions(fx.state);
   answer(fx.state, q.id, "post");
   const again = await go(fx, answers, { depth: "full" });
   assert.equal(again.r.exit, 0, again.r.summary);
-  assert.match(posts(fx)[1].body, /\[`a\.js`\]\(https:\/\/github\.com\/o\/r\/blob\/\w+\/a\.js#L99\): \*\*must:\*\* Off by one \(unproven\)/);
+  assert.match(posts(fx)[1].body, /\[`b\.js`\]\(https:\/\/github\.com\/o\/r\/blob\/\w+\/b\.js#L1\): \*\*must:\*\* Off by one \(unproven\)/);
 });
 
 test("2 split clusters with one fingerprint get a decision each", async () => {
@@ -2520,6 +2522,38 @@ test("pre-existing: a later pass does not raise it again", async () => {
   assert.ok(!run.calls.some((c) => c.k === "v~2"), "dropped before the vote");
   assert.deepEqual(JSON.parse(readFileSync(join(r.runDir, "clusters.json"), "utf8")).dropped.map((d) => d.reason), ["settled"]);
   assert.doesNotMatch(posts(fx)[1].body, /pre-existing/);
+});
+
+test("#92: a finding still settled by an fp:line entry of an older engine gets its anchored key", async () => {
+  const fx = fixture({ "b.js": "const b = open();\n" }); routes(fx);
+  savePrState(fx.state, N, { ...prState(fx.state, N), settled: [findingKey(fingerprint(PRE), 1)] });
+  const { r } = await go(fx, { ...preRun, compose: { body: "No new findings.", comments: [] } });
+  assert.equal(r.exit, 0, r.summary);
+  assert.deepEqual(JSON.parse(readFileSync(join(r.runDir, "clusters.json"), "utf8")).dropped.map((d) => d.reason), ["settled"]);
+  assert.ok(prState(fx.state, N).settled.includes(keyOf(fingerprint(PRE), 1, "const b = open();")), "the line can move now and stay settled");
+});
+
+test("#92: a reindent keeps a .js finding settled, but unsettles one in a whitespace-significant .py file", async () => {
+  const fx = fixture({ "b.py": "if x:\n    y()\n    z()\n" }); routes(fx);
+  const py = { file: "b.py", line: 3, title: "z runs only when x" };
+  const both = (compose) => ({ all: { findings: [F()] }, merge: [C("c1"), C("c2", py)], "v~2": [keep("c1"), keep("c2")], compose });
+  await go(fx, both({ body: "Two.", comments: [{ id: "c1", body: "**must:** one" }, { id: "c2", body: "**must:** two" }] }));
+  git(fx.seed, "checkout", "-q", "feat");
+  const b = commit(fx.seed, { "a.js": "const a = 2;\n  const  b = 3;\nconst c = 4;\nconst d = 5;\n", "b.py": "if x:\n    y()\nz()\n" }, "style: indent");
+  git(fx.seed, "push", "-qf", fx.origin, "HEAD:refs/pull/5/head");
+  routes(fx, { head: b });
+  const { r } = await go(fx, both({ body: "One.", comments: [{ id: "c2", body: "**must:** two" }] }));
+  assert.equal(r.exit, 0, r.summary);
+  const cl = JSON.parse(readFileSync(join(r.runDir, "clusters.json"), "utf8"));
+  assert.deepEqual([cl.clusters.map((c) => c.file), cl.dropped.map((d) => [d.finding.file, d.reason])], [["b.py"], [["a.js", "settled"]]]);
+});
+
+test("#92: a finding on a line past the end of its file is dropped at the merge step", async () => {
+  const fx = fixture(); routes(fx);
+  const { r } = await go(fx, { ...happy(), merge: [C("c1", { line: 5 })], compose: { body: "No new findings.", comments: [] } });
+  assert.equal(r.exit, 0, r.summary);
+  assert.deepEqual(JSON.parse(readFileSync(join(r.runDir, "clusters.json"), "utf8")).dropped.map((d) => d.reason), ["past end of file"]);
+  assert.ok(!prState(fx.state, N).settled.includes(findingKey(fingerprint(F()), 5)), "no fp:line entry for code that is not there");
 });
 
 test("pre-existing: the only finding keeps the loop's unanimous zero", async () => {
