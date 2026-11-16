@@ -259,6 +259,7 @@ test("secret in a finding -> that post blocked, question queued", async () => {
   assert.ok(!JSON.stringify(q).includes("leaks"), "no comment text in the question");
   assert.ok(!readFileSync(join(fx.state, "questions", `${q[0].id}.md`), "utf8").includes("leaks"));
   assert.match(p[0].body, /1 point is still open with the reviewer\./);
+  assert.equal(counts(p[0].body).questions, 1, "the marker counts the question the scan queued at post time");
   // answer post -> the comment is composed again and posted with the secret redacted
   answer(fx.state, q[0].id, "post");
   const again = await go(fx, happy({ compose: { body: "Summary.", comments: [{ id: "c1", body: `**must:** token ${token} leaks` }] } }));

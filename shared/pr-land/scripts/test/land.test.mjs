@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initRepo, commit, git } from "../../../pr-open/scripts/test/repo.mjs";
 import { ghStub } from "../../../pr-open/scripts/test/gh.mjs";
-import { notReady, squash, stackOrder, Blocked } from "../lib/land.mjs";
+import { notReady, repoOfUrl, squash, stackOrder, Blocked } from "../lib/land.mjs";
 import { main } from "../main.mjs";
 import { queueQuestion } from "../../../pr-review/scripts/lib/questions.mjs";
 import { stateRoot, summaryMarker } from "../../../pr-review/scripts/lib/state.mjs";
@@ -39,7 +39,7 @@ test("notReady: each gap is named", () => {
     [{ statusCheckRollup: [{ __typename: "StatusContext", context: "ci", state: "PENDING" }] }, 0, /ci is pending/],
     [{ statusCheckRollup: [{ __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "FAILURE" }] }, 0, /test is failure/],
     [{}, 2, /2 review threads are unresolved/],
-    [{ reviews: [] }, 0, /no approval and no full pr-review review by me/],
+    [{ reviews: [] }, 0, /no approval of the head and no full pr-review review by me/],
     [{ reviews: [rv(mark("b".repeat(40)))] }, 0, /review is on bbbbbbb, the head is aaaaaaa/],
     [{ reviews: [rv(mark(HEAD, 1))] }, 0, /1 open must/],
     [{ reviews: [rv(mark(HEAD, 0, 2))] }, 0, /2 pr-review questions not settled/],
@@ -71,9 +71,27 @@ test("notReady: local question state replaces the frozen marker count when the r
   assert.match(notReady(ready(), 0, ME, () => 2).join(), /2 pr-review questions not settled/, "asked after the review");
 });
 
-test("notReady: an approval stands in for the pr-review review, not for CI or threads", () => {
-  assert.deepEqual(notReady(ready({ reviews: [], reviewDecision: "APPROVED" }), 0, ME), []);
-  assert.match(notReady(ready({ reviews: [], reviewDecision: "APPROVED", mergeable: "CONFLICTING" }), 1, ME).join("; "), /CONFLICTING.*1 review thread is unresolved/);
+const approval = (oid = HEAD) => ({ state: "APPROVED", author: { login: "bob" }, commit: { oid }, body: "" });
+
+test("notReady: an approval of the head stands in for the pr-review review, not for CI or threads", () => {
+  assert.deepEqual(notReady(ready({ reviews: [approval()], reviewDecision: "APPROVED" }), 0, ME), []);
+  assert.match(notReady(ready({ reviews: [approval()], reviewDecision: "APPROVED", mergeable: "CONFLICTING" }), 1, ME).join("; "), /CONFLICTING.*1 review thread is unresolved/);
+  // pr-review's older full review does not overrule an approval of the head
+  assert.deepEqual(notReady(ready({ reviews: [rv(mark("b".repeat(40), 1)), approval()], reviewDecision: "APPROVED" }), 0, ME), []);
+});
+
+test("notReady: an approval does not overrule pr-review's full review on the head, nor count when it is stale", () => {
+  for (const [m, re] of [[mark(HEAD, 1), /1 open must/], [mark(HEAD, 0, 1), /1 pr-review question not settled/], [mark(HEAD, 0, 0, 1), /incomplete/]]) {
+    assert.match(notReady(ready({ reviews: [rv(m), approval()], reviewDecision: "APPROVED" }), 0, ME).join(), re);
+  }
+  assert.match(notReady(ready({ reviews: [approval("b".repeat(40))], reviewDecision: "APPROVED" }), 0, ME).join(), /no approval of the head/);
+});
+
+test("repoOfUrl: GitHub https, scp and ssh forms with a port; no other host, no local path", () => {
+  for (const u of ["https://github.com/O/R.git", "https://github.com/o/r", "https://github.com/o/r/", "git@github.com:o/r.git", "ssh://git@github.com/o/r.git",
+    "ssh://git@github.com:22/o/r.git", "ssh://git@ssh.github.com:443/o/r.git", "https://user@github.com/o/r.git"]) assert.equal(repoOfUrl(u), "o/r", u);
+  for (const u of ["/home/me/github.com/o/r.git", "https://mygithub.com/o/r.git", "https://gitlab.com/mirror/github.com/o/r.git", "https://github.com.evil.io/o/r.git",
+    "file:///srv/github.com/o/r.git", "https://github.com/x/o/r.git", "../r.git"]) assert.equal(repoOfUrl(u), null, u);
 });
 
 test("squash: the title gets (#N) once; bad titles, AI mentions and secrets are blocked", () => {
@@ -267,7 +285,7 @@ test("a question still open in pr-review's local state blocks, though the marker
 
 test("a worktree that cannot be removed: the issues are still ticked and closed, the failure is reported", async (t) => {
   const s = stack();
-  writeFileSync(join(s.wt, "dirty.txt"), "x"); // git worktree remove refuses a dirty tree
+  git(s.dir, "worktree", "lock", s.wt); // git worktree remove refuses a locked tree
   const gh = ghStub(routes(s));
   const { code, json } = await run(t, s.dir, ["27"]);
   assert.equal(code, 4);
@@ -275,6 +293,34 @@ test("a worktree that cannot be removed: the issues are still ticked and closed,
   assert.ok(mutations(gh).some((m) => m.key.startsWith("api -X PATCH repos/o/r/issues/12")));
   assert.ok(mutations(gh).some((m) => m.key.startsWith("api -X PATCH repos/o/r/issues/40")));
   assert.ok(existsSync(s.wt));
+});
+
+test("local cleanup keeps what is not the merged head: a fork's branch, a moved branch, a worktree with untracked or ignored files", async (t) => {
+  const cases = {
+    fork: (s) => ({ "pr view 27": { stdout: ready({ headRefOid: s.A, isCrossRepository: true, reviews: [rv(mark(s.A))] }) } }),
+    moved: (s) => { commit(s.wt, "c.txt", "c", "wip"); return {}; },
+    ignored: (s) => { writeFileSync(join(s.wt, ".gitignore"), ".env\n"); git(s.wt, "add", ".gitignore"); git(s.wt, "commit", "-q", "--amend", "--no-edit", "-S"); return { "pr view 27": { stdout: ready({ headRefOid: git(s.wt, "rev-parse", "HEAD"), reviews: [rv(mark(git(s.wt, "rev-parse", "HEAD")))] }) } }; },
+  };
+  for (const [name, setup] of Object.entries(cases)) {
+    const s = stack();
+    const extra = setup(s);
+    if (name === "ignored") { git(s.wt, "push", "-q", "-f", "upstream", "feat/a"); writeFileSync(join(s.wt, ".env"), "SECRET=1\n"); }
+    ghStub(routes(s, extra));
+    const { code, json } = await run(t, s.dir, ["27"]);
+    assert.equal(code, 0, `${name}: ${JSON.stringify(json)}`);
+    assert.ok(existsSync(s.wt), `${name}: the worktree is kept`);
+    assert.equal(git(s.dir, "branch", "--list", "feat/a").trim(), "+ feat/a", name);
+  }
+});
+
+test("a #N in the body that is no issue is skipped with a note; the step goes on", async (t) => {
+  const s = stack();
+  const gh = ghStub(routes(s, { "pr view 27": { stdout: ready({ headRefOid: s.A, reviews: [rv(mark(s.A))], body: "Colour is now #000000. Was #77 (deleted). Closes #40\n" }) } }));
+  const { code, json } = await run(t, s.dir, ["27"]);
+  assert.equal(code, 0, JSON.stringify(json));
+  assert.deepEqual(json.landed[0].closed, [40]);
+  assert.deepEqual([json.landed[0].ticked, json.landed[0].notes], [[12], ["#77 could not be read: skipped"]]);
+  assert.ok(!gh.calls().some((c) => c.key === "api repos/o/r/issues/0"), "#000000 is no issue number");
 });
 
 test("--dry-run prints the plan and changes nothing", async (t) => {

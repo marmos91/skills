@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scanOutbound } from "../../../pr-review/scripts/lib/secrets.mjs";
 import { threads } from "../../../pr-review/scripts/lib/github.mjs";
-import { openQuestions, pendingAnswers } from "../../../pr-review/scripts/lib/questions.mjs";
+import { openQuestions } from "../../../pr-review/scripts/lib/questions.mjs";
 import { readSummaryMarker, stateRoot } from "../../../pr-review/scripts/lib/state.mjs";
 import { aiMentions } from "../../../pr-open/scripts/lib/check.mjs";
 import { Blocked, Usage } from "../../../pr-open/scripts/lib/counts.mjs";
@@ -32,12 +32,21 @@ function gh(dir, args, input) {
 }
 const ghJson = (dir, args) => JSON.parse(gh(dir, args) || "null");
 
-const GH_URL = /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/;
+const URL_FORM = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]*@)?([^/:]+)(?::\d+)?\/(.+)$/i; // https://host[:port]/path, ssh://git@host[:port]/path
+const SCP_FORM = /^(?:[^@/]*@)?([^/:]+):(.+)$/; // git@host:path
+const GITHUB_HOSTS = ["github.com", "ssh.github.com"]; // ssh.github.com: SSH over port 443
+/** owner/repo (lower case) of a GitHub remote URL, or null for any other host, a local path or a longer path. */
+export function repoOfUrl(url) {
+  const m = URL_FORM.exec(url) ?? (url.includes("://") ? null : SCP_FORM.exec(url));
+  if (!m || !GITHUB_HOSTS.includes(m[1].toLowerCase())) return null;
+  const path = m[2].replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "");
+  return /^[\w.-]+\/[\w.-]+$/.test(path) ? path.toLowerCase() : null;
+}
 /** The git remote whose URL is repo on GitHub: fetches and pushes go where gh merges. */
 function remoteOf(dir, repo) {
   let lines = [];
   try { lines = git(dir, "config", "--get-regexp", "^remote\\..*\\.url$").split("\n"); } catch { /* no remotes */ }
-  const hit = lines.map((l) => l.split(" ")).find(([, url]) => GH_URL.exec(url ?? "")?.[1]?.toLowerCase() === repo.toLowerCase());
+  const hit = lines.map((l) => l.split(" ")).find(([, url]) => repoOfUrl(url ?? "") === repo.toLowerCase());
   if (!hit) throw new Blocked(`no git remote of this clone points at github.com/${repo}`);
   return hit[0].slice("remote.".length, -".url".length);
 }
@@ -69,21 +78,27 @@ export function notReady(pr, unresolved, me, localQuestions = () => null) {
   if (unresolved) why.push(`${unresolved} review thread${unresolved === 1 ? " is" : "s are"} unresolved`);
   // Each reviewer's newest approve, request or dismissal is what GitHub counts. pr-review's own request is judged by its marker below.
   const latest = new Map();
-  for (const r of pr.reviews ?? []) if (["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(r.state)) latest.set(r.author?.login, r.state);
-  const others = [...latest].filter(([who, st]) => st === "CHANGES_REQUESTED" && who !== me).map(([who]) => who);
-  if (others.length || (pr.reviewDecision === "CHANGES_REQUESTED" && latest.get(me) !== "CHANGES_REQUESTED")) why.push(`changes requested by ${others.join(", ") || "a reviewer"}`);
-  else if (pr.reviewDecision !== "APPROVED") why.push(...reviewGaps(pr, me, localQuestions));
+  for (const r of pr.reviews ?? []) if (["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(r.state)) latest.set(r.author?.login, r);
+  const others = [...latest].filter(([who, r]) => r.state === "CHANGES_REQUESTED" && who !== me).map(([who]) => who);
+  if (others.length || (pr.reviewDecision === "CHANGES_REQUESTED" && latest.get(me)?.state !== "CHANGES_REQUESTED")) {
+    why.push(`changes requested by ${others.join(", ") || "a reviewer"}`);
+    return why;
+  }
+  // An approval of the head stands in for pr-review, unless pr-review's newest full review is on the head: then its counts decide.
+  const approved = pr.reviewDecision === "APPROVED" && [...latest.values()].some((r) => r.state === "APPROVED" && r.commit?.oid === pr.headRefOid);
+  if (!approved || newestFull(pr, me)?.sha === pr.headRefOid) why.push(...reviewGaps(pr, me, localQuestions));
   return why;
 }
 
 // The newest full pr-review review, posted by me (anyone can paste a marker), must be on the head with no open must,
 // no question waiting and no lens or seat missing. Follow-ups and reviews of older pr-review versions carry no counts.
+const newestFull = (pr, me) => readSummaryMarker((pr.reviews ?? []).filter((r) => r.author?.login === me && readSummaryMarker(r.body)).at(-1)?.body);
 function reviewGaps(pr, me, localQuestions) {
-  const last = (pr.reviews ?? []).filter((r) => r.author?.login === me && readSummaryMarker(r.body)).at(-1);
-  if (!last) return [`no approval and no full pr-review review by ${me}`];
-  const { runId, sha, must, questions, gaps } = readSummaryMarker(last.body);
+  const last = newestFull(pr, me);
+  if (!last) return [`no approval of the head and no full pr-review review by ${me}`];
+  const { runId, sha, must, questions, gaps } = last;
   if (sha !== pr.headRefOid) return [`the newest pr-review review is on ${sha.slice(0, 7)}, the head is ${pr.headRefOid.slice(0, 7)}`];
-  // The marker count is frozen at posting; the local queue knows what the maintainer answered since.
+  // The marker count is frozen at posting; the local queue knows what the maintainer answered since. Both count questions waiting for an answer.
   const q = localQuestions(runId) ?? questions;
   const out = [];
   if (must) out.push(`the newest pr-review review has ${must} open must`);
@@ -133,7 +148,7 @@ export async function land(dir, n, { dryRun = false } = {}) {
     remote = remoteOf(dir, repo);
     const st = stateRoot(repo);
     const localQuestions = (runId) => (existsSync(join(st, "pr", String(n), "runs", runId))
-      ? [...openQuestions(st), ...pendingAnswers(st)].filter((q) => Number(q.pr) === n).length : null);
+      ? openQuestions(st).filter((q) => Number(q.pr) === n).length : null);
     const why = notReady(pr, (await threads(repo, n)).filter((t) => !t.isResolved).length, ghJson(dir, ["api", "user"]).login, localQuestions);
     if (why.length) throw new Blocked(`#${n} is not ready`, { why });
     msg = squash(pr);
@@ -201,15 +216,21 @@ export async function land(dir, n, { dryRun = false } = {}) {
   await step("issues", () => {
     // Only issues of this repo: "Fixes other/repo#5" must not close our #5.
     const fixes = (pr.closingIssuesReferences ?? []).filter((i) => `${i.repository?.owner?.login}/${i.repository?.name}`.toLowerCase() === repo.toLowerCase()).map((i) => i.number);
-    const issue = (k) => ghJson(dir, ["api", `repos/${repo}/issues/${k}`]);
-    const fixed = fixes.map(issue);
+    // A #N that is no issue (a colour, a deleted issue) is noted and skipped: it must not stop the step.
+    const issue = (k) => {
+      const r = ghRaw(dir, ["api", `repos/${repo}/issues/${k}`]);
+      if (r.status === 0) return JSON.parse(r.stdout);
+      notes.push(`#${k} could not be read: skipped`);
+      return null;
+    };
+    const fixed = fixes.map(issue).filter(Boolean);
     // Tracking issues: the ones the PR body or a fixed issue links to.
     const refs = new Set([pr.body ?? "", ...fixed.map((i) => i.body ?? "")].flatMap((t) => [...t.matchAll(/(?<![\w/.-])#(\d+)\b/g)].map((m) => Number(m[1]))));
     const mine = new RegExp(`(?<![\\w/.-])#(?:${[n, ...fixes].join("|")})(?!\\d)`); // other/repo#N is not ours
     for (const k of refs) {
       if (k === n || fixes.includes(k)) continue;
-      const t = issue(k);
-      if (t.pull_request || t.state !== "open") continue;
+      const t = k > 0 ? issue(k) : null;
+      if (!t || t.pull_request || t.state !== "open") continue;
       const body = (t.body ?? "").replace(/^(\s*[-*] )\[ \](.*)$/gm, (line, pre, rest) => (mine.test(rest) ? `${pre}[x]${rest}${new RegExp(`#${n}(?!\\d)`).test(rest) ? "" : ` (#${n})`}` : line));
       if (body === (t.body ?? "")) continue;
       gh(dir, ["api", "-X", "PATCH", `repos/${repo}/issues/${k}`, "-f", `body=${body}`]);
@@ -218,20 +239,25 @@ export async function land(dir, n, { dryRun = false } = {}) {
     // GitHub closes them only on a merge into the default branch.
     if (base !== def && fixes.length) return notes.push(`merged into ${base}, not ${def}: issues ${fixes.map((f) => `#${f}`).join(" ")} left open`);
     for (const i of fixed.filter((i) => i.state === "open")) {
-      if (issue(i.number).state !== "open") continue; // GitHub closed it after our first read
+      if (issue(i.number)?.state !== "open") continue; // GitHub closed it after our first read
       gh(dir, ["api", "-X", "PATCH", `repos/${repo}/issues/${i.number}`, "-f", "state=closed", "-f", "state_reason=completed"]);
       closed.push(i.number);
     }
   });
+  // Only this repo's head branch, and only at the merged head: anything else is someone's other work, reported and kept.
   await step("local cleanup", () => {
+    if (pr.isCrossRepository) return; // a local branch of the same name is not the fork's
+    if (!gitOk(dir, "show-ref", "-q", "--verify", `refs/heads/${head}`)) return;
+    if (git(dir, "rev-parse", `refs/heads/${head}`) !== sha) return notes.push(`local ${head} differs from the merged head: kept`);
     const top = git(dir, "rev-parse", "--show-toplevel");
     const trees = git(dir, "worktree", "list", "--porcelain").split("\n\n").map((b) => ({ path: /^worktree (.+)$/m.exec(b)?.[1], branch: /^branch refs\/heads\/(.+)$/m.exec(b)?.[1] }));
     const wt = trees.find((t) => t.branch === head);
     if (wt && wt.path === top) return notes.push(`${head} is checked out here: switch away, then delete it`);
-    if (wt) git(dir, "worktree", "remove", wt.path); // no --force: a dirty worktree stops here
-    if (!gitOk(dir, "show-ref", "-q", "--verify", `refs/heads/${head}`)) return;
-    // A local branch with commits the PR never had is kept: deleting it would lose them.
-    if (git(dir, "rev-parse", `refs/heads/${head}`) !== sha) return notes.push(`local ${head} differs from the merged head: kept`);
+    if (wt) {
+      // Untracked and ignored files (.env, local notes) would go with the worktree: keep it.
+      if (git(wt.path, "status", "--porcelain", "--ignored")) return notes.push(`the worktree ${wt.path} has changed, untracked or ignored files: kept`);
+      git(dir, "worktree", "remove", wt.path);
+    }
     git(dir, "branch", "-q", "-D", head);
   });
 

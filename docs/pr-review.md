@@ -301,8 +301,9 @@ Each posted body ends with a hidden marker:
 later run links a repeat of any of these findings to the thread. The summary
 of a full review adds `must=<n> questions=<n> gaps=<n>`: the open must
 findings, the questions waiting, and the lenses not run, seats dropped and
-parts missed. `pr-land` reads them (`summaryMarker` and `readSummaryMarker`
-in `state.mjs`).
+parts missed, as they stand when the review is posted. It is the last line
+of the body; a marker anywhere else is ignored. `pr-land` reads them
+(`summaryMarker` and `readSummaryMarker` in `state.mjs`).
 
 With `--dry-run` the engine writes the review to a file in the run folder,
 prints the planned children and models, prints the tokens that each stage

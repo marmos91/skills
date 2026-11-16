@@ -25,14 +25,20 @@ sh $SKILL_DIR/scripts/pr-land <pr>... [--dry-run]
 2. **Land.** Run without `--dry-run`. For each PR, in stack order:
    - **check** the live state: open, not a draft, mergeable, every check
      green (a pending check is not ready), no unresolved review thread, no
-     other reviewer asking for changes, and either GitHub says approved or
-     the newest full `pr-review` review posted by you (the `gh` user) is on
-     the head with `must=0 questions=0 gaps=0` in its marker. A follow-up
-     review or an older one without those fields does not count. When that
-     review ran on this machine, the questions come from the live
-     `pr-review` queue (open or answered but not yet applied), not the
-     count frozen in the marker. Fetches and pushes go to the git remote
-     whose URL is the PR's repo; with none, nothing is merged. The squash
+     other reviewer asking for changes, and the review rule:
+     - the newest full `pr-review` review posted by you (the `gh` user) is
+       on the head with `must=0 questions=0 gaps=0` in its marker (the
+       last line of the body); or
+     - GitHub says approved, with an approval of the head, and no full
+       `pr-review` review on the head says otherwise. When `pr-review` has
+       a full review on the head, its counts decide even over an approval.
+
+     A follow-up review or an older one without those fields does not
+     count. When that review ran on this machine, the questions waiting for
+     an answer come from the live `pr-review` queue, not the count frozen in
+     the marker. Fetches and pushes go to the git remote whose URL is the
+     PR's repo on github.com (https, `git@github.com:`, or `ssh://` with a
+     port); with none, nothing is merged. The squash
      title is the PR title with ` (#N)`; it must be a concise conventional
      title. Title and message get the AI-mention check and the secret scan
      (`secret-scan` when installed, else the `pr-review` scan;
@@ -46,9 +52,12 @@ sh $SKILL_DIR/scripts/pr-land <pr>... [--dry-run]
    - **delete branch**, **rebase children** (their own commits onto the new
      base, signed, pushed with `--force-with-lease`), **issues** (tick the
      checklist line on the tracking issue with a link to the PR, close the
-     issues the PR fixes if GitHub did not), then **local cleanup**
-     (worktree and branch, unless they hold other work), last so that a
-     worktree that cannot be removed leaves the issues done.
+     issues the PR fixes if GitHub did not; a `#N` that cannot be read is
+     noted and skipped), then **local cleanup**: the worktree and branch of
+     a same-repo PR, only when the branch is at the merged head and the
+     worktree has no changed, untracked or ignored files; anything else is
+     kept with a note. It runs last, so a worktree that cannot be removed
+     leaves the issues done.
 3. **Report.** On `0`, show `landed` and any `notes`. On `2` or `4`, show
    `blocked` or `error`, `why`, and `done` against `notDone`. A merge is
    never undone. Not ready: say why, merge nothing. A rebase conflict: the
