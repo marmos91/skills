@@ -14,7 +14,7 @@ test("scan: the private-repos opt-out needs a GitHub push target; off GitHub it 
   const cfg = process.env.SECRET_SCAN_CONFIG;
   writeFileSync(join(cfg, "private.txt"), "example\\.internal\n");
   writeFileSync(join(cfg, "private-repos.txt"), "o/r\n");
-  ghStub({ "pr view --json baseRefName --jq .baseRefName": { stdout: "main" }, "repo view --json nameWithOwner --jq .nameWithOwner": { stdout: "o/r" } });
+  ghStub({ "pr view --json baseRefName --jq .baseRefName": { stdout: "main" }, "repo view --json defaultBranchRef,nameWithOwner": { stdout: { nameWithOwner: "o/r", defaultBranchRef: { name: "main" } } } });
   const dir = initRepo({ origin: true });
   git(dir, "checkout", "-q", "-b", "fix/x");
   commit(dir, "a.txt", "cache on db01.example.internal\n", "fix: a");
@@ -30,4 +30,12 @@ test("scan: the private-repos opt-out needs a GitHub push target; off GitHub it 
   const listed = scan();
   assert.equal(listed.status, 0, listed.stderr);
   assert.equal(listed.stderr, "");
+});
+
+test("scan fetches the base as pr-open does: a base origin lacks is named, not a raw git error", () => {
+  ghStub({ "pr view --json baseRefName --jq .baseRefName": { stdout: "release/x" }, "repo view --json defaultBranchRef,nameWithOwner": { stdout: { nameWithOwner: "o/r", defaultBranchRef: { name: "main" } } } });
+  const dir = initRepo({ origin: true });
+  const r = spawnSync(CLI, ["scan"], { cwd: dir, encoding: "utf8" });
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /^pr-respond scan: origin has no branch release\/x$/m);
 });
