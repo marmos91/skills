@@ -13,7 +13,7 @@ import { decide as realDecide } from "../lib/decider.mjs";
 import { answer, openQuestions, pendingAnswers } from "../lib/questions.mjs";
 import { stateRoot, prState, readSummaryMarker, savePrState } from "../lib/state.mjs";
 import { fingerprint, findingKey, learnKey, settledKey as keyOf } from "../lib/convergence.mjs";
-import { learn } from "../lib/learnings.mjs";
+import { learn, noMarkup } from "../lib/learnings.mjs";
 import * as github from "../lib/github.mjs";
 import { queueCoreQuestion, saveCorePaths } from "../lib/setup.mjs";
 import { sastClusters } from "../lib/sast.mjs";
@@ -154,6 +154,12 @@ test("happy path posts one review with inline comments and the marker", async ()
   assert.equal(st.lastReviewedSha, fx.head);
   assert.ok(st.settled.includes(settledKey()));
   assert.equal(existsSync(join(r.runDir, "post.done")), true);
+});
+
+test("noMarkup: an escaped backtick is a literal, so HTML between escaped backticks is escaped; a span may cross one newline", () => {
+  assert.equal(noMarkup("hide \\`<img>\\` and <b>x</b>"), "hide \\`&lt;img&gt;\\` and &lt;b&gt;x&lt;/b&gt;");
+  assert.equal(noMarkup("span `a\n<b>` out <i>"), "span `a\n<b>` out &lt;i&gt;");
+  assert.equal(noMarkup("not `a\n\n<b>` x"), "not `a\n\n&lt;b&gt;` x");
 });
 
 test("a posted comment escapes < and > in model text, so it cannot hold a look-alike marker; code keeps them", async () => {
