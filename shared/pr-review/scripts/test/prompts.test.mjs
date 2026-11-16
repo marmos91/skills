@@ -53,8 +53,8 @@ test("round1: adversarial variant follows frame.shellOk", () => {
 
 test("round1: allowed severities follow the review number", () => {
   assert.match(round1Prompt(frame(), ["correctness"]), /Allowed severities: must, should, nit, pre-existing\./);
-  assert.match(round1Prompt(frame({ reviewNumber: 2 }), ["correctness"]), /Allowed severities: must, should\./);
-  assert.match(round1Prompt(frame({ reviewNumber: 3 }), ["correctness"]), /Allowed severities: must\./);
+  assert.match(round1Prompt(frame({ reviewNumber: 2 }), ["correctness"]), /Allowed severities: must, should, pre-existing\./);
+  assert.match(round1Prompt(frame({ reviewNumber: 3 }), ["correctness"]), /Allowed severities: must, pre-existing\./);
 });
 
 test("round1: delta review limits new findings to the delta and asks for earlier status", () => {
