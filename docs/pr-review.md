@@ -27,7 +27,7 @@ attribution.
 | `pr-review-loop [owner/repo]` | One loop run (a tick) |
 | `pr-review-loop pause` / `resume [owner/repo]` | Stop or restart every tick for the repo |
 | `pr-review-loop answer [<id> <option>]` | Same as `pr-review answer` |
-| `pr-respond <action> [--pr <n\|url>]` | The steps of the pr-respond skill (`pr-review respond`); see [pr-respond](#pr-respond) |
+| `pr-respond <action> [--pr <n\|url>]` | The steps of the pr-respond skill (`pr-review respond`, except `scan`, which runs `secret-scan`); see [pr-respond](#pr-respond) |
 
 Review flags:
 
@@ -1034,4 +1034,5 @@ Each prints JSON. Without `--pr`, they act on the PR of the current branch.
 | `pr-respond approve <thread>` | Records the user's yes for a thread with a comment by a person without write access (by `lib/trust.mjs`, as the loop checks it). Until then `decide` gives `ask` and `fixed` posts nothing |
 | `pr-respond decline <thread> "<reason>"` | Replies with the reason; the thread stays open. Skips when our reply is already the newest comment |
 | `pr-respond fixed <thread> <sha>` | Refuses a sha that is not in the PR head. jev checks the commit first; only on a yes: `Fixed in <commit link>.`, or the link added to our newest reply (never a second reply), then resolve. On a no or unsure it posts nothing |
+| `pr-respond scan` | The pre-push secret scan: fetches the PR base and runs `secret-scan --range origin/<base>..HEAD` with `--repo` for the PR target and each repo a push to origin reaches (pr-open's rule; strict, with a message, when origin does not push only to github.com). Prints no JSON; exits as `secret-scan` |
 | `pr-respond summary <points.json>` | One PR comment that answers the review point by point and opens with the count. Once per head |
