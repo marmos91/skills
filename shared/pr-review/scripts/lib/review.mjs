@@ -6,7 +6,7 @@ import { basename, join, resolve, sep } from "node:path";
 import * as github from "./github.mjs";
 import { runChild as realRunChild, ChildFailed, SeatDropped, stopping, harnessFor } from "./child.mjs";
 import { WHOLE_PR_LENSES, applyEffort, loadUserConfig, lowerEffort, pickEffort, plannedChildren, seatId, seatsForLens, withLimits } from "./config.mjs";
-import { frame as realFrame, git, readTree, cleanupWorktree, HeadMoved, DiffTooLarge } from "./frame.mjs";
+import { frame as realFrame, git, gitOk, readTree, cleanupWorktree, HeadMoved, DiffTooLarge } from "./frame.mjs";
 import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.mjs";
 import { tally } from "./tally.mjs";
 import { validate } from "./schema.mjs";
@@ -804,7 +804,7 @@ async function followUp(o, head, pst, answered) {
     const text = f.secret ? heldText(repoState, n, pst.lastRunId, q.fingerprint) : f.proven === false ? markUnproven(base, !diffLine(hunks, f.file, f.line)) : base;
     if (!text) continue;
     const s = scanOutbound(text, { repo });
-    if (s.ok) items.push({ q, text });
+    if (s.ok) items.push({ q, text: linkRefs(text, `https://github.com/${repo}/blob/${head}`, (p) => gitOk(o.repoDir ?? process.cwd(), ["cat-file", "-e", `${head}:${p}`])) });
     else { o.log(stillHeld(`question ${q.id}`, s.hits)); held.push(q); }
   }
   let url = null;

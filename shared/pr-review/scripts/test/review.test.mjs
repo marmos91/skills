@@ -812,6 +812,21 @@ test("answer-only rerun, repro b: loop posts with a should and a question; both 
   assert.deepEqual(posts(fx).map((p) => p.event), ["COMMENT"]);
 });
 
+test("answer-only rerun: the follow-up links file:line and RFC references too", async () => {
+  const fx = fixture(); routes(fx);
+  const answers = split({
+    merge: [C("c1", { found: [S0], case: "read a.js:1, see RFC 9110 §15.3" }), C("c2", { line: 3, title: "Must one" })], "v~1": [keep("c1")], "v~2": [drop("c1"), keep("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c2", body: "**must:** one" }] },
+  });
+  await go(fx, answers, { mode: "loop", effort: "medium" });
+  answer(fx.state, openQuestions(fx.state)[0].id, "post");
+  const again = await go(fx, answers);
+  assert.equal(again.r.exit, 0, again.r.summary);
+  const t = posts(fx)[1].threads[0].body;
+  assert.match(t, new RegExp(`read \\[\`a\\.js\`\\]\\(https://github\\.com/o/r/blob/${fx.head}/a\\.js#L1\\), see \\[RFC 9110, section 15\\.3\\]`));
+  assert.doesNotMatch(t, /§/);
+});
+
 test("answer-only rerun: 'post' goes out as one small COMMENT follow-up, never twice", async () => {
   const fx = fixture(); routes(fx);
   const answers = split({
