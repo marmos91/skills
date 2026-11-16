@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { scanOutbound } from "../../../pr-review/scripts/lib/secrets.mjs";
+import { repoArgs, scanOutbound } from "../../../pr-review/scripts/lib/secrets.mjs";
 import { threads } from "../../../pr-review/scripts/lib/github.mjs";
 import { waitingQuestions } from "../../../pr-review/scripts/lib/questions.mjs";
 import { readSummaryMarker, stateRoot } from "../../../pr-review/scripts/lib/state.mjs";
@@ -56,7 +56,7 @@ function remoteOf(dir, repo) {
 // secret-scan (#39) when installed, else the pr-review scan; the same contract as pr-open.
 // repos: the PR's repo and what a push to its remote reaches; the private-repos opt-out needs every one listed.
 function secretHits(text, repos = [null]) {
-  const r = spawnSync(process.env.PR_LAND_SECRET_SCAN || "secret-scan", repos.flatMap((x) => ["--repo", x ?? ""]), { input: text, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+  const r = spawnSync(process.env.PR_LAND_SECRET_SCAN || "secret-scan", repoArgs(repos), { input: text, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
   if (r.error?.code === "ENOENT") return scanOutbound(text, { repo: repos }).hits;
   if (r.error) return [`secret-scan: ${r.error.message}`];
   return r.status === 0 ? [] : [String(r.stderr || "secret-scan: hit").trim()];

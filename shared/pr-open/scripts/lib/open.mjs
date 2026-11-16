@@ -2,7 +2,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { rangeText, scanOutbound } from "../../../pr-review/scripts/lib/secrets.mjs";
+import { rangeText, repoArgs, scanOutbound } from "../../../pr-review/scripts/lib/secrets.mjs";
 import { checkBranch } from "./check.mjs";
 import { Blocked, Usage, readRecord } from "./counts.mjs";
 import { readOverride } from "./detect.mjs";
@@ -58,7 +58,7 @@ export function pushRepos(dir, remote = "origin") {
 // repos: the PR target and the pushed origin; the private-repos.txt opt-out needs both listed, so text pushed to a
 // public origin is scanned strict even when the gh target is private.
 function secretHits(dir, text, repos) {
-  const r = spawnSync(process.env.PR_OPEN_SECRET_SCAN || "secret-scan", repos.flatMap((x) => ["--repo", x ?? ""]), { cwd: dir, input: text, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+  const r = spawnSync(process.env.PR_OPEN_SECRET_SCAN || "secret-scan", repoArgs(repos), { cwd: dir, input: text, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
   if (r.error?.code === "ENOENT") return scanOutbound(text, { repo: repos }).hits;
   if (r.error) return [`secret-scan: ${r.error.message}`];
   return r.status === 0 ? [] : [String(r.stderr || "secret-scan: hit").trim()];

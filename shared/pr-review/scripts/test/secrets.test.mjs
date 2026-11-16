@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, chmodSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileValues, scanOutbound, redact } from "../lib/secrets.mjs";
+import { fileValues, repoArgs, scanOutbound, redact } from "../lib/secrets.mjs";
 
 // A developer's own ~/.config/secret-scan must not change these results.
 process.env.SECRET_SCAN_CONFIG = mkdtempSync(join(tmpdir(), "ss-empty-"));
@@ -221,6 +221,14 @@ test("a part of a multi-line sops value is found: each line of a multi-line leaf
   assert.equal(res.ok, false);
   assert.match(res.hits[0], /^sops-value: /);
   assert.ok(!res.hits[0].includes(line));
+});
+
+test("fileValues: valid JSON never falls back to the line parser, even when its multi-line leaves give no value", () => {
+  assert.deepEqual(fileValues(JSON.stringify({ a: "x\ny" })), []);
+});
+
+test("repoArgs: one --repo per repo; a repo off GitHub (null) is an empty --repo, so the scan stays strict", () => {
+  assert.deepEqual(repoArgs(["o/r", null]), ["--repo", "o/r", "--repo", ""]);
 });
 
 test("a dangling link in sops-files.txt (a secret that did not render) blocks", (t) => {
