@@ -728,7 +728,6 @@ async function once(o, restart) {
       if (withLinks !== body) await gh.editReview(res.id, withLinks).catch((e) => log(`review body links not added: ${e.message}`));
     }
   }
-  await postStatus(gh, repo, n, f.headSha, counts(), url, log);
   // Same fingerprint and record as tick.mjs: a rerun (or the tick after it) finds the question and adds nothing.
   if (queueApprove) {
     queueQuestion(repoState, {
@@ -780,6 +779,7 @@ async function once(o, restart) {
   for (const id of applied) appliedAnswer(repoState, id);
   // only now: a dry run, a question exit, a held post or a crash before this line learns nothing
   for (const q of drops.filter((x) => applied.includes(x.id))) learnDrop(o, q);
+  await postStatus(gh, repo, n, f.headSha, counts(), url, log); // after the answers: a question this run settled is not open
   return {
     // Interactive: a comment held by the secret scan is an open question, so exit 3. The rerun takes the answer-only path.
     exit: open.length && mode === "interactive" ? 3 : 0, runDir, planned, url, event, queueApprove, reasons, questions: questionFiles(),
@@ -812,6 +812,11 @@ async function followUp(o, head, pst, answered) {
   // before appliedAnswer, or a later full run) is not posted again
   const seen = await gh.markerKeys(repo, n);
   const runId = pst.lastRunId ?? "followup";
+  const was = pst.counts?.sha === head ? pst.counts : null;
+  const must = (q) => q.finding?.severity === "must";
+  // A must the secret scan held is in the full review's count already: posting it adds none, dropping it removes it.
+  const mustNow = (posted) => Math.max(0, (was?.must ?? 0) + posted.filter((q) => must(q) && !q.finding.secret).length
+    - answered.filter((q) => q.answer === "drop" && must(q) && q.finding.secret).length);
   const diff = join(repoState, "pr", String(n), "runs", runId, "ctx", "diff.patch");
   const hunks = parseHunks(existsSync(diff) ? readFileSync(diff, "utf8") : "");
   for (const q of answered.filter((x) => x.answer !== "drop")) {
@@ -834,9 +839,8 @@ async function followUp(o, head, pst, answered) {
     const p = place(items.map(({ q, text }) => ({ file: q.finding.file, line: q.finding.line, body: `${text}\n\n${marker(runId, head, inlineKeyOf(head, q.fingerprint, q.finding.file, q.finding.line), q.fingerprint, learnKey(q.finding))}` })), hunks, `https://github.com/${repo}/blob/${head}`);
     // The follow-up's marker is the new state of the head for pr-land: the full review's counts, plus the musts posted
     // now, minus the questions answered now. Without the full review's counts here, gaps=1 holds the merge until a full review.
-    const was = pst.counts?.sha === head ? pst.counts : null;
     const counts = {
-      must: (was?.must ?? 0) + items.filter((x) => x.q.finding?.severity === "must").length,
+      must: mustNow(items.map((x) => x.q)),
       questions: waitingQuestions(repoState, n).filter((q) => !answered.some((a) => a.id === q.id)).length,
       gaps: was ? was.gaps : 1,
     };
@@ -846,7 +850,6 @@ async function followUp(o, head, pst, answered) {
       if (await gh.pendingReview(repo, n)) return { exit: 0, skipped: true, summary: "skipped: you have a pending review on this PR; submit or delete it, then run again" };
       url = (await gh.postReview(repo, n, { commitOID: head, event: "COMMENT", body, threads: p.inline })).url;
     }
-    await postStatus(gh, repo, n, head, counts, url, o.log);
     const st = prState(repoState, n);
     st.counts = { sha: head, ...counts };
     st.settled = [...new Set([...st.settled, ...fps])];
@@ -863,6 +866,10 @@ async function followUp(o, head, pst, answered) {
   for (const q of answered) appliedAnswer(repoState, q.id);
   // still held: ask again (an applied question comes back fresh); returned like a full run's questions
   const asked = held.map((q) => queueQuestion(repoState, { pr: n, sha: head, fingerprint: q.fingerprint, file: q.finding.file, line: q.finding.line, snippet: "", finding: q.finding, sides: q.sides, failure: q.finding.case }));
+  // Every answer changes the counts, posted or not: the status follows them once the answers are applied.
+  const now = { must: mustNow(items.map((x) => x.q)), questions: waitingQuestions(repoState, n).length, gaps: was ? was.gaps : 1 };
+  await postStatus(gh, repo, n, head, now, url, o.log);
+  savePrState(repoState, n, { ...prState(repoState, n), counts: { sha: head, ...now } });
   return {
     exit: held.length && o.mode === "interactive" ? 3 : 0, skipped: !items.length, questions: asked.map((id) => join(repoState, "questions", `${id}.md`)), url, event: items.length ? "COMMENT" : undefined, queueApprove: false, reasons: [],
     summary: items.length ? `follow-up posted with ${items.length} answered finding(s)${url ? `: ${url}` : " (marker found on GitHub)"}` : `answers applied at ${head}; nothing to post`,

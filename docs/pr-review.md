@@ -313,9 +313,11 @@ posts, minus the questions it settles. It is the last line
 of the body; a marker anywhere else is ignored. `pr-land` reads them
 (`summaryMarker` and `readSummaryMarker` in `state.mjs`).
 
-After each review with these fields, the engine sets a commit status with
-the context `pr-review` on the reviewed SHA: `failure` when must, questions
-or gaps is above 0, `success` otherwise. The description holds the counts
+After each full review, and after each follow-up that applies answers (even
+one that posts nothing), the engine sets a commit status with the context
+`pr-review` on the reviewed SHA, from these counts once the answers are
+applied: `failure` when must, questions or gaps is above 0, `success`
+otherwise. The description holds the counts
 ("1 must, 2 questions") and the link goes to the review. A new head gets a
 status only once a review runs on it. To block a merge while a must is
 open, add `pr-review` as a required status check in the branch protection

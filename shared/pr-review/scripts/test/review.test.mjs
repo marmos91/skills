@@ -182,6 +182,62 @@ test("commit status goes on the reviewed head, not the head the PR has now", asy
   assert.deepEqual(statuses(fx).map((x) => x.sha), [fx.head]);
 });
 
+const lastStatus = (fx) => { const x = statuses(fx).at(-1); return x && [x.sha, x.state, x.description]; };
+
+test("commit status: a failed status call is logged and the review stays posted", async () => {
+  const fx = fixture(); routes(fx);
+  const lines = [];
+  const gh = { ...github, status: async () => { throw new Error("HTTP 403"); } };
+  const { r } = await go(fx, happy(), { gh, log: (l) => lines.push(l) });
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(r.url, "https://github.com/o/r/pull/5#pullrequestreview-1");
+  assert.ok(lines.some((l) => /^commit status failed: HTTP 403/.test(l)), lines.join("\n"));
+});
+
+test("commit status leaves out a question the same run answers", async () => {
+  const fx = fixture(); routes(fx);
+  const first = await go(fx, split());
+  answer(fx.state, basename(first.r.questions[0], ".md"), "post");
+  await go(fx, split());
+  assert.deepEqual(lastStatus(fx), [fx.head, "failure", "1 must"]);
+});
+
+test("commit status: an answer-only drop of a question clears the failure", async () => {
+  const fx = fixture(); routes(fx);
+  const answers = split({
+    merge: [C("c1", { found: [S0] }), C("c2", { severity: "should", line: 3, title: "Slow loop" })], "v~1": [keep("c1")], "v~2": [drop("c1"), keep("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c2", body: "**should:** slow" }] },
+  });
+  await go(fx, answers, { mode: "loop", effort: "medium" });
+  assert.deepEqual(lastStatus(fx), [fx.head, "failure", "1 question"]);
+  for (const q of openQuestions(fx.state)) answer(fx.state, q.id, "drop");
+  await go(fx, answers);
+  assert.equal(posts(fx).length, 1, "nothing posted");
+  assert.deepEqual(lastStatus(fx), [fx.head, "success", "no open must, question or gap"]);
+});
+
+test("commit status: dropping a must the secret scan held removes it from the count", async () => {
+  const fx = fixture(); routes(fx);
+  const token = "ghp_" + "D".repeat(36);
+  await go(fx, happy({ compose: { body: "Summary.", comments: [{ id: "c1", body: `**must:** ${token}` }] } }));
+  assert.deepEqual(lastStatus(fx), [fx.head, "failure", "1 must, 1 question"]);
+  answer(fx.state, openQuestions(fx.state)[0].id, "drop");
+  await go(fx, happy());
+  assert.deepEqual(lastStatus(fx), [fx.head, "success", "no open must, question or gap"]);
+});
+
+test("commit status: posting a must the secret scan held counts it once", async () => {
+  const fx = fixture(); routes(fx);
+  const token = "ghp_" + "E".repeat(36);
+  const held = happy({ compose: { body: "Summary.", comments: [{ id: "c1", body: `**must:** token ${token} leaks` }] } });
+  await go(fx, held);
+  answer(fx.state, openQuestions(fx.state)[0].id, "post");
+  await go(fx, held);
+  assert.equal(posts(fx).length, 2);
+  assert.deepEqual(counts(posts(fx)[1].body), { must: 1, questions: 0, gaps: 0 });
+  assert.deepEqual(lastStatus(fx), [fx.head, "failure", "1 must"]);
+});
+
 test("rerun after a crash before markDone(post) does not post again", async () => {
   const fx = fixture(); routes(fx);
   const { r } = await go(fx, happy());
