@@ -1207,6 +1207,23 @@ test("follow-up: a posted finding ends with its done when, and the marker carrie
   assert.deepEqual(state.items.map((i) => [i.line, i.status, i.done_when]), [[3, "new", undefined], [2, "new", "a test sums a and b"]]);
 });
 
+test("follow-up: no state when the full review's marker has none to build on, never a partial list", async () => {
+  const fx = fixture(); routes(fx);
+  const answers = split({
+    merge: [C("c1", { found: [S0] }), C("c2", { severity: "must", line: 3, title: "Must one" })], "v~1": [keep("c1")], "v~2": [drop("c1"), keep("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c2", body: "**must:** one" }] },
+  });
+  await go(fx, answers, { mode: "loop", effort: "medium" });
+  answer(fx.state, openQuestions(fx.state)[0].id, "post");
+  // a marker from before the state (#65): counts, no state
+  routes(fx, { reviews: [{ body: posts(fx)[0].body.replace(/ state=.* -->$/, " -->"), user: { login: ME }, state: "CHANGES_REQUESTED" }] });
+  const again = await go(fx, answers);
+  assert.equal(again.r.exit, 0, again.r.summary);
+  const m = readSummaryMarker(posts(fx)[1].body);
+  assert.equal(m.must, 2);
+  assert.equal(m.state, null);
+});
+
 test("CI is read again at post time: none at frame, red at post -> no APPROVE", async () => {
   const fx = fixture(); routes(fx);
   const states = [{ state: "none", since: null, items: [] }, { state: "red", since: null, items: [{ name: "build", state: "fail", url: null, runId: null }] }];

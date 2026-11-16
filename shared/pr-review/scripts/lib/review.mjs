@@ -790,6 +790,7 @@ async function once(o, restart) {
     }
     const res = await gh.postReview(repo, n, { commitOID: f.headSha, event, body, threads: p.inline });
     url = res.url;
+    if (res.commentsError) log(`thread links past the first 100 not added: ${res.commentsError}`);
     // The index links each thread once GitHub gave it a URL: the body goes out first, so edit it after.
     const urls = new Map(fresh.flatMap((x) => { const c = res.comments?.find((c) => c.body?.includes(inlineKey(x))); return c ? [[x.id, c.url]] : []; }));
     if (urls.size) {
@@ -949,10 +950,11 @@ async function followUp(o, head, pst, answered) {
     const fps = items.map((x) => findingKey(x.q.fingerprint, x.q.finding.line)).sort();
     const key = sha1(`followup\0${head}\0${fps.join(",")}`);
     const p = place(items.map(({ q, text }) => ({ file: q.finding.file, line: q.finding.line, body: `${noMarkup(text)}\n\n${marker(runId, head, inlineKeyOf(head, q.fingerprint, q.finding.file, q.finding.line), q.fingerprint, learnKey(q.finding))}` })), hunks, `https://github.com/${repo}/blob/${head}`);
-    // state (#65) like a full review's: the open items of the full review at this head, plus the findings posted now
+    // state (#65) like a full review's: the open items of the full review at this head, plus the findings posted now.
+    // No state on that marker (older engine) or no marker read: write none, never a partial list that looks whole.
     const prior = (was?.state !== undefined ? was : await gh.markerCounts(repo, n, head).catch(() => null))?.state;
-    const all = [...(prior?.items ?? []), ...items.map(({ q: { fingerprint: fp, finding: x } }) => ({ fp, severity: x.severity, file: x.file || null, line: x.line ?? null, status: "new", url: null, ...(x.done_when && { done_when: oneLine(x.done_when) }) }))];
-    const state = { verdict: "COMMENT", ...prior, next: nextStep(counts, all, prior?.ci), items: all };
+    const all = prior && [...(prior.items ?? []), ...items.map(({ q: { fingerprint: fp, finding: x } }) => ({ fp, severity: x.severity, file: x.file || null, line: x.line ?? null, status: "new", url: null, ...(x.done_when && { done_when: oneLine(x.done_when) }) }))];
+    const state = prior && { ...prior, next: nextStep(counts, all, prior.ci), items: all };
     const body = [`Follow-up on the review of ${head}: points settled by the maintainer.`, p.body.length ? p.body.map((l) => `- ${l}`).join("\n") : "", summaryMarker(runId, head, key, counts, state)].filter(Boolean).join("\n\n");
     if (!scanOutbound(body, { repo }).ok) return { exit: 4, skipped: true, summary: "follow-up blocked by the secret scan" };
     if (!seen.has(key)) {

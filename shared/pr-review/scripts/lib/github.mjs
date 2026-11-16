@@ -141,11 +141,14 @@ export async function postReview(repo, n, { commitOID, event, body, threads: ths
   };
   const d = await gql(POST, { input });
   const r = d.addPullRequestReview.pullRequestReview;
-  // the reply lists 100 comments: a bigger review reads the rest through REST, fully paged
-  const comments = (r.comments?.totalCount ?? 0) > (r.comments?.nodes?.length ?? 0)
-    ? (await json(["api", "--paginate", "--slurp", `repos/${repo}/pulls/${n}/reviews/${r.databaseId}/comments`])).flat().map((c) => ({ url: c.html_url, body: c.body }))
-    : r.comments?.nodes ?? [];
-  return { id: r.id, url: r.url, comments };
+  // the reply lists 100 comments: a bigger review reads the rest through REST, fully paged.
+  // The review is posted already: a failed read keeps the first 100 and says why (commentsError).
+  let comments = r.comments?.nodes ?? [], commentsError;
+  if ((r.comments?.totalCount ?? 0) > comments.length) {
+    try { comments = (await json(["api", "--paginate", "--slurp", `repos/${repo}/pulls/${n}/reviews/${r.databaseId}/comments`])).flat().map((c) => ({ url: c.html_url, body: c.body })); }
+    catch (e) { commentsError = e.message; }
+  }
+  return { id: r.id, url: r.url, comments, ...(commentsError && { commentsError }) };
 }
 
 const EDIT_REVIEW = `mutation EditReview($id: ID!, $body: String!) {

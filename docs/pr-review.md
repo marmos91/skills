@@ -343,7 +343,7 @@ answer (`waitingQuestions` in `questions.mjs`). A follow-up that posts
 findings writes the same fields: the full review's counts plus the musts it
 posts, minus the questions it settles, plus the ones the secret scan holds
 again, and a `state` with the full review's items plus the findings it posts
-(their `url` null). Its comments end with "Done when:" too. A follow-up that posts nothing rewrites the counts in the newest
+(their `url` null), or no `state` when that review's marker has none. Its comments end with "Done when:" too. A follow-up that posts nothing rewrites the counts in the newest
 marker at that head instead, with its decision line and `state.next`, so
 `pr-land` never reads stale ones. It is the last line
 of the body; a marker anywhere else is ignored. `pr-land` reads them
