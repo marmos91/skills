@@ -170,14 +170,14 @@ function round1Jobs(config, lenses) {
 }
 
 // Code around a finding, for jev and questions. The path comes from a model: it must stay in the worktree.
-function hunk(f, c) {
+function hunk(f, c, n = 5) {
   let file;
   try {
     const wt = realpathSync(f.worktree);
     file = realpathSync(resolve(wt, String(c.file))); // a symlink in the PR must not lead outside
     if (!file.startsWith(wt + sep)) return "";
   } catch { return ""; }
-  try { return readFileSync(file, "utf8").split("\n").slice(Math.max(0, c.line - 6), c.line + 5).join("\n"); } catch { return ""; }
+  try { return readFileSync(file, "utf8").split("\n").slice(Math.max(0, c.line - 1 - n), c.line + n).join("\n"); } catch { return ""; }
 }
 
 // Compose writes text: it gets the repo's review guidance, not the whole tree (CONTRIBUTING.md, CLAUDE.md, ...).
@@ -450,13 +450,19 @@ async function once(o, restart) {
   if (o.until === "merge") return finish("merge");
 
   // Round 2 (spec 6.5): one vote child per seat, on the clusters of its lenses that it did not find.
+  // Each voter gets the head lines around each finding inline, so it spends fewer reads (#30).
+  const VOTE_LINES = 15, VOTE_CHARS = 4000;
+  const around = (c) => {
+    const text = Number.isInteger(c.line) && c.line > 0 ? hunk(f, c, VOTE_LINES).slice(0, VOTE_CHARS) : "";
+    return text ? [{ id: c.id, file: c.file, from: Math.max(1, c.line - VOTE_LINES), text }] : [];
+  };
   const voters = [...new Map(run.lenses.flatMap((l) => seatsForLens(config, l)).map((s) => [seatId(s), s])).values()];
   const ballots = await settled(voters.map((seat, i) => {
     const id = seatId(seat), mine = clusters.filter((c) => c.seats.includes(id) && !c.found.includes(id));
     if (!mine.length) return { id, votes: [] };
     // A vote checks given findings, not the whole PR: 10 turns plus 3 per finding, never above the seat's limit.
     const turns = Math.min(withLimits(config, seat, undefined, "round2").max_turns, 10 + 3 * mine.length);
-    return child(ctx, "round2", `v~${i}`, { seat: { ...seat, max_turns: turns }, tools: f.shellOk ? "shell" : "read", schema: "vote", prompt: (s, fr = f) => votePrompt(fr, mine.map(view), s.max_turns) }).then((votes) => ({ id, votes: votes ?? [] }));
+    return child(ctx, "round2", `v~${i}`, { seat: { ...seat, max_turns: turns }, tools: f.shellOk ? "shell" : "read", schema: "vote", prompt: (s, fr = f) => votePrompt(fr, mine.map(view), s.max_turns, mine.flatMap(around)) }).then((votes) => ({ id, votes: votes ?? [] }));
   }));
   enoughSeats();
   markDone(runDir, "round2");
@@ -580,7 +586,10 @@ async function once(o, restart) {
     seat: config.judge, schema: "compose",
     prompt: () => composePrompt(f, [...posted.map((c) => ({ ...view(c), ...(offDiff(c) && { outside: true }) })), ...hygItems.map(view)], composeGuidance(f.ctxDir, config),
       { retracted: retracted.map((e) => ({ thread_id: e.threadId, file: e.path, line: e.line ?? e.originalLine, finding: e.body, evidence: earlier.get(e.threadId).why })),
-        blocking: blocking.map((e) => ({ thread_id: e.threadId, file: e.path, line: e.line ?? e.originalLine, finding: e.body })) }),
+        blocking: blocking.map((e) => ({ thread_id: e.threadId, file: e.path, line: e.line ?? e.originalLine, finding: e.body })),
+        // the folded hygiene check (hygiene.mjs) under the same severity floor and effort severities as its child
+        // shortcut: its findings are free text in the body, so the settled list does not filter them; a child, if that matters
+        hygiene: hyg.folded ? ["should", "nit"].filter((s) => allowed.has(s) && floor.has(s)) : [] }),
   });
   markDone(runDir, "compose");
   if (o.until === "compose") return finish("compose");

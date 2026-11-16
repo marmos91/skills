@@ -78,6 +78,23 @@ test("vote: lists only the clusters given", () => {
   assert.match(p, /counter_case/);
 });
 
+test("vote: the code around each finding is inline, numbered, in a PR-data fence", () => {
+  const c = [{ id: "c1", lens: "security", severity: "must", file: "a.js", line: 3, title: "t", case: "x", fix: "y", found: ["s1"] }];
+  const p = votePrompt(frame({ nonce: "ab12" }), c, 40, [{ id: "c1", file: "a.js", from: 2, text: "const b = 3;\nconst c = q(input);" }]);
+  assert.match(p, /<<<PR-DATA-ab12\n[^]*c1: a\.js\n2: const b = 3;\n3: const c = q\(input\);\nPR-DATA-ab12>>>/);
+  assert.match(p, /Start from the code above/);
+  assert.doesNotMatch(votePrompt(frame(), c), /Code around each finding|Start from the code above/);
+});
+
+test("compose: a folded hygiene check adds its section; nit only when the floor allows it", () => {
+  assert.doesNotMatch(composePrompt(frame(), [], ""), /## Hygiene check/);
+  const p = composePrompt(frame(), [], "", { hygiene: ["should", "nit"] });
+  assert.match(p, /## Hygiene check\n/);
+  assert.match(p, /hygiene list in `body`/);
+  assert.doesNotMatch(p, /only a problem that would mislead/);
+  assert.match(composePrompt(frame(), [], "", { hygiene: ["should"] }), /only a problem that would mislead/);
+});
+
 test("merge: seat findings, earlier agreed findings, no-reversal rule", () => {
   const p = mergePrompt(frame(), { s1: [{ lens: "correctness", title: "Off by one in loop" }] }, [{ id: "e1", title: "Validate the port" }]);
   assert.ok(p.includes("Off by one in loop") && p.includes('"s1"'));

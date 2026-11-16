@@ -693,6 +693,20 @@ test("hygiene findings appear as one list in the summary, not as inline comments
   assert.ok(!p.threads.some((t) => /should not be inline/.test(t.body)));
 });
 
+test("a PR in one part: compose does the hygiene model check, no hygiene child runs", async () => {
+  const fx = fixture(); routes(fx);
+  const { r, run } = await go(fx, happy());
+  assert.equal(r.exit, 0, r.summary);
+  assert.match(run.calls.find((c) => c.k === "compose").prompt, /## Hygiene check\n/);
+  assert.ok(!existsSync(join(r.runDir, "hygiene-prompt.txt")));
+});
+
+test("each voter gets the head lines around its findings inline", async () => {
+  const fx = fixture(); routes(fx);
+  const { run } = await go(fx, happy());
+  assert.match(run.calls.find((c) => c.k === "v~2").prompt, /c1: a\.js\n1: const a = 2;\n2: const b = 3;\n3: const c = 4;/);
+});
+
 test("a failed lens after retries -> exit 4, nothing posted", async () => {
   const fx = fixture(); routes(fx);
   const { r, run } = await go(fx, happy({ "all~1": new ChildFailed("fake:x failed after 3 attempts") }));
@@ -840,6 +854,7 @@ test("hygiene findings obey the severity floor and the settled list", async () =
   savePrState(fx2.state, N, { ...prState(fx2.state, N), reviews: 2, lastReviewedSha: fx2.base });
   const b = await go(fx2, happy());
   assert.ok(!composePromptOf(b.run).includes("PR body is empty"), "review 3 posts only must");
+  assert.doesNotMatch(composePromptOf(b.run), /## Hygiene check/, "nor a folded hygiene check");
 });
 
 test("a signal during decide saves nothing: no decide file, no question; the rerun asks jev again", async () => {
@@ -2335,7 +2350,6 @@ test("full depth: checks run once before round 1, a failure is data, every seat 
     }
     else assert.doesNotMatch(c.prompt, /Setup checks/, c.k);
   }
-  assert.doesNotMatch(readFileSync(join(r.runDir, "hygiene-prompt.txt"), "utf8"), /Setup checks/);
   assert.match(posts(fx)[0].body, /(?:^|\n\n)What was checked: full depth; hello ok, bad failed \(exit 2\)\.\n\n/);
   assert.equal(JSON.parse(readFileSync(join(r.runDir, "run.json"), "utf8")).depth, "full");
 });

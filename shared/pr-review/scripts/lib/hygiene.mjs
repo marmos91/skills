@@ -36,7 +36,8 @@ function unwrap(s, nonce) {
   return typeof s === "string" && s.startsWith(head) && s.endsWith(tail) ? s.slice(head.length, -tail.length) : String(s ?? "");
 }
 
-// Returns { findings, warnings }. A failed child is advisory: a warning, not an error.
+// Returns { findings, warnings, folded }. A failed child is advisory: a warning, not an error. folded: a PR in one
+// part (not split, review.chunk_lines) gets no child; compose does the model check (prompts.mjs composePrompt).
 export async function hygiene(frame, config, effort, { routerUp } = {}) {
   if (!config.hygiene.enabled) return { findings: [], warnings: [] };
   const pr = JSON.parse(readFileSync(join(frame.ctxDir, "pr.json"), "utf8"));
@@ -50,20 +51,20 @@ export async function hygiene(frame, config, effort, { routerUp } = {}) {
     guidanceText: readTree(join(frame.ctxDir, "guidance")), closingIssues: pr.closingIssues ?? [],
   });
   const warnings = [];
-  if (effort !== "low") {
-    try {
-      const runDir = dirname(frame.ctxDir);
-      const promptFile = join(runDir, "hygiene-prompt.txt");
-      let diffSummary = "";
-      try { diffSummary = git(frame.worktree, ["diff", "--stat", `${base}...${frame.headSha}`]).slice(0, 8000); } catch {}
-      writeFileSync(promptFile, hygienePrompt(frame, { diffSummary }));
-      const j = config.judge;
-      const seat = withLimits(config, ["off", "minimal", "low"].includes(j.thinking) ? j : { ...j, thinking: "low" });
-      const r = await runChild({ trusted: frame.shellOk, seat, tools: "read", promptFile, outFile: join(runDir, "hygiene.json"), worktree: frame.worktree, ctxDir: frame.ctxDir, schema: "hygiene", routerUp });
-      findings.push(...r.findings.map((x) => ({ ...x, ask_author: true })));
-    } catch {
-      warnings.push("hygiene child failed"); // the error text may hold model or PR text
-    }
+  if (effort === "low") return { findings, warnings };
+  if ((frame.chunks?.length ?? 1) <= 1) return { findings, warnings, folded: true };
+  try {
+    const runDir = dirname(frame.ctxDir);
+    const promptFile = join(runDir, "hygiene-prompt.txt");
+    let diffSummary = "";
+    try { diffSummary = git(frame.worktree, ["diff", "--stat", `${base}...${frame.headSha}`]).slice(0, 8000); } catch {}
+    writeFileSync(promptFile, hygienePrompt(frame, { diffSummary }));
+    const j = config.judge;
+    const seat = withLimits(config, ["off", "minimal", "low"].includes(j.thinking) ? j : { ...j, thinking: "low" });
+    const r = await runChild({ trusted: frame.shellOk, seat, tools: "read", promptFile, outFile: join(runDir, "hygiene.json"), worktree: frame.worktree, ctxDir: frame.ctxDir, schema: "hygiene", routerUp });
+    findings.push(...r.findings.map((x) => ({ ...x, ask_author: true })));
+  } catch {
+    warnings.push("hygiene child failed"); // the error text may hold model or PR text
   }
   return { findings, warnings };
 }
