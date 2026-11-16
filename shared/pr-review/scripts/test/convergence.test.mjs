@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fingerprint, allowedSeverities, filterNew, budgetLeft, learnKey } from "../lib/convergence.mjs";
+import { fingerprint, findingKey, allowedSeverities, filterNew, budgetLeft, learnKey } from "../lib/convergence.mjs";
 
 const f = (o = {}) => ({ lens: "bugs", file: "a.js", line: 42, severity: "must", title: "Null deref in parse()", ...o });
 
@@ -38,6 +38,11 @@ test("a learned finding does not drop one whose title differs only in digits", (
 });
 test("learnKey ignores case and punctuation in the title", () => {
   assert.equal(learnKey(f({ title: "Null deref in parse()." })), learnKey(f({ title: "null deref in Parse" })));
+});
+test("a settled finding at one line does not settle the same title at another line", () => {
+  const settled = new Set([findingKey(fingerprint(f()), f().line)]);
+  const r = filterNew([f(), f({ line: f().line + 1 })], { reviewNumber: 1, settled, changedLines: new Map() });
+  assert.deepEqual(r.keep.map((x) => x.line), [f().line + 1]);
 });
 test("titles that normalize to empty fall back to the case", () => {
   assert.notEqual(fingerprint(f({ title: "1.", case: "a -> b" })), fingerprint(f({ title: "2!", case: "c -> d" })));

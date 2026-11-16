@@ -17,6 +17,10 @@ export function learnKey(f) {
   return createHash("sha1").update(["learn", f.lens, f.file, f.symbol ?? "", title].join("\u0000")).digest("hex");
 }
 
+// Stores (settled list, questions) key a finding by fingerprint and line: 2 findings with one title at 2 lines of
+// a file stay 2. A bare fingerprint in an older settled list still matches.
+export const findingKey = (fp, line) => `${fp}:${line}`;
+
 export function allowedSeverities(reviewNumber) {
   return new Set(reviewNumber <= 1 ? ["must", "should", "nit"] : reviewNumber === 2 ? ["must", "should"] : ["must"]);
 }
@@ -29,7 +33,7 @@ export function filterNew(findings, { reviewNumber, settled, changedLines, learn
   for (const finding of findings) {
     if (!allowed.has(finding.severity)) dropped.push({ finding, reason: "severity floor" });
     else if (learned.has(learnKey(finding))) dropped.push({ finding, reason: "learned" });
-    else if (settled.has(fingerprint(finding)) && !changedLines.get(finding.file)?.has(finding.line)) dropped.push({ finding, reason: "settled" });
+    else if ([fingerprint(finding), findingKey(fingerprint(finding), finding.line)].some((k) => settled.has(k)) && !changedLines.get(finding.file)?.has(finding.line)) dropped.push({ finding, reason: "settled" });
     else keep.push(finding);
   }
   return { keep, dropped };

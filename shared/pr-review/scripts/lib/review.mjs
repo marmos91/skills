@@ -10,7 +10,7 @@ import { frame as realFrame, git, readTree, cleanupWorktree, HeadMoved, DiffTooL
 import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.mjs";
 import { tally } from "./tally.mjs";
 import { validate } from "./schema.mjs";
-import { allowedSeverities, filterNew, fingerprint, learnKey } from "./convergence.mjs";
+import { allowedSeverities, filterNew, findingKey, fingerprint, learnKey } from "./convergence.mjs";
 import { learn, learnedKeys, parseMarker, suggestion } from "./learnings.mjs";
 import { codeLink, diffLine, linkRefs, parseHunks, place } from "./hunks.mjs";
 import { verdict } from "./verdict.mjs";
@@ -124,8 +124,8 @@ async function child(ctx, stage, key, { seat, prompt, schema, tools = "read", le
   const dir = join(ctx.runDir, stage), outFile = join(dir, `${key}.json`);
   if (done(ctx.runDir, stage, key)) {
     const v = readJson(outFile);
-    // votes and proof join on the merge ids: a merge cached by an older engine meets today's schema, or runs again
-    if (stage !== "merge" || !validate(schema, v).length) return v;
+    // an output cached by an older engine meets today's schema, or runs again
+    if (!validate(schema, v).length) return v;
   }
   mkdirSync(dir, { recursive: true });
   const promptFile = join(dir, `${key}.prompt`);
@@ -438,7 +438,8 @@ async function once(o, restart) {
   // Decide (spec 6.7): jev settles splits; otherwise a question. A finding of one seat, or settled by jev, asks the author.
   const agreed = [], rejected = [], open = [], applied = [], drops = [];
   // Marco's answers win over the tally, from this run or an earlier one (the loop posts without the finding).
-  const answers = new Map(pendingAnswers(repoState).filter((q) => q.pr === n).map((q) => [q.fingerprint, q]));
+  const qkey = (q) => findingKey(q.fingerprint, q.finding?.line);
+  const answers = new Map(pendingAnswers(repoState).filter((q) => q.pr === n).map((q) => [qkey(q), q]));
   const repoDir = o.repoDir ?? process.cwd();
   const moved = (q) => {
     if (!codeMoved(repoDir, q, f.headSha)) return false;
@@ -450,14 +451,15 @@ async function once(o, restart) {
     if (q.answer === "drop") { rejected.push(c); drops.push(q); }
     else agreed.push({ ...c, ask_author: q.answer === "ask-author", answered: q.answer });
   };
-  // the question is per fingerprint, so its answer settles every cluster with that fp (the fp has no line)
+  // the question is per fingerprint and line, so its answer settles every cluster with both
   const used = new Set();
   for (const { c, votes, status } of tallied) {
-    if (answers.has(c.fp)) {
-      const q = answers.get(c.fp);
-      if (!moved(q)) { take(q, c); used.add(c.fp); continue; }
+    const k = findingKey(c.fp, c.line);
+    if (answers.has(k)) {
+      const q = answers.get(k);
+      if (!moved(q)) { take(q, c); used.add(k); continue; }
       // The answer was about other code: close it now, and let the tally (and jev or a fresh question) decide again.
-      answers.delete(q.fingerprint);
+      answers.delete(k);
       appliedAnswer(repoState, q.id);
     }
     if (status === "agreed") { agreed.push({ ...c, ask_author: c.found.length === 1 }); continue; }
@@ -487,11 +489,11 @@ async function once(o, restart) {
     else if (d.decision === "rejected") rejected.push(c);
     else open.push(d.question);
   }
-  for (const fp of used) answers.delete(fp);
+  for (const k of used) answers.delete(k);
   // An answered finding that this run did not find again is posted from the question record.
   // A held comment that was not found again has no text to post: its answer is closed.
-  for (const q of [...answers.values()].filter((x) => x.finding?.secret)) { answers.delete(q.fingerprint); applied.push(q.id); }
-  for (const q of [...answers.values()].filter((x) => !x.finding?.kind && moved(x))) { answers.delete(q.fingerprint); applied.push(q.id); }
+  for (const q of [...answers.values()].filter((x) => x.finding?.secret)) { answers.delete(qkey(q)); applied.push(q.id); }
+  for (const q of [...answers.values()].filter((x) => !x.finding?.kind && moved(x))) { answers.delete(qkey(q)); applied.push(q.id); }
   [...answers.values()].filter((q) => !q.finding?.kind).forEach((q, i) => take(q, { ...q.finding, id: `q${i + 1}`, found: [], seats: [], fp: q.fingerprint }));
   const questionFiles = () => open.map((id) => join(repoState, "questions", `${id}.md`));
   if (open.length && mode === "interactive") {
@@ -674,7 +676,7 @@ async function once(o, restart) {
     // The answer is closed now and the question below is asked again, so it stays open until the hit is gone or allowed.
     if (x.answered) {
       log(stillHeld(`${x.file}:${x.line}`, s.hits));
-      const id = pendingAnswers(repoState).find((q) => q.pr === n && q.fingerprint === x.fp)?.id;
+      const id = pendingAnswers(repoState).find((q) => q.pr === n && q.fingerprint === x.fp && q.finding?.line === x.line)?.id;
       if (id) { appliedAnswer(repoState, id); if (applied.includes(id)) applied.splice(applied.indexOf(id), 1); }
     }
     // A later "post" answer posts this engine-final body (checked, marked). A held host keeps its own finding
@@ -742,7 +744,7 @@ async function once(o, restart) {
   const recorded = [...clean, ...folded.filter((c) => clean.some((h) => h.id === hostOf.get(c.id)))];
   let st = prState(repoState, n);
   if (st.lastRunId !== runId) { // a rerun after a crash here must not count the review twice
-    const fps = [...recorded, ...rejected, ...hygItems].map((c) => c.fp);
+    const fps = [...recorded, ...rejected, ...hygItems].map((c) => findingKey(c.fp, c.line));
     Object.assign(st, {
       reviews: st.reviews + 1, lastReviewedSha: f.headSha, lastRunId: runId, settled: [...new Set([...st.settled, ...fps])],
       counts: { sha: f.headSha, ...counts() }, // a follow-up at this head starts from these
@@ -819,7 +821,7 @@ async function followUp(o, head, pst, answered) {
   const heldHere = (q) => q.finding.secret && heldText(repoState, n, pst.lastRunId, q.fingerprint) != null;
   // A must already on GitHub but not yet settled was posted by a follow-up that crashed before it saved its counts.
   const mustNow = (posted) => Math.max(0, (was?.must ?? 0)
-    + [...posted, ...already.filter((q) => !(pst.settled ?? []).includes(q.fingerprint))].filter((q) => must(q) && !heldHere(q)).length
+    + [...posted, ...already.filter((q) => !(pst.settled ?? []).includes(findingKey(q.fingerprint, q.finding?.line)))].filter((q) => must(q) && !heldHere(q)).length
     - answered.filter((q) => q.answer === "drop" && must(q) && heldHere(q)).length);
   const diff = join(repoState, "pr", String(n), "runs", runId, "ctx", "diff.patch");
   const hunks = parseHunks(existsSync(diff) ? readFileSync(diff, "utf8") : "");
@@ -856,14 +858,14 @@ async function followUp(o, head, pst, answered) {
     }
     const st = prState(repoState, n);
     st.counts = { sha: head, ...counts };
-    st.settled = [...new Set([...st.settled, ...fps])];
+    st.settled = [...new Set([...st.settled, ...items.map(({ q }) => findingKey(q.fingerprint, q.finding.line))])];
     // posted findings join agreed too, so a reworded repeat on the same line still links (same lens)
     st.agreed = [...(st.agreed ?? []), ...items.map(({ q }) => ({ id: q.fingerprint, lens: q.finding.lens, severity: q.finding.severity, file: q.finding.file, line: q.finding.line, title: q.finding.title }))];
     savePrState(repoState, n, st);
   }
   if (already.length) {
     const st = prState(repoState, n);
-    st.settled = [...new Set([...st.settled, ...already.map((q) => q.fingerprint)])];
+    st.settled = [...new Set([...st.settled, ...already.map((q) => findingKey(q.fingerprint, q.finding?.line))])];
     savePrState(repoState, n, st);
   }
   for (const q of answered) if (!codeMoved(o.repoDir ?? process.cwd(), q, head)) learnDrop(o, q);
