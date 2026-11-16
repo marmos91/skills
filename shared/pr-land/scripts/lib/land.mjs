@@ -39,10 +39,11 @@ function secretHits(text) {
 }
 
 const GREEN = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
-const REVIEW_MARK = /<!-- pr-review run=\S+ sha=([0-9a-f]+)/;
+// A full pr-review review: its marker carries the verdict inputs. Follow-ups and older versions have no must= and questions=.
+const REVIEW_MARK = /<!-- pr-review run=\S+ sha=([0-9a-f]+) key=[0-9a-f]+ must=(\d+) questions=(\d+) -->/;
 
-/** Why a PR (gh pr view JSON) is not ready to merge; [] when ready. unresolved: count of unresolved review threads. */
-export function notReady(pr, unresolved) {
+/** Why a PR (gh pr view JSON) is not ready to merge; [] when ready. unresolved: count of unresolved review threads; me: the login pr-review posts as. */
+export function notReady(pr, unresolved, me) {
   const why = [];
   if (pr.state !== "OPEN") why.push(`the PR is ${pr.state.toLowerCase()}`);
   if (pr.isDraft) why.push("the PR is a draft");
@@ -53,19 +54,20 @@ export function notReady(pr, unresolved) {
     else if (!GREEN.has(c.conclusion ?? c.state)) why.push(`check ${name} is ${String(c.conclusion ?? c.state).toLowerCase()}`);
   }
   if (unresolved) why.push(`${unresolved} review thread${unresolved === 1 ? " is" : "s are"} unresolved`);
-  if (pr.reviewDecision !== "APPROVED") why.push(...reviewGaps(pr));
+  if (pr.reviewDecision === "CHANGES_REQUESTED") why.push("a reviewer requested changes");
+  else if (pr.reviewDecision !== "APPROVED") why.push(...reviewGaps(pr, me));
   return why;
 }
 
-// The newest pr-review review must be on the head, with no open must and no question waiting.
-function reviewGaps(pr) {
-  const last = (pr.reviews ?? []).filter((r) => REVIEW_MARK.test(r.body ?? "")).at(-1);
-  if (!last) return ["no approval and no pr-review review"];
-  const sha = REVIEW_MARK.exec(last.body)[1];
+// The newest full pr-review review, posted by me (anyone can paste a marker), must be on the head with no open must and no question waiting.
+function reviewGaps(pr, me) {
+  const last = (pr.reviews ?? []).filter((r) => r.author?.login === me && REVIEW_MARK.test(r.body ?? "")).at(-1);
+  if (!last) return [`no approval and no full pr-review review by ${me}`];
+  const [, sha, must, questions] = REVIEW_MARK.exec(last.body);
   if (sha !== pr.headRefOid) return [`the newest pr-review review is on ${sha.slice(0, 7)}, the head is ${pr.headRefOid.slice(0, 7)}`];
   const gaps = [];
-  if (last.state === "CHANGES_REQUESTED" || /must findings? (?:block|(?:is|are) still open)/i.test(last.body)) gaps.push("the newest pr-review review has an open must");
-  if (/still open with the reviewer/i.test(last.body)) gaps.push("the newest pr-review review has a question waiting");
+  if (+must) gaps.push(`the newest pr-review review has ${must} open must`);
+  if (+questions) gaps.push(`the newest pr-review review has ${questions} question${+questions === 1 ? "" : "s"} waiting`);
   return gaps;
 }
 
@@ -107,10 +109,11 @@ export async function land(dir, n, { dryRun = false } = {}) {
   let pr, children, msg;
   await step("check", async () => {
     pr = ghJson(dir, ["pr", "view", String(n), "--json", PR_FIELDS]);
-    const why = notReady(pr, (await threads(repo, n)).filter((t) => !t.isResolved).length);
+    const why = notReady(pr, (await threads(repo, n)).filter((t) => !t.isResolved).length, ghJson(dir, ["api", "user"]).login);
     if (why.length) throw new Blocked(`#${n} is not ready`, { why });
     msg = squash(pr);
-    children = ghJson(dir, ["pr", "list", "--base", pr.headRefName, "--state", "open", "--json", "number,headRefName,headRefOid,isCrossRepository"]);
+    // A base is always a branch of this repo, so a fork PR's head is nobody's base.
+    children = pr.isCrossRepository ? [] : ghJson(dir, ["pr", "list", "--base", pr.headRefName, "--state", "open", "--json", "number,headRefName,headRefOid,isCrossRepository"]);
   });
   const { headRefName: head, baseRefName: base, headRefOid: sha } = pr;
   if (dryRun) return { pr: n, dryRun: true, ...msg, base, children: children.map((c) => c.number), plan: STEPS.slice(1) };
@@ -182,12 +185,13 @@ export async function land(dir, n, { dryRun = false } = {}) {
 
   const ticked = [], closed = [];
   await step("issues", () => {
-    const fixes = (pr.closingIssuesReferences ?? []).map((i) => i.number);
+    // Only issues of this repo: "Fixes other/repo#5" must not close our #5.
+    const fixes = (pr.closingIssuesReferences ?? []).filter((i) => `${i.repository?.owner?.login}/${i.repository?.name}`.toLowerCase() === repo.toLowerCase()).map((i) => i.number);
     const issue = (k) => ghJson(dir, ["api", `repos/${repo}/issues/${k}`]);
     const fixed = fixes.map(issue);
     // Tracking issues: the ones the PR body or a fixed issue links to.
-    const refs = new Set([pr.body ?? "", ...fixed.map((i) => i.body ?? "")].flatMap((t) => [...t.matchAll(/#(\d+)\b/g)].map((m) => Number(m[1]))));
-    const mine = new RegExp(`#(?:${[n, ...fixes].join("|")})(?!\\d)`);
+    const refs = new Set([pr.body ?? "", ...fixed.map((i) => i.body ?? "")].flatMap((t) => [...t.matchAll(/(?<![\w/.-])#(\d+)\b/g)].map((m) => Number(m[1]))));
+    const mine = new RegExp(`(?<![\\w/.-])#(?:${[n, ...fixes].join("|")})(?!\\d)`); // other/repo#N is not ours
     for (const k of refs) {
       if (k === n || fixes.includes(k)) continue;
       const t = issue(k);
@@ -208,11 +212,11 @@ export async function land(dir, n, { dryRun = false } = {}) {
   return { pr: n, title: msg.title, base, retargeted: children.map((c) => c.number), githubRetargeted: managed, rebased, ticked, closed, notes };
 }
 
-/** PR numbers in stack order: a PR whose base is the head of another listed PR comes after it. */
+/** PR numbers in stack order: a PR whose base is the head of another listed same-repo PR comes after it. */
 export function stackOrder(prs) {
   const left = [...prs], out = [];
   while (left.length) {
-    const i = left.findIndex((p) => !left.some((q) => q.headRefName === p.baseRefName));
+    const i = left.findIndex((p) => !left.some((q) => q !== p && !q.isCrossRepository && q.headRefName === p.baseRefName));
     if (i < 0) throw new Usage("the PRs form a cycle");
     out.push(left.splice(i, 1)[0].number);
   }
@@ -221,7 +225,7 @@ export function stackOrder(prs) {
 
 /** Land several PRs in stack order, one at a time; the first failure stops the rest. */
 export async function landAll(dir, numbers, opts) {
-  const prs = numbers.map((n) => ghJson(dir, ["pr", "view", String(n), "--json", "number,headRefName,baseRefName"]));
+  const prs = numbers.map((n) => ghJson(dir, ["pr", "view", String(n), "--json", "number,headRefName,baseRefName,isCrossRepository"]));
   const landed = [];
   for (const n of stackOrder(prs)) {
     try { landed.push(await land(dir, n, opts)); } catch (e) { e.landed = landed; e.pr = n; throw e; }

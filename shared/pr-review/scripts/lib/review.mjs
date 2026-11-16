@@ -616,7 +616,8 @@ async function once(o, restart) {
     belowFloor ? `${belowFloor} unproven ${belowFloor === 1 ? "finding was" : "findings were"} left out: review ${f.reviewNumber} posts only must findings.` : "",
     run.missing?.length ? `Lenses not run: ${run.missing.join(", ")}.` : "",
     // Dropped seats and missed parts stay out of the body: they are in run.json and the run log.
-    ci.line ?? "", marker(runId, f.headSha, key),
+    // must= and questions= are the verdict's inputs (earlier, inline and off-diff musts; questions waiting), for pr-land.
+    ci.line ?? "", marker(runId, f.headSha, key).replace(/ -->$/, ` must=${blocking.length + [...agreed, ...hygItems].filter((x) => x.severity === "must").length} questions=${open.length} -->`),
   ].filter(Boolean).join("\n\n");
   const permalink = `https://github.com/${repo}/blob/${f.headSha}`;
 

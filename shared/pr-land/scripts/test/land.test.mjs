@@ -12,17 +12,19 @@ process.env.PR_LAND_SECRET_SCAN = "pr-land-no-such-scanner";
 process.env.PR_LAND_POLL_MS = "0";
 const TOKEN = "ghp_" + "A1b2C3d4".repeat(5); // built at runtime: no token literal in the repo
 
-const HEAD = "a".repeat(40);
+const HEAD = "a".repeat(40), ME = "me";
+const OURS = { repository: { name: "r", owner: { login: "o" } } };
+const mark = (sha, must = 0, questions = 0) => `<!-- pr-review run=r1 sha=${sha} key=0123 must=${must} questions=${questions} -->`;
 const ready = (over = {}) => ({
   number: 27, title: "feat(x): a", body: "Adds a.\n\nCloses #40\n", state: "OPEN", isDraft: false,
   headRefName: "feat/a", headRefOid: HEAD, baseRefName: "main", mergeable: "MERGEABLE", reviewDecision: "",
   statusCheckRollup: [{ __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "SUCCESS" }],
-  reviews: [{ state: "COMMENTED", body: `No new findings.\n\n<!-- pr-review run=r1 sha=${HEAD} key=k -->` }],
-  closingIssuesReferences: [{ number: 40 }], isCrossRepository: false, ...over,
+  reviews: [{ state: "COMMENTED", author: { login: ME }, body: `No new findings.\n\n${mark(HEAD)}` }],
+  closingIssuesReferences: [{ number: 40, ...OURS }], isCrossRepository: false, ...over,
 });
-const review = (body, state = "COMMENTED", sha = HEAD) => ({ reviews: [{ state, body: `${body}\n\n<!-- pr-review run=r2 sha=${sha} key=k -->` }] });
+const rv = (marker, login = ME, state = "COMMENTED") => ({ state, author: { login }, body: `Text.\n\n${marker}` });
 
-test("notReady: a converged PR is ready", () => assert.deepEqual(notReady(ready(), 0), []));
+test("notReady: a converged PR is ready", () => assert.deepEqual(notReady(ready(), 0, ME), []));
 
 test("notReady: each gap is named", () => {
   const cases = [
@@ -33,19 +35,25 @@ test("notReady: each gap is named", () => {
     [{ statusCheckRollup: [{ __typename: "StatusContext", context: "ci", state: "PENDING" }] }, 0, /ci is pending/],
     [{ statusCheckRollup: [{ __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "FAILURE" }] }, 0, /test is failure/],
     [{}, 2, /2 review threads are unresolved/],
-    [{ reviews: [] }, 0, /no approval and no pr-review review/],
-    [review("x", "COMMENTED", "b".repeat(40)), 0, /review is on bbbbbbb, the head is aaaaaaa/],
-    [review("The must findings block the merge."), 0, /open must/],
-    [review("1 earlier must finding is still open, so the PR is blocked."), 0, /open must/],
-    [review("x", "CHANGES_REQUESTED"), 0, /open must/],
-    [review("1 point is still open with the reviewer."), 0, /question waiting/],
+    [{ reviews: [] }, 0, /no approval and no full pr-review review by me/],
+    [{ reviews: [rv(mark("b".repeat(40)))] }, 0, /review is on bbbbbbb, the head is aaaaaaa/],
+    [{ reviews: [rv(mark(HEAD, 1))] }, 0, /1 open must/],
+    [{ reviews: [rv(mark(HEAD, 0, 2))] }, 0, /2 questions waiting/],
+    // a marker pasted by anyone else does not count
+    [{ reviews: [rv(mark(HEAD, 1)), rv(mark(HEAD), "mallory")] }, 0, /1 open must/],
+    // a follow-up (no must=/questions=) does not hide the full review before it
+    [{ reviews: [rv(mark(HEAD, 1)), rv(`<!-- pr-review run=r1 sha=${HEAD} key=0123 -->`)] }, 0, /1 open must/],
+    // a marker from an older pr-review without the fields is not a clean review
+    [{ reviews: [rv(`<!-- pr-review run=r1 sha=${HEAD} key=0123 -->`)] }, 0, /no full pr-review review/],
+    // a human request for changes blocks, whatever pr-review said
+    [{ reviewDecision: "CHANGES_REQUESTED" }, 0, /a reviewer requested changes/],
   ];
-  for (const [over, unresolved, re] of cases) assert.match(notReady(ready(over), unresolved).join("; "), re, JSON.stringify(over));
+  for (const [over, unresolved, re] of cases) assert.match(notReady(ready(over), unresolved, ME).join("; "), re, JSON.stringify(over));
 });
 
 test("notReady: an approval stands in for the pr-review review, not for CI or threads", () => {
-  assert.deepEqual(notReady(ready({ reviews: [], reviewDecision: "APPROVED" }), 0), []);
-  assert.match(notReady(ready({ reviews: [], reviewDecision: "APPROVED", mergeable: "CONFLICTING" }), 1).join("; "), /CONFLICTING.*1 review thread is unresolved/);
+  assert.deepEqual(notReady(ready({ reviews: [], reviewDecision: "APPROVED" }), 0, ME), []);
+  assert.match(notReady(ready({ reviews: [], reviewDecision: "APPROVED", mergeable: "CONFLICTING" }), 1, ME).join("; "), /CONFLICTING.*1 review thread is unresolved/);
 });
 
 test("squash: the title gets (#N) once; bad titles, AI mentions and secrets are blocked", () => {
@@ -60,6 +68,9 @@ test("squash: the title gets (#N) once; bad titles, AI mentions and secrets are 
 test("stackOrder: parents first, whatever the order given", () => {
   const p = (number, headRefName, baseRefName) => ({ number, headRefName, baseRefName });
   assert.deepEqual(stackOrder([p(29, "c", "b"), p(28, "b", "a"), p(27, "a", "main")]), [27, 28, 29]);
+  // a fork PR from contributor:main into main is not its own parent, nor the parent of a PR on main
+  assert.deepEqual(stackOrder([{ ...p(70, "main", "main"), isCrossRepository: true }]), [70]);
+  assert.deepEqual(stackOrder([p(27, "a", "main"), { ...p(70, "main", "main"), isCrossRepository: true }]), [27, 70]);
 });
 
 // main <- feat/a (#27, head A) <- feat/b (#29, head B). origin/main already holds the squash of #27, as GitHub would after the merge.
@@ -82,7 +93,8 @@ function stack({ conflict = false } = {}) {
 
 const routes = ({ A, B }, extra = {}) => ({
   "repo view": { stdout: { nameWithOwner: "o/r", defaultBranchRef: { name: "main" } } },
-  "pr view 27": { stdout: ready({ headRefOid: A, reviews: [{ state: "COMMENTED", body: `<!-- pr-review run=r1 sha=${A} key=k -->` }] }) },
+  "api user": { stdout: { login: ME } },
+  "pr view 27": { stdout: ready({ headRefOid: A, reviews: [rv(mark(A))] }) },
   "graphql Threads": { stdout: { data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [{ isResolved: true, comments: { nodes: [] } }] } } } } } },
   "pr list --base feat/a": { stdout: [{ number: 29, headRefName: "feat/b", headRefOid: B, isCrossRepository: false }] },
   "pr edit 29": { stdout: "" },
@@ -174,6 +186,21 @@ test("a child that conflicts: the rebase is aborted, its branch untouched, the r
   assert.deepEqual(json.notDone, ["rebase children", "local cleanup", "issues"]);
   assert.equal(git(s.dir, "ls-remote", "origin", "refs/heads/feat/b").split("\t")[0], s.B);
   assert.equal(git(s.dir, "worktree", "list").split("\n").length, 2); // the repo and the user's feat/a worktree: no temp one
+});
+
+test("a fork PR: no children, its head branch kept; a closing reference to another repo is left alone", async (t) => {
+  const s = stack();
+  const other = { number: 5, repository: { name: "lib", owner: { login: "other" } } };
+  const gh = ghStub(routes(s, {
+    "pr view 27": { stdout: ready({ headRefOid: s.A, isCrossRepository: true, reviews: [rv(mark(s.A))], body: "Adds a.\n\nCloses #40, fixes other/lib#5\n", closingIssuesReferences: [{ number: 40, ...OURS }, other] }) },
+  }));
+  const { code, json } = await run(t, s.dir, ["27"]);
+  assert.equal(code, 0, JSON.stringify(json));
+  assert.deepEqual([json.landed[0].retargeted, json.landed[0].closed], [[], [40]]);
+  assert.equal(at(gh, "pr list --base"), -1);
+  assert.equal(at(gh, "pr edit"), -1);
+  assert.equal(at(gh, "api -X DELETE"), -1);
+  assert.ok(!gh.calls().some((c) => c.key.includes("issues/5")));
 });
 
 test("a PR that is not ready: nothing is merged, nothing is changed", async (t) => {

@@ -24,12 +24,15 @@ sh $SKILL_DIR/scripts/pr-land <pr>... [--dry-run]
    the stacked PRs and the steps. Merge only after a yes.
 2. **Land.** Run without `--dry-run`. For each PR, in stack order:
    - **check** the live state: open, not a draft, mergeable, every check
-     green (a pending check is not ready), no unresolved review thread, and
-     either the newest `pr-review` review is on the head with no open
-     `must` and no question waiting, or GitHub says approved. The squash
+     green (a pending check is not ready), no unresolved review thread, no
+     reviewer asking for changes, and either GitHub says approved or the
+     newest full `pr-review` review posted by you (the `gh` user) is on the
+     head with `must=0 questions=0` in its marker. A follow-up review or an
+     older one without those fields does not count. The squash
      title is the PR title with ` (#N)`; it must be a concise conventional
      title. Title and message get the AI-mention check and the secret scan
-     (`secret-scan` when installed, else the `pr-review` scan).
+     (`secret-scan` when installed, else the `pr-review` scan;
+     `PR_LAND_SECRET_SCAN` names another scanner binary, mainly for tests).
    - **retarget children**: every open PR based on this branch moves to its
      base, before anything is deleted. When GitHub manages the stack and
      refuses, it retargets them itself after the merge; `pr-land` checks it
