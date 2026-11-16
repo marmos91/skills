@@ -449,13 +449,20 @@ test("the land record is per host: an Enterprise resume ignores the record a git
   rmSync(join(stateRoot("o/r"), "land"), { recursive: true, force: true });
 });
 
-test("an exported GH_HOST for another host is replaced by the repo's own host", async (t) => {
+test("an exported GH_HOST for another host: every gh call, the first one too, goes to the remote's host", async (t) => {
   const s = stack();
-  process.env.GH_HOST = "ghe.example.com";
-  ghStub(routes(s));
+  process.env.GH_HOST = "other.example.com";
+  const gh = ghStub(routes(s));
+  // log the host each call sees, then answer as the stub
+  const log = join(gh.dir, "hosts.log"), wrap = join(gh.dir, "gh-host");
+  writeFileSync(wrap, `#!/bin/sh\necho "$GH_HOST" >> '${log}'\nexec '${process.env.GH_BIN}' "$@"\n`);
+  chmodSync(wrap, 0o755);
+  process.env.GH_BIN = wrap;
   const { code, json } = await run(t, s.dir, ["27", "--dry-run"]);
   assert.equal(code, 0, JSON.stringify(json));
-  assert.equal(process.env.GH_HOST, "github.com");
+  const hosts = readFileSync(log, "utf8").trim().split("\n");
+  assert.ok(hosts.length > 2);
+  assert.deepEqual([...new Set(hosts)], ["github.com"]);
 });
 
 test("the delete: each path segment encoded, and only when the branch is still at the merged head", async (t) => {

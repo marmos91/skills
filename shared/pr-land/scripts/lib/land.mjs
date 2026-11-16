@@ -45,6 +45,16 @@ export function repoOfUrl(url, host = "github.com") {
   const path = m[2].replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "");
   return /^[\w.-]+\/[\w.-]+$/.test(path) ? path.toLowerCase() : null;
 }
+/** The host gh resolves the clone's repo on, read from the git remotes in gh's order (upstream, github, origin, the rest), without gh. */
+export function remoteHost(dir) {
+  let lines = [];
+  try { lines = git(dir, "config", "--get-regexp", "^remote\\..*\\.url$").split("\n"); } catch { /* no remotes */ }
+  const rank = (name) => { const i = ["upstream", "github", "origin"].indexOf(name); return i < 0 ? 3 : i; };
+  const hosts = lines.map((l) => l.split(" ")).map(([k, url]) => [k.slice("remote.".length, -".url".length), url ?? ""])
+    .sort(([a], [b]) => rank(a) - rank(b))
+    .map(([, url]) => (URL_FORM.exec(url) ?? (url.includes("://") ? null : SCP_FORM.exec(url)))?.[1]?.toLowerCase()).filter(Boolean);
+  return hosts[0] === "ssh.github.com" ? "github.com" : hosts[0] ?? "github.com";
+}
 /** The git remote whose URL is repo on host: fetches and pushes go where gh merges. */
 function remoteOf(dir, repo, host) {
   let lines = [];
@@ -364,6 +374,8 @@ export function stackOrder(prs) {
 
 /** Land several PRs in stack order, one at a time; the first failure stops the rest. */
 export async function landAll(dir, numbers, opts) {
+  // Before the first gh call: an exported GH_HOST for another host would send every call there.
+  process.env.GH_HOST = remoteHost(dir);
   const prs = numbers.map((n) => ghJson(dir, ["pr", "view", String(n), "--json", "number,headRefName,baseRefName,isCrossRepository"]));
   const landed = [];
   for (const n of stackOrder(prs)) {
