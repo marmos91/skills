@@ -333,8 +333,9 @@ of a full review adds `must=<n> questions=<n> gaps=<n>`: the open must
 findings, the questions waiting, and the lenses not run, seats dropped and
 parts missed, as they stand when the review is posted. It then adds
 `state=<json>` for agents: `verdict` (the event), `next` (`fix`, `answer`,
-`rerun`, `respond`, `wait-ci` or `land`), `items` (each open earlier thread and
-each new finding the secret scan did not hold: `fp`, `severity`, `file`, `line`, `status` open or new, the thread
+`rerun`, `respond`, `fix-ci` for a failed check, `wait-ci` for a pending one,
+or `land`), `ci` (the CI state), `items` (each open earlier thread and
+each new finding the secret scan did not hold, with an answered "post" redacted: `fp`, `severity`, `file`, `line`, `status` open or new, the thread
 `url` or null off the diff, `done_when`), and the `fixed` and `retracted`
 thread URLs. `pr-land` names the open musts from it. Questions are the
 finding questions on the PR that wait on you or on a run to apply your
@@ -342,7 +343,8 @@ answer (`waitingQuestions` in `questions.mjs`). A follow-up that posts
 findings writes the same fields: the full review's counts plus the musts it
 posts, minus the questions it settles, plus the ones the secret scan holds
 again. A follow-up that posts nothing rewrites the counts in the newest
-marker at that head instead, so `pr-land` never reads stale ones. It is the last line
+marker at that head instead, with its decision line and `state.next`, so
+`pr-land` never reads stale ones. It is the last line
 of the body; a marker anywhere else is ignored. `pr-land` reads them
 (`summaryMarker` and `readSummaryMarker` in `state.mjs`).
 

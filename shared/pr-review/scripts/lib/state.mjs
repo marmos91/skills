@@ -217,6 +217,11 @@ export function commitStatus({ must, questions, gaps }) {
   const parts = [[must, "must", "must"], [questions, "question", "questions"], [gaps, "gap", "gaps"]].filter(([k]) => k).map(([k, one, many]) => `${k} ${k === 1 ? one : many}`);
   return { state: parts.length ? "failure" : "success", description: parts.join(", ") || "no open must, question or gap" };
 }
+// The decision line of a summary (#65), from the same counts: syncMarker rewrites it when the counts change.
+export const decision = (counts) => { const s = commitStatus(counts); return `**${s.state === "success" ? "Nothing blocks." : `Blocks: ${s.description}.`}**`; };
+// The state's next step for agents: open work first, then CI (red needs a fix, pending needs time).
+export const nextStep = ({ must, questions, gaps }, items, ci) => (must ? "fix" : questions ? "answer" : gaps ? "rerun" : items.length ? "respond"
+  : ci === "red" ? "fix-ci" : ci === "green" || ci === "none" ? "land" : "wait-ci");
 // Only the engine's marker counts: the last line of the body. A marker that model text put earlier in the body is ignored.
 const SUMMARY = /(?:^|\n)<!-- pr-review run=(\S+) sha=([0-9a-f]+) key=([0-9a-f]+) must=(\d+) questions=(\d+) gaps=(\d+)(?: state=(.+?))? -->\s*$/;
 /** { runId, sha, key, must, questions, gaps, state } from the last line of a full review's body, or null. state is null when absent or bad. */

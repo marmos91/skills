@@ -245,8 +245,15 @@ test("an answer-only drop that posts nothing rewrites the newest marker at the h
   assert.equal(posts(fx).length, 1, "nothing posted");
   const [edit] = mutations(fx).filter((m) => m.key === "graphql EditReview");
   assert.equal(edit.input.variables.id, "PRR_9");
-  assert.deepEqual(counts(edit.input.variables.body), { must: 0, questions: 0, gaps: 0 });
-  assert.equal(edit.input.variables.body.replace(/<!--[^\n]*$/, ""), full.replace(/<!--[^\n]*$/, ""), "only the marker changes");
+  const b = edit.input.variables.body;
+  assert.deepEqual(counts(b), { must: 0, questions: 0, gaps: 0 });
+  // the decision line and the state follow the new counts; the rest stays
+  assert.match(full, /^\*\*Blocks: 1 question\.\*\*/);
+  assert.match(b, /^\*\*Nothing blocks\.\*\*/);
+  assert.deepEqual([readSummaryMarker(full).state.next, readSummaryMarker(b).state.next], ["answer", "respond"]);
+  assert.deepEqual(readSummaryMarker(b).state.items, readSummaryMarker(full).state.items);
+  const rest = (x) => x.replace(/^[^\n]*/, "").replace(/<!--[^\n]*$/, "");
+  assert.equal(rest(b), rest(full), "only the decision line and the marker change");
 });
 
 test("follow-up: a question the secret scan holds again counts in its marker as in the status", async (t) => {
@@ -2026,8 +2033,8 @@ test("each inline comment ends with the finding's done when, before the marker",
 });
 
 test("the state block in the marker lists an off-diff must with its file and done when, next to an open question", async () => {
-  const fx = fixture(); routes(fx);
-  const off = C("c3", { file: "b.js", line: 99, title: "Caller passes 0", done_when: "load(0) returns an error" });
+  const fx = fixture(OFF_FILES); routes(fx);
+  const off = C("c3", { ...OFF, title: "Caller passes 0", done_when: "load(0) returns an error" });
   const answers = split({ merge: [C("c1", { found: [S0] }), off], "v~2": [drop("c1"), keep("c3")],
     compose: { verdict: "The off-diff bug blocks.", body: "", comments: [{ id: "c3", body: "**must:** off diff" }] } });
   const decide = (c, v, h, cfg) => realDecide(c, v, h, cfg, { env: { PATH: "/nonexistent" } });
@@ -2036,8 +2043,8 @@ test("the state block in the marker lists an off-diff must with its file and don
   const m = readSummaryMarker(posts(fx)[0].body);
   assert.deepEqual([m.must, m.questions], [1, 1]);
   assert.deepEqual({ ...m.state, items: m.state.items.map(({ fp, ...x }) => x) }, {
-    verdict: "REQUEST_CHANGES", next: "fix", fixed: [], retracted: [],
-    items: [{ severity: "must", file: "b.js", line: 99, status: "new", url: null, done_when: "load(0) returns an error" }],
+    verdict: "REQUEST_CHANGES", next: "fix", ci: "none", fixed: [], retracted: [],
+    items: [{ severity: "must", file: "b.js", line: 1, status: "new", url: null, done_when: "load(0) returns an error" }],
   });
 });
 
@@ -2060,6 +2067,42 @@ test("state next waits for CI: no finding and pending checks is wait-ci, not lan
   const { r } = await go(fx, { all: { findings: [] }, merge: [], compose: { verdict: "Nothing blocks.", body: "", comments: [] } });
   assert.equal(r.exit, 0, r.summary);
   assert.equal(readSummaryMarker(posts(fx)[0].body).state.next, "wait-ci");
+});
+
+test("state next is fix-ci when a check failed, not wait-ci", async () => {
+  const fx = fixture(); routes(fx);
+  const r0 = R(fx);
+  r0["pr checks 5 -R o/r --json name,state,link,bucket,startedAt"] = { stdout: [{ name: "test", state: "FAILURE", link: "https://github.com/o/r/actions/runs/9/job/1", bucket: "fail", startedAt: "2026-11-11T00:00:00Z" }], exit: 1 };
+  r0["run view 9 -R o/r --log-failed"] = { stdout: "boom" };
+  W(fx, r0);
+  const { r } = await go(fx, { all: { findings: [] }, merge: [], compose: { verdict: "Nothing blocks.", body: "", comments: [] } });
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(readSummaryMarker(posts(fx)[0].body).state.next, "fix-ci");
+});
+
+test("a reply compose confirms on a thread the seats still find open stays open, out of the checks-out list", async () => {
+  const fx = fixture(); routes(fx, { threads: T1() });
+  savePrState(fx.state, N, { ...prState(fx.state, N), reviews: 1, lastReviewedSha: fx.base });
+  const compose = { verdict: "The must on a is still open.", body: "", confirmed: [{ thread_id: "T1", text: "intended, see the docs." }], comments: [] };
+  const { r } = await go(fx, { all: { findings: [], earlier: [{ thread_id: "T1", status: "open", evidence: "a.js:1" }] }, compose });
+  assert.equal(r.exit, 0, r.summary);
+  const b = posts(fx)[0].body;
+  assert.match(b, /^\*\*Blocks: 1 must\.\*\* Pass 2, since `[0-9a-f]{7}`: 0 fixed, 0 new, 1 still open\./);
+  assert.doesNotMatch(b, /checks out|intended, see the docs/);
+});
+
+test("a held finding answered post: its done_when is redacted in the state too, and the summary posts", async () => {
+  const fx = fixture(); routes(fx);
+  const token = "ghp_" + "R".repeat(36);
+  const answers = happy({ merge: [C("c1", { done_when: `no log line prints ${token}` })] });
+  await go(fx, answers, { mode: "loop" });
+  const q = openQuestions(fx.state).find((x) => x.fingerprint === fingerprint(F()));
+  answer(fx.state, q.id, "post");
+  const again = await go(fx, answers, { mode: "loop", restart: true });
+  assert.equal(again.r.exit, 0, again.r.summary);
+  const p = posts(fx).at(-1);
+  assert.ok(!JSON.stringify(posts(fx)).includes(token));
+  assert.match(readSummaryMarker(p.body).state.items[0].done_when, /\[REDACTED:github-token\]/);
 });
 
 test("the pass line counts posted comments: a folded finding is not a second new thread", async () => {

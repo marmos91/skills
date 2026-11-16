@@ -23,7 +23,7 @@ import { answer, appliedAnswer, openQuestions, pendingAnswers, queueQuestion, wa
 import { runSast, sastClusters, sastLine } from "./sast.mjs";
 import { applyProof, checkFix, directionOnly, isProven, markUnproven, mutantFindings, proofLine, runMutants, scopePatch, suggestionOf, uncheckedNote } from "./proof.mjs";
 import { cherryPicked, coreCandidates, depthLine, pickDepth, queueCoreQuestion, readCorePaths, runSetup, settleCoreQuestions } from "./setup.mjs";
-import { FINAL_STAGE, VERSION, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, commitStatus, summaryMarker, usageByStage, writeAtomic } from "./state.mjs";
+import { FINAL_STAGE, VERSION, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, commitStatus, decision, nextStep, summaryMarker, usageByStage, writeAtomic } from "./state.mjs";
 
 export const STAGES = ["frame", "setup", "round1", "merge", "round2", "tally", "decide", "compose", "post"];
 const RANK = { must: 0, should: 1, nit: 2, "pre-existing": 3 };
@@ -658,24 +658,26 @@ async function once(o, restart) {
   const stillOpen = earlierAll.filter((e) => !fixed.includes(e) && !retracted.includes(e));
   // First line (#65): the decision from the marker counts (what pr-land and the commit status read), then the delta.
   const firstLine = () => {
-    const s = commitStatus(counts()), since = pst.lastReviewedSha ? `, since \`${pst.lastReviewedSha.slice(0, 7)}\`` : "";
+    const since = pst.lastReviewedSha ? `, since \`${pst.lastReviewedSha.slice(0, 7)}\`` : "";
     // new: the comments that post (a folded finding rides on its host, a held one does not post)
     const delta = f.reviewNumber > 1 ? ` Pass ${f.reviewNumber}${since}: ${fixed.length} fixed, ${items.filter((x) => !heldIds.has(x.id)).length} new, ${stillOpen.length} still open${retracted.length ? `, ${retracted.length} retracted` : ""}.` : "";
-    return `**${s.state === "success" ? "Nothing blocks." : `Blocks: ${s.description}.`}**${delta}`;
+    return `${decision(counts())}${delta}`;
   };
-  // Earlier threads that only check out (fixed, or a reply the judge confirmed) go in one collapsed list, each linked.
+  // Earlier threads that only check out go in one collapsed list, each linked: the fixed ones, in the judge's words
+  // when it confirmed the reply. A thread the seats still find open stays open, whatever compose says.
   const confirmed = new Map((composed.confirmed ?? []).map((x) => [x.thread_id, one(x.text)]));
-  const checks = earlierAll.filter((e) => fixed.includes(e) || (confirmed.get(e.threadId) && !retracted.includes(e)))
+  const checks = fixed
     .map((e) => `- ${confirmed.get(e.threadId) || `Fixed: ${plain(String(e.body ?? "").split("\n")[0])}`} ([thread](${threadUrl(e)}))`);
   // State for agents (#65), in the marker: the open items, each with its thread and its "done when".
   // A finding the secret scan holds stays out: its done_when may hold the secret, and it is an open question already.
   const stateOf = (urls) => {
     const c = counts(), items = [
       ...stillOpen.map((e) => ({ severity: e.severity, file: e.path, line: e.line ?? e.originalLine, status: "open", url: threadUrl(e) })),
-      ...[...posted, ...hygItems].filter((x) => !heldIds.has(hostOf.get(x.id) ?? x.id)).map((x) => ({ fp: x.fp, severity: x.severity, file: x.file || null, line: x.line ?? null, status: "new", url: urls.get(hostOf.get(x.id) ?? x.id) ?? null, ...(x.done_when && { done_when: one(x.done_when) }) })),
+      ...[...posted, ...hygItems].filter((x) => !heldIds.has(hostOf.get(x.id) ?? x.id)).map((x) => ({ fp: x.fp, severity: x.severity, file: x.file || null, line: x.line ?? null, status: "new", url: urls.get(hostOf.get(x.id) ?? x.id) ?? null, ...(x.done_when && { done_when: one(x.answered ? redact(String(x.done_when)) : x.done_when) }) })),
     ];
-    const next = c.must ? "fix" : c.questions ? "answer" : c.gaps ? "rerun" : items.length ? "respond" : ci.state === "green" || ci.state === "none" ? "land" : "wait-ci";
-    return { verdict: v().event, next, items, fixed: fixed.map(threadUrl), retracted: retracted.map(threadUrl) };
+    // one scan of the whole state; on a hit, only the entries that hit are dropped
+    const safe = scanOutbound(JSON.stringify(items), { repo }).ok ? items : items.filter((i) => scanOutbound(JSON.stringify(i), { repo }).ok);
+    return { verdict: v().event, next: nextStep(c, safe, ci.state), ci: ci.state, items: safe, fixed: fixed.map(threadUrl), retracted: retracted.map(threadUrl) };
   };
   const bodyOf = (outside, key, inline, urls = new Map()) => [
     firstLine(),
@@ -875,7 +877,10 @@ async function syncMarker(gh, repo, n, sha, counts, log) {
   try {
     const m = await gh.markerCounts(repo, n, sha);
     if (!m?.id || ["must", "questions", "gaps"].every((k) => m[k] === counts[k])) return;
-    await gh.editReview(m.id, m.body.replace(/<!-- pr-review run=[^\n]*-->\s*$/, () => summaryMarker(m.runId, sha, m.key, counts)));
+    // the state and the decision line follow the new counts (#65); a marker from before the state stays without one
+    const state = m.state && { ...m.state, next: nextStep(counts, m.state.items ?? [], m.state.ci) };
+    const body = m.body.replace(/^\*\*(Nothing blocks\.|Blocks: [^*\n]*)\*\*/, () => decision(counts));
+    await gh.editReview(m.id, body.replace(/<!-- pr-review run=[^\n]*-->\s*$/, () => summaryMarker(m.runId, sha, m.key, counts, state)));
   } catch (e) { log(`review marker not updated: ${e.message}`); }
 }
 
