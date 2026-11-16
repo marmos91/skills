@@ -557,7 +557,8 @@ smaller with each round, so it cannot go on without limit.
    file, symbol, normalized title). The state records each settled
    fingerprint: dropped by the vote, answered by Marco, or resolved. The
    council does not raise a settled fingerprint again unless the code at
-   that place changed.
+   that place changed. The state keys it by fingerprint and line: settled
+   at N lines, it stays settled while a review finds it N times or fewer.
 4. **No contradiction.** A later review never asks for the opposite of an
    earlier agreed finding. The merge step checks new findings against the
    earlier agreed findings and drops a finding that reverses one. The drop is

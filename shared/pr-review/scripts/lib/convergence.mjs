@@ -21,12 +21,12 @@ export function learnKey(f) {
 // a file stay 2. A bare fingerprint in an older settled list still matches.
 export const findingKey = (fp, line) => `${fp}:${line}`;
 
-// A fp settled at one line stays settled when that line moves (code added above it). A fp settled at several
-// lines matches only those lines: there the line is what tells the findings apart.
-function isSettled(settled, fp, line) {
+// A fp settled at N lines stays settled at any lines while this review finds it N times or fewer: lines that only
+// moved (code added above) keep it settled. Found more often, only the settled lines match, so a new line is new.
+function isSettled(settled, fp, line, found) {
   if (settled.has(fp)) return true;
   const lines = [...settled].filter((k) => k.startsWith(`${fp}:`));
-  return lines.length === 1 || lines.includes(findingKey(fp, line));
+  return (lines.length > 0 && found <= lines.length) || lines.includes(findingKey(fp, line));
 }
 
 export function allowedSeverities(reviewNumber) {
@@ -38,10 +38,12 @@ export function filterNew(findings, { reviewNumber, settled, changedLines, learn
   const allowed = allowedSeverities(reviewNumber);
   const keep = [];
   const dropped = [];
+  const count = new Map();
+  for (const x of findings) count.set(fingerprint(x), (count.get(fingerprint(x)) ?? 0) + 1);
   for (const finding of findings) {
     if (!allowed.has(finding.severity)) dropped.push({ finding, reason: "severity floor" });
     else if (learned.has(learnKey(finding))) dropped.push({ finding, reason: "learned" });
-    else if (isSettled(settled, fingerprint(finding), finding.line) && !changedLines.get(finding.file)?.has(finding.line)) dropped.push({ finding, reason: "settled" });
+    else if (isSettled(settled, fingerprint(finding), finding.line, count.get(fingerprint(finding))) && !changedLines.get(finding.file)?.has(finding.line)) dropped.push({ finding, reason: "settled" });
     else keep.push(finding);
   }
   return { keep, dropped };

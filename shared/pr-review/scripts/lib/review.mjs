@@ -799,7 +799,10 @@ async function postStatus(gh, repo, n, sha, counts, url, log) {
 
 // The engine-final body of a comment that an earlier run held back by the secret scan, redacted; null when gone.
 function heldText(repoState, n, runId, fp, line) {
-  try { return readJson(join(repoState, "pr", String(n), "runs", runId ?? "", "held", `${fp}-${line}.json`)).body; } catch { return null; }
+  const dir = join(repoState, "pr", String(n), "runs", runId ?? "", "held");
+  // held/<fp>.json: saved by an older engine, before held bodies had a line
+  for (const name of [`${fp}-${line}.json`, `${fp}.json`]) { try { return readJson(join(dir, name)).body; } catch { /* next */ } }
+  return null;
 }
 
 /**

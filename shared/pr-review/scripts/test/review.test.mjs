@@ -991,6 +991,22 @@ test("a full run posts the second line of one fp although the first line's comme
   assert.deepEqual(posts(fx)[0].threads.map((t) => t.line), [3]);
 });
 
+test("follow-up: a body held under the old name (held/<fp>.json) is still posted", async () => {
+  const fx = fixture(); routes(fx);
+  const token = "ghp_" + "A".repeat(36);
+  const answers = happy({ compose: { body: "Summary.", comments: [{ id: "c1", body: `**must:** token ${token} leaks` }] } });
+  const { r } = await go(fx, answers, { mode: "loop" });
+  const held = join(r.runDir, "held");
+  // the name an older engine saved it under
+  const [saved] = readdirSync(held);
+  writeFileSync(join(held, `${fingerprint(F())}.json`), readFileSync(join(held, saved)));
+  rmSync(join(held, saved));
+  answer(fx.state, openQuestions(fx.state)[0].id, "post");
+  const again = await go(fx, answers);
+  assert.equal(again.r.exit, 0, again.r.summary);
+  assert.match(posts(fx).at(-1).threads[0]?.body ?? "", /\[REDACTED:github-token\] leaks/);
+});
+
 test("held comments of one fp at 2 lines keep a body each", async () => {
   const fx = fixture(); routes(fx);
   const token = "ghp_" + "A".repeat(36);

@@ -377,6 +377,10 @@ They apply to a manual `review` and to the loop.
    symbol, normalized title (no line number, so a moved line keeps its
    fingerprint). A fingerprint that was dropped by the vote, answered by you,
    or resolved is not raised again unless the code at that place changed.
+   The settled list records the fingerprint with its line. A fingerprint
+   settled at N lines stays settled while a review finds it N times or
+   fewer, wherever the lines moved. Found more often, only the settled lines
+   match, so the extra finding is new.
 4. **No contradiction.** The merge step drops a finding that asks for the
    opposite of an earlier agreed finding, and records the drop.
 5. **Review budget.** `loop.max_review_rounds` (default 3) automatic reviews

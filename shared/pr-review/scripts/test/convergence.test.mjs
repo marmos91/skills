@@ -39,10 +39,15 @@ test("a learned finding does not drop one whose title differs only in digits", (
 test("learnKey ignores case and punctuation in the title", () => {
   assert.equal(learnKey(f({ title: "Null deref in parse()." })), learnKey(f({ title: "null deref in Parse" })));
 });
-test("a fp settled at 2 lines settles only those lines", () => {
-  const settled = new Set([findingKey(fingerprint(f()), 42), findingKey(fingerprint(f()), 50)]);
-  const r = filterNew([f({ line: 43 }), f({ line: 50 })], { reviewNumber: 1, settled, changedLines: new Map() });
+test("a fp found more often than it was settled: only the settled lines match", () => {
+  const settled = new Set([findingKey(fingerprint(f()), 42)]);
+  const r = filterNew([f({ line: 42 }), f({ line: 43 })], { reviewNumber: 1, settled, changedLines: new Map() });
   assert.deepEqual(r.keep.map((x) => x.line), [43]);
+});
+test("a fp settled at 2 lines stays settled when both lines shift", () => {
+  const settled = new Set([findingKey(fingerprint(f()), 2), findingKey(fingerprint(f()), 3)]);
+  const r = filterNew([f({ line: 7 }), f({ line: 8 })], { reviewNumber: 2, settled, changedLines: new Map([["a.js", new Set([1, 2, 3, 4, 5])]]) });
+  assert.deepEqual(r.keep, []);
 });
 test("a fp settled at one line stays settled when code added above moves it", () => {
   const settled = new Set([findingKey(fingerprint(f()), 42)]);
