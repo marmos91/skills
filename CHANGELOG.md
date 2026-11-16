@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/marmos91/skills/compare/v0.2.0...v0.2.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* **pr-review:** setup-check boundary audit ([#58](https://github.com/marmos91/skills/issues/58)) ([#60](https://github.com/marmos91/skills/issues/60)) ([6017930](https://github.com/marmos91/skills/commit/6017930de8a73fdbc5cbfd3578e07164fbcb1326))
+
 ## [0.2.0](https://github.com/marmos91/skills/compare/v0.1.0...v0.2.0) (2026-11-13)
 
 
