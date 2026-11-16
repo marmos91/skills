@@ -103,8 +103,11 @@ const plural = (k, one, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
 
 /** The one end comment: rounds run, fixed, declined (with reasons), still open, and the merge commit. */
 export function summaryText(repo, s) {
-  const done = s.responses.flatMap((r) => r.points.filter((p) => p.status === "done"));
-  const kept = s.responses.flatMap((r) => r.points.filter((p) => p.status === "open"));
+  // one line per finding: a later answer (a resumed declined run that fixed it) replaces the earlier one
+  const byFp = new Map();
+  s.responses.forEach((r, i) => r.points.forEach((p, j) => byFp.set(fpsOf(p).join(",") || `${i}.${j}`, p)));
+  const done = [...byFp.values()].filter((p) => p.status === "done");
+  const kept = [...byFp.values()].filter((p) => p.status === "open");
   const last = s.rounds.at(-1);
   const open = ["capped", "stalled"].includes(s.result) ? last?.findings ?? [] : s.result === "declined" ? openMusts(s) : [];
   const how = {

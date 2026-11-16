@@ -293,6 +293,40 @@ test("--pushed with no summary recorded at that head warns how to fix it", async
   assert.match(console.error.mock.calls.map((c) => c.arguments[0]).join("\n"), /no pr-respond summary was recorded at bbbbbbb.*--points/);
 });
 
+test("a respond step that pushes nothing reads its own summary, not the one of the step before at the same head", async (t) => {
+  const { last } = setup(t);
+  const f = fakes([{ findings: [finding("s1")] }, { findings: [finding("s2")] }, { findings: [] }]);
+  delete f.deps.respond;
+  assert.equal(await run(f.deps), 2);
+  f.moveHead(sha("b"));
+  const file = join(stateRoot(REPO), "pr", "7", "respond.json");
+  mkdirSync(dirname(file), { recursive: true });
+  // round 1 (review of a) pushed b; round 2 reviews b and declines at b, its own summary keyed by the review of b
+  writeFileSync(file, JSON.stringify({ points: {
+    [`${sha("b")} ${sha("a")}`]: [{ n: 1, status: "done", sha: sha("b"), fps: ["s1"], text: "fixed s1." }],
+    [`${sha("b")} ${sha("b")}`]: [{ n: 1, status: "open", fps: ["s2"], text: "declined s2." }],
+  } }));
+  assert.equal(await run(f.deps, "--pushed", sha("b")), 2);
+  assert.equal(await run(f.deps, "--pushed", sha("b")), 0);
+  assert.equal(last().status, "converged");
+  const st = loadState(REPO, 7);
+  assert.deepEqual(st.responses.map((r) => r.points[0].text), ["fixed s1.", "declined s2."]);
+});
+
+test("the end summary lists a finding once: a fix after a resumed declined stop replaces the decline", async (t) => {
+  const { dir } = setup(t);
+  const f = fakes([{ findings: [finding("m1", "must")] }, { findings: [] }]);
+  f.deps.respond = async (s) => ({ sha: s.head, points: [{ n: 1, status: "open", fp: "m1", text: "declined." }] });
+  assert.equal(await run(f.deps, "--merge"), 5);
+  delete f.deps.respond;
+  f.moveHead(sha("b"));
+  const points = join(dir, "points.json");
+  writeFileSync(points, JSON.stringify([{ n: 1, status: "done", sha: sha("b"), fp: "m1", text: "fixed after all." }]));
+  assert.equal(await run(f.deps, "--resume", "--pushed", sha("b"), "--points", points), 0);
+  assert.match(f.calls.posts.at(-1), /Fixed:\n- fixed after all\./);
+  assert.doesNotMatch(f.calls.posts.at(-1), /Declined/);
+});
+
 test("--config and --effort reach every pr-review round", async (t) => {
   const { dir } = setup(t);
   const f = fakes([]);
@@ -314,7 +348,7 @@ test("--pushed takes the points pr-respond summary recorded at that head, with t
   // what pr-respond summary records: the fps come from the thread's marker, not from the agent
   const file = join(stateRoot(REPO), "pr", "7", "respond.json");
   mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, JSON.stringify({ points: { [sha("b")]: [{ n: 1, status: "done", sha: sha("b"), thread: "T1", fps: ["m1"], text: "fixed." }] } }));
+  writeFileSync(file, JSON.stringify({ points: { [`${sha("b")} ${sha("a")}`]: [{ n: 1, status: "done", sha: sha("b"), thread: "T1", fps: ["m1"], text: "fixed." }] } }));
   assert.equal(await run(f.deps, "--pushed", sha("b")), 0);
   assert.equal(last().status, "merged");
 });
