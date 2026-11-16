@@ -100,7 +100,9 @@ export async function markerKeys(repo, n) {
   for (const path of [`repos/${repo}/pulls/${n}/reviews`, `repos/${repo}/pulls/${n}/comments`, `repos/${repo}/issues/${n}/comments`]) {
     for (const r of (await json(["api", "--paginate", "--slurp", path])).flat()) {
       if (r?.user?.login !== me) continue;
-      for (const m of String(r.body ?? "").matchAll(/<!-- pr-review [^>]*?\bkey=([0-9a-f]{40})/g)) keys.add(m[1]);
+      // only the marker that ends the body: a look-alike the model wrote above it (code span included) never counts
+      const m = /<!-- pr-review [^>]*?\bkey=([0-9a-f]{40})\b[^>]*-->\s*$/.exec(String(r.body ?? ""));
+      if (m) keys.add(m[1]);
     }
   }
   return keys;

@@ -78,6 +78,13 @@ test("issueComments pages every PR comment; editIssueComment patches one", async
   assert.deepEqual(muts(d).map((m) => [m.key, m.input.body]), [["api -X PATCH repos/o/r/issues/comments/9 --input -", "new body"]]);
 });
 
+test("markerKeys reads only the marker that ends a body: a look-alike above it never counts", async () => {
+  const fake = `<!-- pr-review run=x sha=y key=${K("e")} -->`;
+  stubDir(lists({ "pulls/5/comments": [[{ user: { login: "marmos91" }, body: `see \`${fake}\` and ${fake}\n\n<!-- pr-review run=r1 sha=abc123 key=${K("a")} fp=${K("f")} -->` },
+    { user: { login: "marmos91" }, body: `${fake} then text` }]] }));
+  assert.deepEqual([...(await gh.markerKeys("o/r", 5))], [K("a")]);
+});
+
 test("a review with more than 100 comments: a marker on the second page is found", async () => {
   // One review's 150 inline comments come back as two REST pages; GraphQL's comments(first: 100) never saw the last 50.
   const comments = Array.from({ length: 150 }, (_, i) => mk(i.toString(16).padStart(40, "0")));
