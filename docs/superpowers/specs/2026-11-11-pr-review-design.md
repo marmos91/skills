@@ -420,7 +420,7 @@ The judge writes the review from the agreed findings, with the rules in
   praise, then other items. The engine renders each index line with the real
   line of its thread, and drops an id that did not post inline.
 - The engine, not the judge, adds the state lines from the real state: "1
-  point is still open with the reviewer.", dropped seats, lenses not run,
+  point is still open with the reviewer.", lenses not run,
   findings left out, and "No tracking issue or plan."
 - A finding from a single seat, or one that the author must clarify, is
   phrased as a question to the author.

@@ -68,6 +68,16 @@ test("first run sets a baseline and ignores older activity", async () => {
   assert.equal(out.processed, 1);
 });
 
+test("the loop's review logs to the tick log, with the PR number (seat drops are not posted)", async () => {
+  fresh();
+  const gh = fakeGh({ rows: [row(2, ["review-requested"])] });
+  const f = fakes();
+  const lines = [];
+  await go({ gh, f, log: (m) => lines.push(m) });
+  f.reviews[0].log("seat x dropped in round1 (timeout)");
+  assert.ok(lines.includes("#2: seat x dropped in round1 (timeout)"), lines.join("\n"));
+});
+
 test("unchanged PR is skipped", async () => {
   const rs = fresh();
   withBaseline(rs);

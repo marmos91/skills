@@ -98,8 +98,9 @@ that another part changes when its own code uses it. The architecture lens
 is about design across parts, so it reviews the whole PR once per seat.
 Merge then removes the duplicates across parts. Votes and the judge see the
 whole PR. A seat that hits its turn limit or its timeout in one part loses that
-part only: it keeps its other parts and its vote. The summary names the
-missed parts, and a missed part blocks APPROVE, as a dropped seat does.
+part only: it keeps its other parts and its vote. The run log and
+`run.json` record the missed parts (the posted summary does not), and a
+missed part blocks APPROVE, as a dropped seat does.
 
 Each part adds a full set of round-1 children. When the run needs more than
 `review.max_children` (default 60), an effort that the config chose steps
@@ -804,9 +805,9 @@ lock in the clone (`.git/pr-review/lock`) and wait up to 60 s for it.
   its timeout, in round 1 or the vote, is not retried. It drops out of that
   stage and every later stage of the run, and `run.json` records it under
   `dropped` (a resumed run keeps it out). The tally runs over the seats
-  that remain, and agreed still needs 2 keeps. The summary says "Seat
-  `<model>` was dropped (turn limit)." or "(timeout)", and the review never
-  approves, in the loop too. When a lens has fewer than 2 seats left, the
+  that remain, and agreed still needs 2 keeps. The drop is in the run log
+  and `run.json`, not in the posted summary, and the review never approves,
+  in the loop too. When a lens has fewer than 2 seats left, the
   run stops with exit `4`. The judge (merge, compose) cannot drop: its turn
   limit or timeout fails the run.
 
