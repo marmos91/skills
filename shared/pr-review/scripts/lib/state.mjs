@@ -194,11 +194,12 @@ export function savePrState(repoState, n, s) {
 }
 
 const TOKENS = ["input", "output", "cache_read", "cache_creation"];
-// Money of one usage record at its model's price per million tokens; undefined when the model has no price.
-// An unreported count (null) costs 0.
+// Money of one usage record at its model's price per million tokens; undefined when the model has no price
+// or a count is unknown (null): a guessed 0 would pass for a known cost.
 function costOf(u, prices = {}) {
   const p = Object.hasOwn(prices, u.model ?? "") ? prices[u.model] : null;
-  return p ? ((u.input ?? 0) * p.input + (u.output ?? 0) * p.output + (u.cache_read ?? 0) * p.cache_read + (u.cache_creation ?? 0) * p.cache_write) / 1e6 : undefined;
+  if (!p || !TOKENS.every((k) => typeof u[k] === "number")) return undefined;
+  return (u.input * p.input + u.output * p.output + u.cache_read * p.cache_read + u.cache_creation * p.cache_write) / 1e6;
 }
 // Sum of two priced records: the cost stays only while every record has one, so a partial sum never passes for the cost.
 const addPriced = (a, b) => {

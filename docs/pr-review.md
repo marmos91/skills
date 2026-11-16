@@ -397,10 +397,12 @@ currency you use:
 
 The key is the `model` as the seat names it. There are no built-in prices and
 no network call for them. A stage then carries a `cost` when every child in it
-has a priced model; a model with no price shows tokens only. `pr-review status`
+has a priced model and all four counts; a model with no price or a count the
+harness did not report shows tokens only. `pr-review status`
 adds `prTokens`, the sum over all runs of each PR, and the run summary line
 (also a dry run) ends with the tokens and cost per stage and the PR total.
-Prices are user-level only and never posted on GitHub.
+Prices are user-level only and never posted on GitHub. A config that does not
+load makes `status` warn and show tokens only.
 
 The prompts help the prompt cache. Each prompt starts with the parts that all
 children of a run share: the context, the small context files (`pr.json`,

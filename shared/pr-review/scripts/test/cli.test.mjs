@@ -208,6 +208,12 @@ test("status prices each run and the PR total with the user's price table", () =
   const pr = JSON.parse(r.stdout).prs.find((p) => p.pr === 4);
   assert.equal(pr.lastRunTokens.round1.cost, 10);
   assert.equal(pr.prTokens.cost, 10);
+  // a config error elsewhere leaves status working, with tokens only
+  writeFileSync(join(fx.env.XDG_CONFIG_HOME, "pr-review", "config.json"), JSON.stringify({ round1: "bad" }));
+  const bad = cli(fx, "status", "--repo", "o/r");
+  assert.equal(bad.status, 0, bad.stderr);
+  assert.match(bad.stderr, /warning: config not loaded/);
+  assert.equal("cost" in JSON.parse(bad.stdout).prs.find((p) => p.pr === 4).prTokens, false);
 });
 
 test("review exits with Locked while another run holds that PR", async () => {

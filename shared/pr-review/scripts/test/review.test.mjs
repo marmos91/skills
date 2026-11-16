@@ -3011,5 +3011,6 @@ test("the run summary gives the tokens and cost per stage and the PR total", asy
   const { r } = await go(fx, happy({ compose }));
   assert.equal(r.exit, 0, r.summary);
   assert.match(r.summary, /\ntokens: (?:.*; )?compose input 1000000 output 40000 cache_read 0 cache_creation 0 cost 6\.0000/);
-  assert.match(r.summary, /\nPR total: input 1000000 output 40000 cache_read 0 cache_creation 0 cost 6\.0000/);
+  // the hygiene child reports no counts: the total is tokens only, never a cost that leaves it out
+  assert.match(r.summary, /\nPR total: input 1000000 output 40000 cache_read 0 cache_creation 0$/);
 });

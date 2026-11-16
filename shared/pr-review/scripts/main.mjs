@@ -250,9 +250,10 @@ export async function main(argv, deps = {}) {
   }
   if (cmd === "status") {
     if (rest.length > 1) throw new Usage(USAGE);
-    let config;
-    try { config = loadUserConfig({ cliPath: v.config }); } catch (e) { throw new Usage(e.message); }
-    console.log(JSON.stringify(status(repoOf(rest[0] ?? v.repo), config.prices), null, 2));
+    // prices only: a config error never hides the status, it leaves tokens without a cost
+    let prices = {};
+    try { prices = loadUserConfig({ cliPath: v.config }).prices; } catch (e) { console.error(`warning: config not loaded, tokens shown without cost: ${e.message}`); }
+    console.log(JSON.stringify(status(repoOf(rest[0] ?? v.repo), prices), null, 2));
     return 0;
   }
   if (cmd === "digest") {

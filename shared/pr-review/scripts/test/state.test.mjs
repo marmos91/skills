@@ -229,7 +229,7 @@ test("usageByStage prices each stage per model; a stage with an unpriced model s
   const runs = tmp(), d = join(runs, "abc-1"), u = (model, input, output, cache_read, cache_creation) => JSON.stringify({ input, output, cache_read, cache_creation, model });
   const prices = { opus: { input: 15, output: 75, cache_read: 1.5, cache_write: 18.75 }, "cubbit/mimir": { input: 1, output: 2, cache_read: 0, cache_write: 0 } };
   for (const s of ["round1", "vote"]) mkdirSync(join(d, s), { recursive: true });
-  writeFileSync(join(d, "round1", "all~0.usage.json"), u("opus", 1e6, 1e5, 2e6, null)); // 15 + 7.5 + 3 + 0
+  writeFileSync(join(d, "round1", "all~0.usage.json"), u("opus", 1e6, 1e5, 2e6, 0)); // 15 + 7.5 + 3 + 0
   writeFileSync(join(d, "round1", "all~1.usage.json"), u("cubbit/mimir", 5e5, 5e5, 0, 0)); // 0.5 + 1
   writeFileSync(join(d, "vote", "v~0.usage.json"), u("unpriced", 10, 10, 0, 0));
   const by = usageByStage(d, prices);
@@ -239,6 +239,9 @@ test("usageByStage prices each stage per model; a stage with an unpriced model s
   assert.equal(usageText(by.round1), "input 1500000 output 600000 cache_read 2000000 cache_creation 0 cost 27.0000");
   assert.equal(usageText(by.vote), "input 10 output 10 cache_read 0 cache_creation 0");
   assert.equal("cost" in usageByStage(d).round1, false, "no price table: tokens only");
+  writeFileSync(join(d, "round1", "all~2.usage.json"), u("opus", 10, 10, null, 0));
+  assert.equal("cost" in usageByStage(d, prices).round1, false, "an unknown count: tokens only");
+  rmSync(join(d, "round1", "all~2.usage.json"));
   rmSync(join(d, "vote"), { recursive: true });
   mkdirSync(join(runs, "abc-2"));
   writeFileSync(join(runs, "abc-2", "hygiene.usage.json"), u("opus", 1e6, 0, 0, 0));
