@@ -12,7 +12,7 @@ import { ChildFailed } from "../lib/child.mjs";
 import { decide as realDecide } from "../lib/decider.mjs";
 import { answer, openQuestions } from "../lib/questions.mjs";
 import { stateRoot, prState, readSummaryMarker, savePrState } from "../lib/state.mjs";
-import { findingKey, fingerprint, learnKey } from "../lib/convergence.mjs";
+import { fingerprint, learnKey, settledKey as keyOf } from "../lib/convergence.mjs";
 import { learn } from "../lib/learnings.mjs";
 import * as github from "../lib/github.mjs";
 import { queueCoreQuestion, saveCorePaths } from "../lib/setup.mjs";
@@ -96,8 +96,9 @@ const posts = (fx) => mutations(fx).filter((m) => m.key === "graphql PostReview"
 const statuses = (fx) => mutations(fx).filter((m) => m.key.startsWith("api -X POST repos/o/r/statuses/")).map((m) => ({ sha: m.argv[3].split("/").pop(), ...m.input }));
 
 const F = (over = {}) => ({ lens: "correctness", severity: "must", file: "a.js", line: 2, title: "Off by one", case: "b = 3 -> wrong total", evidence: "trace", fix: "use 2", ...over });
-// the settled list keys a finding by fingerprint and line
-const settledKey = (over) => findingKey(fingerprint(F(over)), F(over).line);
+// the settled list keys a finding by fingerprint and its code anchor: the trimmed text of its line at the head
+const HEAD_LINES = ["const a = 2;", "const b = 3;", "const c = 4;", "const d = 5;"];
+const settledKey = (over) => keyOf(fingerprint(F(over)), F(over).line, HEAD_LINES[F(over).line - 1] ?? "");
 const C = (id, over = {}) => ({ ...F(), id, found: [S0, S1], ...over });
 const keep = (id) => ({ id, vote: "keep", counter_case: "" });
 const drop = (id) => ({ id, vote: "drop", counter_case: "the guard at a.js:1 stops it" });
