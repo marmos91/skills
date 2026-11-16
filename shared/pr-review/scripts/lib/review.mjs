@@ -10,7 +10,7 @@ import { frame as realFrame, git, readTree, cleanupWorktree, HeadMoved, DiffTooL
 import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.mjs";
 import { tally } from "./tally.mjs";
 import { validate } from "./schema.mjs";
-import { allowedSeverities, filterNew, fingerprint, learnKey } from "./convergence.mjs";
+import { allowedSeverities, filterNew, findingKey, fingerprint, learnKey, settledKey } from "./convergence.mjs";
 import { learn, learnedKeys, parseMarker, suggestion } from "./learnings.mjs";
 import { codeLink, diffLine, linkRefs, parseHunks, place } from "./hunks.mjs";
 import { verdict } from "./verdict.mjs";
@@ -124,8 +124,8 @@ async function child(ctx, stage, key, { seat, prompt, schema, tools = "read", le
   const dir = join(ctx.runDir, stage), outFile = join(dir, `${key}.json`);
   if (done(ctx.runDir, stage, key)) {
     const v = readJson(outFile);
-    // votes and proof join on the merge ids: a merge cached by an older engine meets today's schema, or runs again
-    if (stage !== "merge" || !validate(schema, v).length) return v;
+    // an output cached by an older engine meets today's schema, or runs again
+    if (!validate(schema, v).length) return v;
   }
   mkdirSync(dir, { recursive: true });
   const promptFile = join(dir, `${key}.prompt`);
@@ -200,6 +200,16 @@ export function codeMoved(repoDir, q, head) {
     if (removed > 0 ? a + removed <= line : a < line) shift += added - removed; // a hunk above it moves it
   }
   return shift !== 0;
+}
+
+// The trimmed text of file:line at sha, "" when git cannot show it: the code anchor of a settled entry.
+function anchors(dir, sha) {
+  const files = new Map();
+  return (file, line) => {
+    if (!file || !Number.isInteger(line)) return "";
+    if (!files.has(file)) { let t = ""; try { t = git(dir, ["show", `${sha}:${file}`]); } catch { /* no anchor */ } files.set(file, t.split("\n")); }
+    return files.get(file)[line - 1]?.trim() ?? "";
+  };
 }
 
 function changedLines(f) {
@@ -399,6 +409,7 @@ async function once(o, restart) {
   // the SAME lens; a cluster of another lens on that line is a different finding and is kept.
   const agreedLens = new Map((pst.agreed ?? []).map((a) => [a.id, a.lens]));
   const ours = threads.filter((t) => t.comments[0]?.author === me && t.line != null).map((t) => ({ t, keys: parseMarker(t.comments[0].body).fps }));
+  const anchor = anchors(o.repoDir ?? process.cwd(), f.headSha);
   const resolvedThread = (c) => ours.some(({ t, keys }) => t.path === c.file && t.line === c.line &&
     keys.some((key) => key === c.fp || (agreedLens.has(key) && agreedLens.get(key) === c.lens)));
   const all = raw.filter((c) => run.lenses.includes(c.lens)).map((c) => {
@@ -408,7 +419,7 @@ async function once(o, restart) {
   });
   const reversed = all.filter((c) => c.reverses), linked = all.filter((c) => !c.reverses && resolvedThread(c));
   const { keep: clusters, dropped } = filterNew(all.filter((c) => !c.reverses && !resolvedThread(c)), {
-    reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: changedLines(f), learned,
+    reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: changedLines(f), learned, anchor,
   });
   save(join(runDir, "clusters.json"), { clusters, reversed, linked, dropped });
   markDone(runDir, "merge");
@@ -438,7 +449,8 @@ async function once(o, restart) {
   // Decide (spec 6.7): jev settles splits; otherwise a question. A finding of one seat, or settled by jev, asks the author.
   const agreed = [], rejected = [], open = [], applied = [], drops = [];
   // Marco's answers win over the tally, from this run or an earlier one (the loop posts without the finding).
-  const answers = new Map(pendingAnswers(repoState).filter((q) => q.pr === n).map((q) => [q.fingerprint, q]));
+  const qkey = (q) => findingKey(q.fingerprint, q.finding?.line);
+  const answers = new Map(pendingAnswers(repoState).filter((q) => q.pr === n).map((q) => [qkey(q), q]));
   const repoDir = o.repoDir ?? process.cwd();
   const moved = (q) => {
     if (!codeMoved(repoDir, q, f.headSha)) return false;
@@ -450,14 +462,15 @@ async function once(o, restart) {
     if (q.answer === "drop") { rejected.push(c); drops.push(q); }
     else agreed.push({ ...c, ask_author: q.answer === "ask-author", answered: q.answer });
   };
-  // the question is per fingerprint, so its answer settles every cluster with that fp (the fp has no line)
+  // the question is per fingerprint and line, so its answer settles every cluster with both
   const used = new Set();
   for (const { c, votes, status } of tallied) {
-    if (answers.has(c.fp)) {
-      const q = answers.get(c.fp);
-      if (!moved(q)) { take(q, c); used.add(c.fp); continue; }
+    const k = findingKey(c.fp, c.line);
+    if (answers.has(k)) {
+      const q = answers.get(k);
+      if (!moved(q)) { take(q, c); used.add(k); continue; }
       // The answer was about other code: close it now, and let the tally (and jev or a fresh question) decide again.
-      answers.delete(q.fingerprint);
+      answers.delete(k);
       appliedAnswer(repoState, q.id);
     }
     if (status === "agreed") { agreed.push({ ...c, ask_author: c.found.length === 1 }); continue; }
@@ -487,11 +500,11 @@ async function once(o, restart) {
     else if (d.decision === "rejected") rejected.push(c);
     else open.push(d.question);
   }
-  for (const fp of used) answers.delete(fp);
+  for (const k of used) answers.delete(k);
   // An answered finding that this run did not find again is posted from the question record.
   // A held comment that was not found again has no text to post: its answer is closed.
-  for (const q of [...answers.values()].filter((x) => x.finding?.secret)) { answers.delete(q.fingerprint); applied.push(q.id); }
-  for (const q of [...answers.values()].filter((x) => !x.finding?.kind && moved(x))) { answers.delete(q.fingerprint); applied.push(q.id); }
+  for (const q of [...answers.values()].filter((x) => x.finding?.secret)) { answers.delete(qkey(q)); applied.push(q.id); }
+  for (const q of [...answers.values()].filter((x) => !x.finding?.kind && moved(x))) { answers.delete(qkey(q)); applied.push(q.id); }
   [...answers.values()].filter((q) => !q.finding?.kind).forEach((q, i) => take(q, { ...q.finding, id: `q${i + 1}`, found: [], seats: [], fp: q.fingerprint }));
   const questionFiles = () => open.map((id) => join(repoState, "questions", `${id}.md`));
   if (open.length && mode === "interactive") {
@@ -504,7 +517,7 @@ async function once(o, restart) {
   // same delta and severity filters as a council finding.
   if (depth === "full") {
     applyProof(agreed, tallied, fids);
-    const mf = filterNew(mutantFindings(mutants), { reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: changedLines(f), learned }).keep;
+    const mf = filterNew(mutantFindings(mutants), { reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: changedLines(f), learned, anchor }).keep;
     agreed.push(...mf.map((m, i) => ({ ...m, id: `m${i + 1}`, found: [], seats: [], fp: fingerprint(m) })));
   }
 
@@ -674,12 +687,12 @@ async function once(o, restart) {
     // The answer is closed now and the question below is asked again, so it stays open until the hit is gone or allowed.
     if (x.answered) {
       log(stillHeld(`${x.file}:${x.line}`, s.hits));
-      const id = pendingAnswers(repoState).find((q) => q.pr === n && q.fingerprint === x.fp)?.id;
+      const id = pendingAnswers(repoState).find((q) => q.pr === n && q.fingerprint === x.fp && q.finding?.line === x.line)?.id;
       if (id) { appliedAnswer(repoState, id); if (applied.includes(id)) applied.splice(applied.indexOf(id), 1); }
     }
     // A later "post" answer posts this engine-final body (checked, marked). A held host keeps its own finding
     // only: its folded findings went out on their own.
-    save(join(runDir, "held", `${x.fp}.json`), { body: redact(x.fps.length > 1 ? (await checked(own(x))).body : x.body) });
+    save(join(runDir, "held", `${x.fp}-${x.line}.json`), { body: redact(x.fps.length > 1 ? (await checked(own(x))).body : x.body) });
     // Held back. The question keeps the fingerprint and the rule ids only: never the text, which holds the secret.
     open.push(queueQuestion(repoState, {
       pr: n, sha: f.headSha, fingerprint: x.fp, file: x.file, line: x.line, snippet: "",
@@ -742,7 +755,7 @@ async function once(o, restart) {
   const recorded = [...clean, ...folded.filter((c) => clean.some((h) => h.id === hostOf.get(c.id)))];
   let st = prState(repoState, n);
   if (st.lastRunId !== runId) { // a rerun after a crash here must not count the review twice
-    const fps = [...recorded, ...rejected, ...hygItems].map((c) => c.fp);
+    const fps = [...recorded, ...rejected, ...hygItems].map((c) => settledKey(c.fp, c.line, anchor(c.file, c.line)));
     Object.assign(st, {
       reviews: st.reviews + 1, lastReviewedSha: f.headSha, lastRunId: runId, settled: [...new Set([...st.settled, ...fps])],
       counts: { sha: f.headSha, ...counts() }, // a follow-up at this head starts from these
@@ -796,8 +809,11 @@ async function postStatus(gh, repo, n, sha, counts, url, log) {
 }
 
 // The engine-final body of a comment that an earlier run held back by the secret scan, redacted; null when gone.
-function heldText(repoState, n, runId, fp) {
-  try { return readJson(join(repoState, "pr", String(n), "runs", runId ?? "", "held", `${fp}.json`)).body; } catch { return null; }
+function heldText(repoState, n, runId, fp, line) {
+  const dir = join(repoState, "pr", String(n), "runs", runId ?? "", "held");
+  // held/<fp>.json: saved by an older engine, before held bodies had a line
+  for (const name of [`${fp}-${line}.json`, `${fp}.json`]) { try { return readJson(join(dir, name)).body; } catch { /* next */ } }
+  return null;
 }
 
 /**
@@ -811,15 +827,17 @@ async function followUp(o, head, pst, answered) {
   // one fetch: an answered finding already posted inline at this head (an earlier follow-up that crashed
   // before appliedAnswer, or a later full run) is not posted again
   const seen = await gh.markerKeys(repo, n);
+  const anchor = anchors(o.repoDir ?? process.cwd(), head);
+  const doneKey = (q) => settledKey(q.fingerprint, q.finding?.line, anchor(q.finding?.file, q.finding?.line));
   const runId = pst.lastRunId ?? "followup";
   const was = pst.counts?.sha === head ? pst.counts : null;
   const must = (q) => q.finding?.severity === "must";
   // A must the secret scan held is in the count of the full run at this head only when that run held it (its held
   // file): posting it then adds none, dropping it removes it. A must held at an older head was never in this count.
-  const heldHere = (q) => q.finding.secret && heldText(repoState, n, pst.lastRunId, q.fingerprint) != null;
+  const heldHere = (q) => q.finding.secret && heldText(repoState, n, pst.lastRunId, q.fingerprint, q.finding.line) != null;
   // A must already on GitHub but not yet settled was posted by a follow-up that crashed before it saved its counts.
   const mustNow = (posted) => Math.max(0, (was?.must ?? 0)
-    + [...posted, ...already.filter((q) => !(pst.settled ?? []).includes(q.fingerprint))].filter((q) => must(q) && !heldHere(q)).length
+    + [...posted, ...already.filter((q) => !(pst.settled ?? []).includes(doneKey(q)))].filter((q) => must(q) && !heldHere(q)).length
     - answered.filter((q) => q.answer === "drop" && must(q) && heldHere(q)).length);
   const diff = join(repoState, "pr", String(n), "runs", runId, "ctx", "diff.patch");
   const hunks = parseHunks(existsSync(diff) ? readFileSync(diff, "utf8") : "");
@@ -830,7 +848,7 @@ async function followUp(o, head, pst, answered) {
     // full depth (proven is set): a suggestion the follow-up cannot test says so, like one the time cap cut
     const fix = f.fix && f.proven !== undefined && suggestionOf(f.fix) ? uncheckedNote(f.fix, "a follow-up runs no test") : f.fix;
     const base = `**${f.severity}:** ${f.title}\n\n${f.case}${fix ? `\n\n${fix}` : ""}${q.answer === "ask-author" ? "\n\nCan you confirm this case?" : ""}`;
-    const text = f.secret ? heldText(repoState, n, pst.lastRunId, q.fingerprint) : f.proven === false ? markUnproven(base, !diffLine(hunks, f.file, f.line)) : base;
+    const text = f.secret ? heldText(repoState, n, pst.lastRunId, q.fingerprint, f.line) : f.proven === false ? markUnproven(base, !diffLine(hunks, f.file, f.line)) : base;
     if (!text) continue;
     const s = scanOutbound(text, { repo });
     if (s.ok) items.push({ q, text: linkRefs(text, `https://github.com/${repo}/blob/${head}`, (p) => headFile(o.repoDir ?? process.cwd(), head, p)) });
@@ -838,7 +856,8 @@ async function followUp(o, head, pst, answered) {
   }
   let url = null;
   if (items.length) {
-    const fps = items.map((x) => x.q.fingerprint).sort();
+    // by line too: a later answer for another line of one fp is a new follow-up
+    const fps = items.map((x) => findingKey(x.q.fingerprint, x.q.finding.line)).sort();
     const key = sha1(`followup\0${head}\0${fps.join(",")}`);
     const p = place(items.map(({ q, text }) => ({ file: q.finding.file, line: q.finding.line, body: `${text}\n\n${marker(runId, head, inlineKeyOf(head, q.fingerprint, q.finding.file, q.finding.line), q.fingerprint, learnKey(q.finding))}` })), hunks, `https://github.com/${repo}/blob/${head}`);
     // The follow-up's marker is the new state of the head for pr-land: the full review's counts, plus the musts posted
@@ -856,14 +875,14 @@ async function followUp(o, head, pst, answered) {
     }
     const st = prState(repoState, n);
     st.counts = { sha: head, ...counts };
-    st.settled = [...new Set([...st.settled, ...fps])];
+    st.settled = [...new Set([...st.settled, ...items.map(({ q }) => settledKey(q.fingerprint, q.finding.line, anchor(q.finding.file, q.finding.line)))])];
     // posted findings join agreed too, so a reworded repeat on the same line still links (same lens)
     st.agreed = [...(st.agreed ?? []), ...items.map(({ q }) => ({ id: q.fingerprint, lens: q.finding.lens, severity: q.finding.severity, file: q.finding.file, line: q.finding.line, title: q.finding.title }))];
     savePrState(repoState, n, st);
   }
   if (already.length) {
     const st = prState(repoState, n);
-    st.settled = [...new Set([...st.settled, ...already.map((q) => q.fingerprint)])];
+    st.settled = [...new Set([...st.settled, ...already.map(doneKey)])];
     savePrState(repoState, n, st);
   }
   for (const q of answered) if (!codeMoved(o.repoDir ?? process.cwd(), q, head)) learnDrop(o, q);

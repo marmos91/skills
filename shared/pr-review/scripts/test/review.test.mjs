@@ -12,7 +12,7 @@ import { ChildFailed } from "../lib/child.mjs";
 import { decide as realDecide } from "../lib/decider.mjs";
 import { answer, openQuestions } from "../lib/questions.mjs";
 import { stateRoot, prState, readSummaryMarker, savePrState } from "../lib/state.mjs";
-import { fingerprint, learnKey } from "../lib/convergence.mjs";
+import { fingerprint, learnKey, settledKey as keyOf } from "../lib/convergence.mjs";
 import { learn } from "../lib/learnings.mjs";
 import * as github from "../lib/github.mjs";
 import { queueCoreQuestion, saveCorePaths } from "../lib/setup.mjs";
@@ -96,6 +96,9 @@ const posts = (fx) => mutations(fx).filter((m) => m.key === "graphql PostReview"
 const statuses = (fx) => mutations(fx).filter((m) => m.key.startsWith("api -X POST repos/o/r/statuses/")).map((m) => ({ sha: m.argv[3].split("/").pop(), ...m.input }));
 
 const F = (over = {}) => ({ lens: "correctness", severity: "must", file: "a.js", line: 2, title: "Off by one", case: "b = 3 -> wrong total", evidence: "trace", fix: "use 2", ...over });
+// the settled list keys a finding by fingerprint and its code anchor: the trimmed text of its line at the head
+const HEAD_LINES = ["const a = 2;", "const b = 3;", "const c = 4;", "const d = 5;"];
+const settledKey = (over) => keyOf(fingerprint(F(over)), F(over).line, HEAD_LINES[F(over).line - 1] ?? "");
 const C = (id, over = {}) => ({ ...F(), id, found: [S0, S1], ...over });
 const keep = (id) => ({ id, vote: "keep", counter_case: "" });
 const drop = (id) => ({ id, vote: "drop", counter_case: "the guard at a.js:1 stops it" });
@@ -146,7 +149,7 @@ test("happy path posts one review with inline comments and the marker", async ()
   const st = prState(fx.state, N);
   assert.equal(st.reviews, 1);
   assert.equal(st.lastReviewedSha, fx.head);
-  assert.ok(st.settled.includes(fingerprint(F())));
+  assert.ok(st.settled.includes(settledKey()));
   assert.equal(existsSync(join(r.runDir, "post.done")), true);
 });
 
@@ -280,10 +283,12 @@ test("commit status: a rerun after a follow-up crashed before its bookkeeping st
 
 test("rerun after a crash before markDone(post) does not post again", async () => {
   const fx = fixture(); routes(fx);
-  const { r } = await go(fx, happy());
+  // a cached output meets the schema on resume: the compose answer needs its verdict
+  const answers = happy({ compose: { ...happy().compose, verdict: "Changes a." } });
+  const { r } = await go(fx, answers);
   rmSync(join(r.runDir, "post.done"));
   routes(fx, { reviews: [{ body: posts(fx)[0].body, user: { login: ME }, state: "COMMENTED" }] });
-  const again = await go(fx, happy());
+  const again = await go(fx, answers);
   assert.equal(again.r.exit, 0);
   assert.equal(again.r.runDir, r.runDir, "same unfinished run");
   assert.equal(posts(fx).length, 1);
@@ -959,6 +964,58 @@ test("answer-only rerun: the follow-up links file:line and RFC references too", 
   assert.doesNotMatch(t, /§/);
 });
 
+// 2 agreed clusters with one fp at lines 2 and 3, and the answers that ask about each
+const twoLines = (over = {}) => split({ merge: [C("c1", { found: [S0] }), C("c2", { found: [S0], line: 3 })], "v~1": [keep("c1"), keep("c2")], "v~2": [drop("c1"), drop("c2")],
+  compose: { body: "Summary.", comments: [] }, ...over });
+
+test("follow-up: a 'post' for the second line of one fp posts too, after the first line's follow-up", async () => {
+  const fx = fixture(); routes(fx);
+  await go(fx, twoLines(), { mode: "loop", effort: "medium" });
+  const qs = openQuestions(fx.state);
+  answer(fx.state, qs.find((q) => q.finding.line === 2).id, "post");
+  await go(fx, twoLines());
+  const first = posts(fx).at(-1);
+  // GitHub now holds the first follow-up and its inline comment
+  routes(fx, { reviews: [{ body: first.body, user: { login: ME }, state: "COMMENTED" }], reviewComments: first.threads.map((t) => ({ body: t.body, user: { login: ME } })) });
+  answer(fx.state, qs.find((q) => q.finding.line === 3).id, "post");
+  const again = await go(fx, twoLines());
+  assert.equal(again.r.exit, 0, again.r.summary);
+  assert.deepEqual(posts(fx).at(-1).threads.map((t) => t.line), [3]);
+});
+
+test("a full run posts the second line of one fp although the first line's comment is on GitHub", async () => {
+  const fx = fixture();
+  const key = createHash("sha1").update(`inline\0${fx.head}\0${fingerprint(F())}\0a.js\0${2}`).digest("hex");
+  routes(fx, { reviewComments: [{ body: `<!-- pr-review run=x sha=${fx.head} key=${key} fp=${fingerprint(F())} -->`, user: { login: ME } }] });
+  await go(fx, happy({ merge: [C("c1"), C("c2", { line: 3 })], "v~2": [keep("c1"), keep("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c1", body: "**must:** two" }, { id: "c2", body: "**must:** three" }] } }));
+  assert.deepEqual(posts(fx)[0].threads.map((t) => t.line), [3]);
+});
+
+test("follow-up: a body held under the old name (held/<fp>.json) is still posted", async () => {
+  const fx = fixture(); routes(fx);
+  const token = "ghp_" + "A".repeat(36);
+  const answers = happy({ compose: { body: "Summary.", comments: [{ id: "c1", body: `**must:** token ${token} leaks` }] } });
+  const { r } = await go(fx, answers, { mode: "loop" });
+  const held = join(r.runDir, "held");
+  // the name an older engine saved it under
+  const [saved] = readdirSync(held);
+  writeFileSync(join(held, `${fingerprint(F())}.json`), readFileSync(join(held, saved)));
+  rmSync(join(held, saved));
+  answer(fx.state, openQuestions(fx.state)[0].id, "post");
+  const again = await go(fx, answers);
+  assert.equal(again.r.exit, 0, again.r.summary);
+  assert.match(posts(fx).at(-1).threads[0]?.body ?? "", /\[REDACTED:github-token\] leaks/);
+});
+
+test("held comments of one fp at 2 lines keep a body each", async () => {
+  const fx = fixture(); routes(fx);
+  const token = "ghp_" + "A".repeat(36);
+  const { r } = await go(fx, happy({ merge: [C("c1"), C("c2", { line: 3 })], "v~2": [keep("c1"), keep("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c1", body: `**must:** ${token} two` }, { id: "c2", body: `**must:** ${token} three` }] } }), { mode: "loop" });
+  assert.equal(readdirSync(join(r.runDir, "held")).length, 2);
+});
+
 test("answer-only rerun: 'post' goes out as one small COMMENT follow-up, never twice", async () => {
   const fx = fixture(); routes(fx);
   const answers = split({
@@ -1557,7 +1614,7 @@ test("one root cause found by 2 lenses: one comment with both fps; the next run 
   assert.equal(t.length, 1);
   assert.ok(t[0].body.endsWith(` fp=${fingerprint(F())},${fingerprint(F(sec))} -->`), t[0].body);
   const st = prState(fx0.state, N);
-  assert.ok(st.settled.includes(fingerprint(F(sec))));
+  assert.ok(st.settled.includes(settledKey(sec)));
   assert.deepEqual(st.agreed.map((a) => a.lens).sort(), ["correctness", "security"]);
   // A later review: our thread holds both fps, so a reworded security repeat on that line links to it.
   const fx = fixture(); routes(fx, { threads: [thread("T1", ME, t[0].body)] });
@@ -1598,7 +1655,7 @@ test("compose `also`: a chain loses no finding; another line of the same file is
   assert.ok(c4, "c4, on another line, is not folded");
   assert.match(c4.body, /Other line[\s\S]*use 2/, "a refused fold still posts its fix");
   const st = prState(fx.state, N);
-  for (const o of [{}, { lens: "security", title: "Leak" }, { lens: "simplification", title: "Dead" }, { lens: "adversarial", title: "Other line", line: 3 }]) assert.ok(st.settled.includes(fp(o)));
+  for (const o of [{}, { lens: "security", title: "Leak" }, { lens: "simplification", title: "Dead" }, { lens: "adversarial", title: "Other line", line: 3 }]) assert.ok(st.settled.includes(settledKey(o)));
 });
 
 test("a host held by the secret scan does not swallow its folded findings: they post on their own", async () => {
@@ -1616,7 +1673,7 @@ test("a host held by the secret scan does not swallow its folded findings: they 
   assert.ok(t[0].body.endsWith(`fp=${fingerprint(F(sec))} -->`));
   assert.ok(!JSON.stringify(mutations(fx)).includes(token));
   assert.equal(openQuestions(fx.state).length, 1, "the host is a question");
-  assert.ok(prState(fx.state, N).settled.includes(fingerprint(F(sec))));
+  assert.ok(prState(fx.state, N).settled.includes(settledKey(sec)));
 });
 
 test("a folded finding held on its own: answer post sends it with the secret redacted", async () => {
@@ -2270,17 +2327,32 @@ test("a cached merge output that fails the schema runs the merge again", async (
   assert.equal(posts(fx)[0].threads.length, 1);
 });
 
-test("one answer settles every split cluster that shares its fingerprint", async () => {
+test("a cached vote that fails the schema runs the vote again", async () => {
   const fx = fixture(); routes(fx);
-  // the fingerprint has no line: the same title at lines 2 and 3 gives 2 clusters with one fp, and one question
+  let composed = 0;
+  const answers = happy({ compose: () => { if (!composed++) throw new ChildFailed("judge timeout"); return { body: "Summary.", comments: [{ id: "c1", body: "**must:** off by one" }] }; } });
+  const first = await go(fx, answers);
+  assert.equal(first.r.exit, 4, first.r.summary);
+  // a vote.json from an older engine: a vote the schema does not know
+  const runs = join(fx.state, "pr", String(N), "runs");
+  writeFileSync(join(runs, readdirSync(runs)[0], "round2", "v~2.json"), JSON.stringify([{ id: "c1", vote: "maybe" }]));
+  const { r, run } = await go(fx, answers);
+  assert.equal(r.exit, 0, r.summary);
+  assert.ok(run.calls.some((c) => c.k === "v~2"), "the vote ran again");
+  assert.equal(posts(fx)[0].threads.length, 1);
+});
+
+test("2 split clusters with one fingerprint at 2 lines get a question each; an answer settles its own line", async () => {
+  const fx = fixture(); routes(fx);
+  // the fingerprint has no line: the same title at lines 2 and 3 gives 2 clusters with one fp
   const answers = split({ merge: [C("c1", { found: [S0] }), C("c2", { found: [S0], line: 3 })], "v~1": [keep("c1"), keep("c2")], "v~2": [drop("c1"), drop("c2")],
-    compose: { body: "Summary.", comments: [{ id: "c1", body: "**must:** one" }, { id: "c2", body: "**must:** two" }] } });
+    compose: { body: "Summary.", comments: [{ id: "c1", body: "**must:** one" }] } });
   const first = await go(fx, answers);
   assert.equal(first.r.exit, 3, first.r.summary);
   const qs = openQuestions(fx.state);
-  assert.equal(qs.length, 1);
-  answer(fx.state, qs[0].id, "post");
-  const { r } = await go(fx, answers);
-  assert.equal(r.exit, 0, r.summary);
-  assert.deepEqual(posts(fx)[0].threads.map((t) => t.line).sort(), [2, 3]);
+  assert.deepEqual(qs.map((q) => q.finding.line).sort(), [2, 3]);
+  answer(fx.state, qs.find((q) => q.finding.line === 2).id, "post");
+  const again = await go(fx, answers);
+  assert.equal(again.r.exit, 3, "line 3 still waits for its own answer");
+  assert.deepEqual(openQuestions(fx.state).map((q) => q.finding.line), [3]);
 });

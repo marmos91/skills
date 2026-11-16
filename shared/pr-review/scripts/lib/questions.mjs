@@ -50,7 +50,9 @@ ${q.options.map((o) => `- ${o}`).join("\n")}
  * except a review finding whose earlier question was answered and applied: it comes back as a fresh question.
  */
 export function queueQuestion(repoState, q) {
-  const id = `${q.pr}-${q.fingerprint.slice(0, 8)}`;
+  let id = `${q.pr}-${q.fingerprint.slice(0, 8)}`;
+  // a review finding is asked per line: one title at another line of the file is its own question
+  if (!q.finding?.kind && existsSync(jsonFile(repoState, id)) && load(repoState, id).finding?.line !== q.finding?.line) id += `-${q.finding?.line}`;
   if (existsSync(jsonFile(repoState, id))) {
     const old = load(repoState, id);
     if (old.finding?.kind || !old.appliedAt) return id;

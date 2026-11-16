@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fingerprint, allowedSeverities, filterNew, budgetLeft, learnKey } from "../lib/convergence.mjs";
+import { fingerprint, findingKey, settledKey, allowedSeverities, filterNew, budgetLeft, learnKey } from "../lib/convergence.mjs";
 
 const f = (o = {}) => ({ lens: "bugs", file: "a.js", line: 42, severity: "must", title: "Null deref in parse()", ...o });
 
@@ -38,6 +38,24 @@ test("a learned finding does not drop one whose title differs only in digits", (
 });
 test("learnKey ignores case and punctuation in the title", () => {
   assert.equal(learnKey(f({ title: "Null deref in parse()." })), learnKey(f({ title: "null deref in Parse" })));
+});
+// the head text of each line, for the code anchor
+const code = (m) => (file, line) => m[line] ?? "";
+const fp = fingerprint(f());
+test("a settled entry without an anchor (older engine) matches its line only", () => {
+  const r = filterNew([f({ line: 42 }), f({ line: 43 })], { reviewNumber: 1, settled: new Set([findingKey(fp, 42)]), changedLines: new Map() });
+  assert.deepEqual(r.keep.map((x) => x.line), [43]);
+});
+test("a settled finding that moved stays settled when new code adds another instance", () => {
+  const settled = new Set([settledKey(fp, 42, "x.parse()")]);
+  const anchor = code({ 11: "y.parse()", 45: "x.parse()" });
+  const r = filterNew([f({ line: 11 }), f({ line: 45 })], { reviewNumber: 2, settled, changedLines: new Map([["a.js", new Set([10, 11, 12])]]), anchor });
+  assert.deepEqual(r.keep.map((x) => x.line), [11]);
+});
+test("a third instance is new although the settled ones are not passed in (linked to our threads)", () => {
+  const settled = new Set([settledKey(fp, 10, "a.parse()"), settledKey(fp, 20, "b.parse()")]);
+  const r = filterNew([f({ line: 99 })], { reviewNumber: 2, settled, changedLines: new Map(), anchor: code({ 10: "a.parse()", 20: "b.parse()", 99: "c.parse()" }) });
+  assert.deepEqual(r.keep.map((x) => x.line), [99]);
 });
 test("titles that normalize to empty fall back to the case", () => {
   assert.notEqual(fingerprint(f({ title: "1.", case: "a -> b" })), fingerprint(f({ title: "2!", case: "c -> d" })));
