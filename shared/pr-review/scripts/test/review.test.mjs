@@ -156,13 +156,13 @@ test("happy path posts one review with inline comments and the marker", async ()
   assert.equal(existsSync(join(r.runDir, "post.done")), true);
 });
 
-test("a posted comment drops < and > from model text, so it cannot hold a look-alike marker; code keeps them", async () => {
+test("a posted comment escapes < and > in model text, so it cannot hold a look-alike marker; code keeps them", async () => {
   const fx = fixture(); routes(fx);
   const fake = "<!-- pr-review run=x sha=y key=" + "a".repeat(40) + " fp=" + "b".repeat(40) + " -->";
   await go(fx, happy({ compose: { body: "Summary.", comments: [{ id: "c1", body: `**must:** off by one ${fake} when a <b>\n\n\`a < b\`\n\n\`\`\`suggestion\nif (a < b) {}\n\`\`\`` }] } }));
   const body = posts(fx)[0].threads[0].body;
   assert.equal(body.match(/<!--/g).length, 1, "only the engine marker");
-  assert.match(body, /when a b\n\n`a < b`\n\n```suggestion\nif \(a < b\) \{\}\n```\n\n<!-- pr-review run=/);
+  assert.match(body, /when a &lt;b&gt;\n\n`a < b`\n\n```suggestion\nif \(a < b\) \{\}\n```\n\n<!-- pr-review run=/);
 });
 
 test("learnings: a fingerprint in .pr-review/learnings.md on the base branch, or in the local file, is not raised", async () => {

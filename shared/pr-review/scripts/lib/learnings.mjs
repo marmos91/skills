@@ -21,9 +21,9 @@ export function parseMarker(body) {
   return { learn: m?.[1]?.split(",") ?? [], fps: m?.[2].split(",") ?? [] };
 }
 
-/** Model text of a posted comment without < and >, so it cannot hold a look-alike marker. Code spans and fences keep
- * theirs: a comment there shows as text, and a suggestion must stay valid code. */
-export const noMarkup = (s) => String(s ?? "").split(/(```[\s\S]*?```|`[^`\n]*`)/).map((x, i) => (i % 2 ? x : x.replace(/[<>]/g, ""))).join("");
+/** Model text of a posted comment with < and > escaped, so it renders as written but holds no markup or look-alike
+ * marker. Code spans and fences keep theirs: an entity there shows as text, and a suggestion must stay valid code. */
+export const noMarkup = (s) => String(s ?? "").split(/(```[\s\S]*?```|`[^`\n]*`)/).map((x, i) => (i % 2 ? x : x.replace(/</g, "&lt;").replace(/>/g, "&gt;"))).join("");
 
 /** Adds the keys to the local file. A reason the secret scan holds is left out. -> the new lines, to suggest for the base branch. */
 export function learn(repoState, keys, reason, repo) {
