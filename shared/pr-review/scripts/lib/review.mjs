@@ -11,7 +11,7 @@ import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.
 import { tally } from "./tally.mjs";
 import { validate } from "./schema.mjs";
 import { allowedSeverities, filterNew, fingerprint } from "./convergence.mjs";
-import { diffLine, parseHunks, place } from "./hunks.mjs";
+import { codeLink, diffLine, linkRefs, parseHunks, place } from "./hunks.mjs";
 import { verdict } from "./verdict.mjs";
 import { redact, scanOutbound } from "./secrets.mjs";
 import { hygiene as realHygiene } from "./hygiene.mjs";
@@ -29,6 +29,10 @@ const sha1 = (s) => createHash("sha1").update(s).digest("hex");
 const readJson = (f) => JSON.parse(readFileSync(f, "utf8"));
 const save = (f, v) => writeAtomic(f, JSON.stringify(v, null, 2) + "\n");
 // fp= on inline comments lets a later run link a thread to its findings (spec 6.4), one fp per finding the comment covers; key= is the dedupe key.
+// A regular file of the head tree, asked of git: a PR symlink never makes the review touch a host path.
+const headFile = (dir, sha, p) => { try { return /^100\d{3} blob /.test(git(dir, ["ls-tree", sha, "--", p])); } catch { return false; } };
+// The dedupe key of an inline comment: a fingerprint can post at 2 lines (split clusters), each its own thread.
+const inlineKeyOf = (sha, fp, file, line) => sha1(`inline\0${sha}\0${fp}\0${file}\0${line}`);
 const marker = (runId, sha, key, fp) => `<!-- pr-review run=${runId} sha=${sha} key=${key}${fp ? ` fp=${fp}` : ""} -->`;
 // Fields the seats and the judge see; engine bookkeeping stays out of prompts.
 const view = ({ seats, fp, answered, ...c }) => c;
@@ -532,7 +536,10 @@ async function once(o, restart) {
   markDone(runDir, "compose");
   if (o.until === "compose") return finish("compose");
 
-  const text = new Map(composed.comments.map((x) => [x.id, x.body]));
+  // Posted text links its references (#65): file:line to a permalink at the head, an RFC to its section.
+  const permalink = `https://github.com/${repo}/blob/${f.headSha}`;
+  const refs = (t) => linkRefs(t, permalink, (p) => headFile(f.worktree, f.headSha, p));
+  const text = new Map(composed.comments.map((x) => [x.id, refs(x.body)]));
   // One comment for findings with one root cause and one fix (compose `also`) on the same line, where a later
   // repeat of either links to the thread. The host carries every fp. An id with its own comment is never folded,
   // so a host is never folded itself (no chain loses a finding).
@@ -552,7 +559,7 @@ async function once(o, restart) {
   const mark = (c, b) => (depth === "full" && !c.proven ? markUnproven(b, offDiff(c)) : b);
   const items = posted.filter((c) => !hostOf.has(c.id)).map((c) => ({
     ...c, fps: [c.fp, ...folded.filter((o) => hostOf.get(o.id) === c.id).map((o) => o.fp)],
-    body: mark(c, text.get(c.id) ?? `**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}`),
+    body: mark(c, text.get(c.id) ?? refs(`**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}`)),
   }));
   // Checked fixes (#37), full depth: a suggestion that fails the tests, or lets a caught mutant pass, is posted
   // as text only. Best effort, capped by review.mutants.total_s; a comment unfolded at post time is checked too.
@@ -575,14 +582,15 @@ async function once(o, restart) {
   // A function, like v(): the post step still queues the questions the secret scan holds, so the marker reads the final count.
   const counts = () => ({ must: blocking.length + [...agreed, ...hygItems].filter((x) => x.severity === "must").length, questions: waitingQuestions(repoState, n).length, gaps: (run.missing?.length ?? 0) + run.dropped.length + missedNow.length });
   // "No new findings." over a posted finding contradicts itself: drop it whatever compose wrote
-  const said = composed.body.trim(), anyFinding = posted.length + hygItems.length > 0;
+  const said = refs(composed.body.trim()), anyFinding = posted.length + hygItems.length > 0;
   // Engine layout of the body (spec 6.8): pass line, corrections, verdict, checks, answers, thread index, praise.
   // The index lists only ids whose thread went inline (inline: the posted items on diff lines), at their real line.
-  const one = (t) => String(t ?? "").replace(/\s+/g, " ").trim();
+  const one = (t) => refs(String(t ?? "").replace(/\s+/g, " ").trim());
   const plain = (t) => one(t).replace(/[*_`]/g, "");
   const mustNow = [...agreed, ...hygItems].some((x) => x.severity === "must");
-  const at = (file, line) => `(thread on \`${file}\` L${line})`;
-  const indexOf = (inline) => {
+  // A thread is linked, never named by its line: the comment once posted, else the code at the head.
+  const at = (file, line, url) => `(${url ? `[thread](${url})` : codeLink(permalink, file, line)})`;
+  const indexOf = (inline, urls) => {
     const byThread = new Map(inline.map((x) => [x.id, x])), seen = new Set(), critical = [], groups = [];
     for (const g of composed.index ?? []) {
       const lines = [];
@@ -590,7 +598,7 @@ async function once(o, restart) {
         const x = byThread.get(hostOf.get(it.id) ?? it.id);
         if (!x || seen.has(x.id) || !one(it.text)) continue;
         seen.add(x.id);
-        (byId.get(it.id)?.severity === "must" || x.severity === "must" ? critical : lines).push(`- ${one(it.text)} ${at(x.file, x.line)}`);
+        (byId.get(it.id)?.severity === "must" || x.severity === "must" ? critical : lines).push(`- ${one(it.text)} ${at(x.file, x.line, urls.get(x.id))}`);
       }
       if (lines.length) groups.push(`${one(g.theme) || "Other"}:\n${lines.join("\n")}`);
     }
@@ -598,9 +606,9 @@ async function once(o, restart) {
   };
   // Numbered before the filter: an empty answer must not move the later ones onto the wrong question.
   const replies = (composed.answers ?? []).slice(0, f.questions?.length ?? 0).map((a, i) => [i + 1, one(a)]).filter(([, a]) => a);
-  const bodyOf = (outside, key, inline) => [
+  const bodyOf = (outside, key, inline, urls = new Map()) => [
     f.reviewNumber > 1 ? `${f.reviewNumber === 2 ? "Second pass" : `Pass ${f.reviewNumber}`}, on \`${f.headSha.slice(0, 7)}\`.` : "",
-    ...retracted.map((e) => `Correction: ${one(composed.corrections?.find((x) => x.thread_id === e.threadId)?.text) || "our earlier finding here was wrong."} ${at(e.path, e.line ?? e.originalLine)}`),
+    ...retracted.map((e) => `Correction: ${one(composed.corrections?.find((x) => x.thread_id === e.threadId)?.text) || "our earlier finding here was wrong."} ${at(e.path, e.line ?? e.originalLine, `https://github.com/${repo}/pull/${n}#discussion_r${e.commentId}`)}`),
     // A must (earlier and still open, or from this run) blocks the event: a verdict that says nothing blocks would contradict it.
     (blocking.length && !plain(composed.verdict)) || ((blocking.length || mustNow) && /\bnothing\b[^.]*\bblock/i.test(plain(composed.verdict)))
       ? (blocking.length
@@ -611,7 +619,7 @@ async function once(o, restart) {
     f.checked ? `What was checked: ${one(f.checked)}` : "",
     depth === "full" ? proofLine(posted) : "",
     replies.length ? `Your questions:\n${replies.map(([i, a]) => `${i}. ${a}`).join("\n")}` : "",
-    ...indexOf(inline),
+    ...indexOf(inline, urls),
     one(composed.praise),
     anyFinding && /^No new findings\.?$/i.test(said) ? "" : said,
     noTracking ? "No tracking issue or plan." : "",
@@ -623,7 +631,6 @@ async function once(o, restart) {
     // Dropped seats and missed parts stay out of the body: they are in run.json and the run log.
     ci.line ?? "", summaryMarker(runId, f.headSha, key, counts()),
   ].filter(Boolean).join("\n\n");
-  const permalink = `https://github.com/${repo}/blob/${f.headSha}`;
 
   const warnings = (hyg.warnings ?? []).map((w) => `warning: ${w}`);
   if (o.dryRun) {
@@ -643,7 +650,7 @@ async function once(o, restart) {
   if (now !== f.headSha) throw new HeadMoved(f.headSha, now);
   const clean = [];
   // A host the scan holds keeps none of its folded findings: they go out on their own, through the same scan.
-  const own = (c) => ({ ...c, fps: [c.fp], body: mark(c, `**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}`) });
+  const own = (c) => ({ ...c, fps: [c.fp], body: mark(c, refs(`**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}`)) });
   // One scan per item: each scan spawns gitleaks.
   const scans = new Map();
   const scan1 = (x) => { if (!scans.has(x)) scans.set(x, scanOutbound(x.answered ? redact(x.body) : x.body, { repo })); return scans.get(x); };
@@ -673,7 +680,7 @@ async function once(o, restart) {
     }));
   }
   // Step 6 per finding: a key per sha and finding, so a crash, a --restart or a re-frame never posts a finding twice.
-  const inlineKey = (x) => sha1(`inline\0${f.headSha}\0${x.fp}`);
+  const inlineKey = (x) => inlineKeyOf(f.headSha, x.fp, x.file, x.line);
   const fresh = [];
   const seen = await gh.markerKeys(repo, n); // one fetch for every check of this post phase
   for (const x of clean) if (!seen.has(inlineKey(x))) fresh.push(x);
@@ -704,7 +711,14 @@ async function once(o, restart) {
     if (await gh.pendingReview(repo, n)) {
       return { exit: 0, runDir, planned, skipped: true, summary: "skipped: you have a pending review on this PR; submit or delete it, then run again" };
     }
-    url = (await gh.postReview(repo, n, { commitOID: f.headSha, event, body, threads: p.inline })).url;
+    const res = await gh.postReview(repo, n, { commitOID: f.headSha, event, body, threads: p.inline });
+    url = res.url;
+    // The index links each thread once GitHub gave it a URL: the body goes out first, so edit it after.
+    const urls = new Map(fresh.flatMap((x) => { const c = res.comments?.find((c) => c.body?.includes(inlineKey(x))); return c ? [[x.id, c.url]] : []; }));
+    if (urls.size) {
+      const withLinks = bodyOf(p.body, key, clean.filter((x) => !offDiff(x)), urls);
+      if (withLinks !== body) await gh.editReview(res.id, withLinks).catch((e) => log(`review body links not added: ${e.message}`));
+    }
   }
   // Same fingerprint and record as tick.mjs: a rerun (or the tick after it) finds the question and adds nothing.
   if (queueApprove) {
@@ -785,7 +799,7 @@ async function followUp(o, head, pst, answered) {
   const diff = join(repoState, "pr", String(n), "runs", runId, "ctx", "diff.patch");
   const hunks = parseHunks(existsSync(diff) ? readFileSync(diff, "utf8") : "");
   for (const q of answered.filter((x) => x.answer !== "drop")) {
-    if (seen.has(sha1(`inline\0${head}\0${q.fingerprint}`))) { already.push(q.fingerprint); continue; }
+    if (seen.has(inlineKeyOf(head, q.fingerprint, q.finding?.file, q.finding?.line))) { already.push(q.fingerprint); continue; }
     if (codeMoved(o.repoDir ?? process.cwd(), q, head)) { o.log(`question ${q.id}: the code at ${q.finding?.file}:${q.finding?.line} changed since ${q.sha}; its answer is dropped`); continue; }
     const f = q.finding;
     // full depth (proven is set): a suggestion the follow-up cannot test says so, like one the time cap cut
@@ -794,14 +808,14 @@ async function followUp(o, head, pst, answered) {
     const text = f.secret ? heldText(repoState, n, pst.lastRunId, q.fingerprint) : f.proven === false ? markUnproven(base, !diffLine(hunks, f.file, f.line)) : base;
     if (!text) continue;
     const s = scanOutbound(text, { repo });
-    if (s.ok) items.push({ q, text });
+    if (s.ok) items.push({ q, text: linkRefs(text, `https://github.com/${repo}/blob/${head}`, (p) => headFile(o.repoDir ?? process.cwd(), head, p)) });
     else { o.log(stillHeld(`question ${q.id}`, s.hits)); held.push(q); }
   }
   let url = null;
   if (items.length) {
     const fps = items.map((x) => x.q.fingerprint).sort();
     const key = sha1(`followup\0${head}\0${fps.join(",")}`);
-    const p = place(items.map(({ q, text }) => ({ file: q.finding.file, line: q.finding.line, body: `${text}\n\n${marker(runId, head, sha1(`inline\0${head}\0${q.fingerprint}`), q.fingerprint)}` })), hunks, `https://github.com/${repo}/blob/${head}`);
+    const p = place(items.map(({ q, text }) => ({ file: q.finding.file, line: q.finding.line, body: `${text}\n\n${marker(runId, head, inlineKeyOf(head, q.fingerprint, q.finding.file, q.finding.line), q.fingerprint)}` })), hunks, `https://github.com/${repo}/blob/${head}`);
     // The follow-up's marker is the new state of the head for pr-land: the full review's counts, plus the musts posted
     // now, minus the questions answered now. Without the full review's counts here, gaps=1 holds the merge until a full review.
     const was = pst.counts?.sha === head ? pst.counts : null;

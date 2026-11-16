@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { parseHunks, place } from "../lib/hunks.mjs";
+import { codeLink, fences, linkRefs, parseHunks, place } from "../lib/hunks.mjs";
 
 const fx = (n) => parseHunks(readFileSync(new URL(`./fixtures/${n}`, import.meta.url), "utf8"));
 const base = "https://github.com/o/r/blob/abc";
@@ -24,7 +24,7 @@ test("line inside a hunk -> inline", () => {
 test("line outside any hunk -> body with permalink", () => {
   const r = place([{ file: "src/a.ts", line: 120, body: "first\nsecond" }], fx("diff-basic.patch"), base);
   assert.equal(r.inline.length, 0);
-  assert.equal(r.body[0], `\`src/a.ts:120\` — first (${base}/src/a.ts#L120)`);
+  assert.equal(r.body[0], `[\`src/a.ts\`](${base}/src/a.ts#L120): first`);
 });
 
 test("deleted file / LEFT-only line -> body; new file lines inline", () => {
@@ -73,10 +73,46 @@ test("binary file whose path holds \" b/\" keeps its full path", () => {
 
 test("finding without line goes to body without #L", () => {
   const r = place([{ file: "src/a.ts", line: null, body: "general" }], fx("diff-basic.patch"), base);
-  assert.equal(r.body[0], `\`src/a.ts\` — general (${base}/src/a.ts)`);
+  assert.equal(r.body[0], `[\`src/a.ts\`](${base}/src/a.ts): general`);
 });
 
 test("a longer suggestion fence is downgraded too", () => {
   const r = place([{ file: "gone.txt", line: 9, body: "````suggestion\na\n````" }], new Map(), base);
   assert.doesNotMatch(r.body[0], /suggestion/);
+});
+
+test("linkRefs turns file:line into a permalink and an RFC section into a link, with no section sign; code is left as is", () => {
+  const isFile = (p) => p === "src/a.ts";
+  const out = linkRefs("See `src/a.ts:12` and src/a.ts:3-5, not example.com:443. RFC 9110 §15.3 and [RFC 7230](https://x/rfc7230).\n```suggestion\nconst s = \"§1\"; // src/a.ts:12\n```", base, isFile);
+  assert.equal(out, `See [\`src/a.ts\`](${base}/src/a.ts#L12) and [\`src/a.ts\`](${base}/src/a.ts#L3-L5), not example.com:443. [RFC 9110, section 15.3](https://www.rfc-editor.org/rfc/rfc9110#section-15.3) and [RFC 7230](https://x/rfc7230).\n\`\`\`suggestion\nconst s = "§1"; // src/a.ts:12\n\`\`\``);
+  assert.equal(linkRefs("see spec §6.4", base, isFile), "see spec section 6.4");
+});
+
+test("linkRefs leaves inline code, links and ~~~ fences as they are, but links a span that is only path:line", () => {
+  const isFile = (p) => p === "lib/a.js";
+  for (const t of ['the separator `"§"` in `split("§")`', "run `node lib/a.js:3`", "see [lib/a.js:12](u)", "see the `RFC 9110` spec", "~~~js\n// lib/a.js:12 §2\n~~~"]) {
+    assert.equal(linkRefs(t, base, isFile), t, t);
+  }
+  assert.equal(linkRefs("in `lib/a.js:3` here", base, isFile), `in [\`lib/a.js\`](${base}/lib/a.js#L3) here`);
+});
+
+test("fences: ~~~ opens a block that only ~~~ closes", () => {
+  assert.deepEqual(fences("~~~\n```\nx\n~~~").map((b) => [b.start, b.end, b.closed]), [[0, 3, true]]);
+});
+
+test("linkRefs leaves an RFC name inside an identifier and a double-backtick code span as they are", () => {
+  const isFile = (p) => p === "a.js";
+  for (const t of ["format it with time.RFC3339Nano, not RFC1123Z", "see RFC 1234567", "``use `a.js:3` here``"]) assert.equal(linkRefs(t, base, isFile), t, t);
+  assert.match(linkRefs("see RFC 3339.", base, isFile), /^see \[RFC 3339\]\(https:\/\/www\.rfc-editor\.org\/rfc\/rfc3339\)\.$/);
+});
+
+test("an off-diff permalink escapes the file: ( ) # in the path, markup in the label, no link out of the tree", () => {
+  const r = place([{ file: "docs/Guide (v2).md", line: 3, body: "x" }, { file: "we#ird.md", line: 1, body: "y" }], new Map(), base);
+  assert.deepEqual(r.body, [`[\`docs/Guide (v2).md\`](${base}/docs/Guide%20%28v2%29.md#L3): x`, `[\`we#ird.md\`](${base}/we%23ird.md#L1): y`]);
+  assert.equal(codeLink(base, "x` [docs](https://evil.example) `y.js", 1), `[\`x docs(https://evil.example) y.js\`](${base}/x%60%20%5Bdocs%5D%28https%3A//evil.example%29%20%60y.js#L1)`);
+  assert.equal(codeLink(base, "../../../../evil/repo/blob/main/README.md", 1), "`../../../../evil/repo/blob/main/README.md`");
+});
+
+test("linkRefs never rewrites a link it built: a path that starts with rfcNNNN stays one link", () => {
+  assert.equal(linkRefs("rfc9110.md:3 and §2", base, (p) => p === "rfc9110.md"), `[\`rfc9110.md\`](${base}/rfc9110.md#L3) and section 2`);
 });

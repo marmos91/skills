@@ -235,16 +235,20 @@ Compose gets only the repo's review guidance: `REVIEW.md` and the files in
 
 - Findings stay inline. One finding per inline comment: severity label and a
   title that states the conclusion with a verb, the case in one line with the
-  source of each claim ("(ran ...)", "(read file:line)", "I think"), then a
+  source of each claim ("(ran ...)", "(read `fn` in file)", "I think"), then a
   paste-ready fix. Findings with one root cause and one fix on the same line
   (often from 2 lenses) share one comment.
 - The body is a short index of the threads, in this order: the verdict line
   (what blocks and why, or "Nothing blocks."), the answers to the author's
   questions, the inline threads grouped by theme with a `Critical` group
-  first (each line ends "(thread on `file` L<n>)"), and 1 or 2 lines of
+  first (each line ends with a link to its thread), and 1 or 2 lines of
   specific praise when earned. Then the hygiene list and the engine lines.
-  The engine writes each index line with the real line of its thread, and
-  leaves out a finding that did not post inline.
+  The engine posts the review, then edits the body to link each index line
+  to its inline comment (a permalink to the code at the head until then),
+  and leaves out a finding that did not post inline.
+- No bare line numbers and no section signs. The engine turns a `file:line`
+  in posted text into a permalink at the head and "RFC 9110 §15.3" into a
+  link to that section; a correction links the thread it retracts.
 - The author's questions are the lines of the PR body that end with "?", and
   the lines under a heading that names questions (code blocks skipped, 10 at
   most). Frame writes them to `pr.json`, and compose answers them first.

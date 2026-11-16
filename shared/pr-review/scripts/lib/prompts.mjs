@@ -254,7 +254,7 @@ export function composePrompt(frame, agreed, guidance, { retracted = [], blockin
     questions.length
       ? `- \`answers\`: one short answer for each of the author's questions, in order. Check each answer against the code.`
       : "- `answers`: [] (the PR body has no questions).",
-    "- `index`: group the ids of your inline comments by theme (what the findings are about, not the lens or the severity). One line of text for each id, no location: the engine adds the line of the thread. Do not index a finding with `outside: true` or lens `hygiene`.",
+    "- `index`: group the ids of your inline comments by theme (what the findings are about, not the lens or the severity). One line of text for each id, no file and no line: the engine links the thread. Do not index a finding with `outside: true` or lens `hygiene`.",
     "- `praise`: 1 or 2 lines on a specific thing that the author got right, only when it is earned. Else \"\".",
     "- `body`: other items that cannot go inline, with the review body rules of the writing rules. It can be \"\".",
     ...(n > 1
