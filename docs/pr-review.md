@@ -316,7 +316,9 @@ parts missed, as they stand when the review is posted. Questions are the
 finding questions on the PR that wait on you or on a run to apply your
 answer (`waitingQuestions` in `questions.mjs`). A follow-up that posts
 findings writes the same fields: the full review's counts plus the musts it
-posts, minus the questions it settles. It is the last line
+posts, minus the questions it settles, plus the ones the secret scan holds
+again. A follow-up that posts nothing rewrites the counts in the newest
+marker at that head instead, so `pr-land` never reads stale ones. It is the last line
 of the body; a marker anywhere else is ignored. `pr-land` reads them
 (`summaryMarker` and `readSummaryMarker` in `state.mjs`).
 
@@ -326,11 +328,15 @@ one that posts nothing), the engine sets a commit status with the context
 applied: `failure` when must, questions or gaps is above 0, `success`
 otherwise. The description holds the counts
 ("1 must, 2 questions") and the link goes to the review. A new head gets a
-status only once a review runs on it. To block a merge while a must is
+status only once a review runs on it, so a required `pr-review` check stays
+pending after each push until that review is posted. To block a merge while a must is
 open, add `pr-review` as a required status check in the branch protection
 rule (or ruleset) of the base branch: Settings, Branches, "Require status
 checks to pass before merging". The token needs write access to commit
 statuses; when the call fails, the review stays posted and the run logs it.
+`pr-review doctor` checks this permission on the repo of the current folder.
+Your own status is left out of the CI the review reads only when it links
+this PR and you set it; anyone else's `pr-review` status counts as CI.
 
 With `--dry-run` the engine writes the review to a file in the run folder,
 prints the planned children and models, prints the tokens that each stage

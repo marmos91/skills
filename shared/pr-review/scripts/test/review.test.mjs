@@ -219,6 +219,53 @@ test("commit status: an answer-only drop of a question clears the failure", asyn
   assert.deepEqual(lastStatus(fx), [fx.head, "success", "no open must, question or gap"]);
 });
 
+test("the full run's marker leaves out a question the same run answers, like its status", async () => {
+  const fx = fixture(); routes(fx);
+  const first = await go(fx, split());
+  answer(fx.state, basename(first.r.questions[0], ".md"), "post");
+  await go(fx, split());
+  assert.deepEqual(counts(posts(fx).at(-1).body), { must: 1, questions: 0, gaps: 0 });
+});
+
+test("an answer-only drop that posts nothing rewrites the newest marker at the head, for pr-land", async () => {
+  const fx = fixture(); routes(fx);
+  const answers = split({
+    merge: [C("c1", { found: [S0] }), C("c2", { severity: "should", line: 3, title: "Slow loop" })], "v~1": [keep("c1")], "v~2": [drop("c1"), keep("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c2", body: "**should:** slow" }] },
+  });
+  await go(fx, answers, { mode: "loop", effort: "medium" });
+  const full = posts(fx)[0].body;
+  assert.deepEqual(counts(full), { must: 0, questions: 1, gaps: 0 });
+  routes(fx, { reviews: [{ node_id: "PRR_9", body: full, user: { login: ME }, state: "COMMENTED" }] });
+  for (const q of openQuestions(fx.state)) answer(fx.state, q.id, "drop");
+  await go(fx, answers);
+  assert.equal(posts(fx).length, 1, "nothing posted");
+  const [edit] = mutations(fx).filter((m) => m.key === "graphql EditReview");
+  assert.equal(edit.input.variables.id, "PRR_9");
+  assert.deepEqual(counts(edit.input.variables.body), { must: 0, questions: 0, gaps: 0 });
+  assert.equal(edit.input.variables.body.replace(/<!--[^\n]*$/, ""), full.replace(/<!--[^\n]*$/, ""), "only the marker changes");
+});
+
+test("follow-up: a question the secret scan holds again counts in its marker as in the status", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "ss-"));
+  writeFileSync(join(dir, "private.txt"), "example\\.internal\n");
+  const old = process.env.SECRET_SCAN_CONFIG;
+  process.env.SECRET_SCAN_CONFIG = dir;
+  t.after(() => { process.env.SECRET_SCAN_CONFIG = old; });
+  const fx = fixture(); routes(fx);
+  const answers = split({
+    merge: [C("c1", { found: [S0] }), C("c2", { severity: "should", line: 3, title: "Host" })], "v~1": [keep("c1")], "v~2": [drop("c1"), keep("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c2", body: "**should:** calls db01.example.internal" }] },
+  });
+  await go(fx, answers, { mode: "loop", effort: "medium" });
+  assert.equal(openQuestions(fx.state).length, 2);
+  for (const q of openQuestions(fx.state)) answer(fx.state, q.id, "post");
+  await go(fx, answers, { mode: "loop" });
+  assert.equal(posts(fx).length, 2);
+  assert.equal(counts(posts(fx)[1].body).questions, 1, "the question asked again");
+  assert.match(lastStatus(fx)[2], /\b1 question\b/);
+});
+
 test("commit status: dropping a must the secret scan held removes it from the count", async () => {
   const fx = fixture(); routes(fx);
   const token = "ghp_" + "D".repeat(36);

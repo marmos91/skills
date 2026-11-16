@@ -106,11 +106,11 @@ export async function markerKeys(repo, n) {
   return keys;
 }
 
-/** The counts in the newest summary marker of the viewer's reviews at sha, or null: a follow-up's fallback when local state has none. */
+/** The newest summary marker of the viewer's reviews at sha, with its review's node id and body, or null: a follow-up's fallback when local state has none. */
 export async function markerCounts(repo, n, sha) {
   const me = await viewer();
-  const marks = (await json(["api", "--paginate", "--slurp", `repos/${repo}/pulls/${n}/reviews`])).flat().filter((r) => r?.user?.login === me).map((r) => readSummaryMarker(r.body));
-  return marks.filter((m) => m?.sha === sha).at(-1) ?? null;
+  const marks = (await json(["api", "--paginate", "--slurp", `repos/${repo}/pulls/${n}/reviews`])).flat().filter((r) => r?.user?.login === me).map((r) => ({ ...readSummaryMarker(r.body), id: r.node_id, body: r.body }));
+  return marks.filter((m) => m.sha === sha).at(-1) ?? null;
 }
 
 // Same full paging as markerKeys: a GraphQL walk caps comments per review at 100, and a missed marker means a duplicate post.
@@ -194,10 +194,17 @@ export async function checks(repo, n, sha) {
   if (head.headRefOid !== sha) return { state: "pending", since: null, items: [], stale: true }; // head moved: CI of the pinned sha is unknown
   const { stdout, stderr, code } = await run(["pr", "checks", String(n), "-R", repo, "--json", "name,state,link,bucket,startedAt"], { okCodes: [0, 1, 8] });
   let rows = [];
-  // Our own status is not CI: it is named pr-review and links this PR or one of its reviews. A CI job named pr-review still counts.
+  // Our own status is not CI: it is named pr-review, links this PR or one of its reviews, and I posted it.
+  // A CI job named pr-review, or someone else's pr-review status, still counts.
   const own = new RegExp(`^https://github\\.com/${repo.replace(/[.]/g, "\\.")}/pull/${n}(?:#pullrequestreview-\\d+)?$`);
-  if (stdout.trim()) rows = JSON.parse(stdout).filter((r) => !(r.name === "pr-review" && own.test(r.link ?? "")));
+  const ours = (r) => r.name === "pr-review" && own.test(r.link ?? "");
+  if (stdout.trim()) rows = JSON.parse(stdout);
   else if (code === 1 && !/no checks reported/i.test(stderr)) throw new GhError(`gh pr checks exited 1: ${redact(stderr.trim())}`, { code, stderr: redact(stderr.trim()) });
+  if (rows.some(ours)) {
+    // newest first: the first pr-review status is the one the checks list shows
+    const st = (await json(["api", `repos/${repo}/commits/${sha}/statuses?per_page=100`])).find((x) => x.context === "pr-review");
+    if (st?.creator?.login === await viewer()) rows = rows.filter((r) => !ours(r));
+  }
   const items = rows.map((r) => ({ name: r.name, state: r.bucket, url: r.link, runId: /\/actions\/runs\/(\d+)/.exec(r.link ?? "")?.[1] ?? null }));
   const pend = rows.filter((r) => !RED.has(r.bucket) && !OK.has(r.bucket));
   const state = !rows.length ? "none" : rows.some((r) => RED.has(r.bucket)) ? "red" : pend.length ? "pending" : "green";
