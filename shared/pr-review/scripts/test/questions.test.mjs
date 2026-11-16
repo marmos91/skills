@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { queueQuestion, openQuestions, answer, markAsked, appliedAnswer, questionWarnings } from "../lib/questions.mjs";
+import { queueQuestion, openQuestions, answer, markAsked, appliedAnswer, questionWarnings, waitingQuestions } from "../lib/questions.mjs";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "prr-q-"));
 const q = (o = {}) => ({
@@ -104,4 +104,18 @@ test("a review finding asked again after its answer was applied is a fresh quest
   answer(r, k, "drop"); appliedAnswer(r, k);
   queueQuestion(r, q({ fingerprint: "b".repeat(40), finding: { kind: "budget", title: "t", case: "c" } }));
   assert.ok(!openQuestions(r).some((x) => x.id === k), "a loop question is not asked again");
+});
+
+test("waitingQuestions: a PR's finding questions until a run applies the answer; loop questions and other PRs do not count", () => {
+  const r = tmp();
+  const a = queueQuestion(r, q({ fingerprint: "a1aaaaaaaa" }));
+  const b = queueQuestion(r, q({ fingerprint: "a2aaaaaaaa", sha: "older" }));
+  queueQuestion(r, q({ fingerprint: "a3aaaaaaaa", pr: 8 }));
+  queueQuestion(r, q({ fingerprint: "a4aaaaaaaa", finding: { kind: "approve", title: "Approve?" } }));
+  const ids = () => waitingQuestions(r, 7).map((x) => x.id).sort();
+  assert.deepEqual(ids(), [a, b].sort());
+  answer(r, a, "post");
+  assert.deepEqual(ids(), [a, b].sort(), "answered, not applied: still waiting");
+  appliedAnswer(r, a);
+  assert.deepEqual(ids(), [b]);
 });

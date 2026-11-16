@@ -88,6 +88,12 @@ export const questionWarnings = (repoState) => { const w = []; all(repoState, w)
 
 export const openQuestions = (repoState) => all(repoState).filter((q) => q.answer === null && !q.appliedAt);
 
+/**
+ * Finding questions on PR n that still wait on a person (no answer) or on a run to apply the answer.
+ * Loop questions (a kind: approve, reply, core-paths) are not about the code. The summary marker counts this set; pr-land too.
+ */
+export const waitingQuestions = (repoState, n) => all(repoState).filter((q) => Number(q.pr) === Number(n) && !q.finding?.kind && !q.appliedAt);
+
 /** Answered and not yet applied by a run. */
 export const pendingAnswers = (repoState) => all(repoState).filter((q) => q.answer !== null && !q.appliedAt);
 

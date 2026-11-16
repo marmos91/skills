@@ -47,6 +47,7 @@ installer and `install.sh` link each one into `~/.local/bin` (`BIN_DIR`). Add a 
 | pr-review | both | Council review of one GitHub PR: different models review with 5 lenses (adversarial, correctness, simplification, architecture, security), vote on each other's findings, and post only what they agree on; jev or you settle the splits. Models per seat and per lens, effort levels, resumable. See [docs/pr-review.md](docs/pr-review.md) |
 | pr-respond | both | Works through the review findings on your own PR until a round adds nothing new: jev confirms each finding or sends it to the agent, who fixes it with a test or declines it; `Fixed in <commit>` replies, resolved only when jev confirms the fix; a point-by-point answer comment; capped rounds |
 | pr-open | both | Takes a finished branch to an open PR: the project's format, lint and test commands, signed commits with no AI mentions, real test counts in the body, a secret scan, the linked issue, and a parent marker for stacked PRs |
+| pr-land | both | Merges a converged PR and cleans up: checks the live state (CI, reviews, threads), retargets and rebases stacked PRs, squash-merges after a secret scan, deletes the branch and local worktree, ticks the tracking issue and closes fixed issues |
 | pr-review-loop | both | Runs `pr-review` and thread replies for one repo on an interval (`/loop 30m`, cron or launchd); queues disagreements as questions, never blocks, never changes code or merges; pause and resume |
 
 (graphify and humanizer were removed from this repo — they exist upstream:

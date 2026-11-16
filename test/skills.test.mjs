@@ -85,6 +85,14 @@ test("install of pr-open brings pr-review, whose secret scan it imports", (t) =>
   assert.equal(d.status, 0, d.stderr);
 });
 
+test("install of pr-land brings pr-open and pr-review, whose code it imports", (t) => {
+  const { env, run } = setup(t);
+  assert.equal(run(REPO, "install", "--claude", "pr-land").status, 0);
+  assert.deepEqual(readdirSync(env.CLAUDE_DIR).sort(), ["pr-land", "pr-open", "pr-review"]);
+  const d = spawnSync(join(env.BIN_DIR, "pr-land"), ["--help"], { env, cwd: REPO, encoding: "utf8" });
+  assert.equal(d.status, 0, d.stderr);
+});
+
 test("a local copy is moved aside once; a link is replaced; --link links to the package", (t) => {
   const { env, run } = setup(t);
   mkdirSync(join(env.CLAUDE_DIR, "jev"), { recursive: true });

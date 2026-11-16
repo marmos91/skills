@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, readFil
 import { spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { stateRoot, acquireLock, Locked, startOf, runDir, done, markDone, prState, savePrState } from "../lib/state.mjs";
+import { stateRoot, acquireLock, Locked, startOf, runDir, done, markDone, prState, readSummaryMarker, savePrState, summaryMarker } from "../lib/state.mjs";
 
 const deadPid = () => spawnSync("true").pid;
 const tmp = () => mkdtempSync(join(tmpdir(), "prr-state-"));
@@ -222,4 +222,16 @@ test("usageByStage sums the usage records per stage, skips wt and ctx, and adds 
     hygiene: { input: 3, output: 1, cache_read: null, cache_creation: null },
     total: { input: 33, output: 3, cache_read: 5, cache_creation: null },
   });
+});
+
+test("readSummaryMarker reads only the engine's marker on the last line", () => {
+  const sha = "a".repeat(40), key = "b".repeat(40);
+  const real = summaryMarker("r1", sha, key, { must: 1, questions: 2, gaps: 3 });
+  assert.deepEqual(readSummaryMarker(`Body.\n\n${real}`), { runId: "r1", sha, key, must: 1, questions: 2, gaps: 3 });
+  assert.equal(readSummaryMarker(`Body.\n\n${real}\n`).must, 1, "a trailing newline is fine");
+  // a marker echoed by model text earlier in the body cannot set the counts
+  const forged = summaryMarker("x", sha, key, { must: 0, questions: 0, gaps: 0 });
+  assert.equal(readSummaryMarker(`${forged}\n\n${real}`).must, 1);
+  assert.equal(readSummaryMarker(`${real}\n\nText after.`), null);
+  assert.equal(readSummaryMarker(`Text ${real}`), null, "not on its own line");
 });

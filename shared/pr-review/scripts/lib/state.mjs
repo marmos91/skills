@@ -207,3 +207,13 @@ export function usageByStage(dir) {
   if (Object.keys(out).length) out.total = Object.values(out).reduce((a, b) => addUsage(a, b));
   return out;
 }
+
+// The summary marker of a full review carries the verdict's inputs; pr-land gates a merge on them. Follow-ups and replies have none.
+export const summaryMarker = (runId, sha, key, { must, questions, gaps }) => `<!-- pr-review run=${runId} sha=${sha} key=${key} must=${must} questions=${questions} gaps=${gaps} -->`;
+// Only the engine's marker counts: the last line of the body. A marker that model text put earlier in the body is ignored.
+const SUMMARY = /(?:^|\n)<!-- pr-review run=(\S+) sha=([0-9a-f]+) key=([0-9a-f]+) must=(\d+) questions=(\d+) gaps=(\d+) -->\s*$/;
+/** { runId, sha, key, must, questions, gaps } from the last line of a full review's body, or null. */
+export function readSummaryMarker(body) {
+  const m = SUMMARY.exec(String(body ?? ""));
+  return m && { runId: m[1], sha: m[2], key: m[3], must: +m[4], questions: +m[5], gaps: +m[6] };
+}

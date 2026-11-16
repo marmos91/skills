@@ -10,10 +10,12 @@ import { composeGuidance, review } from "../lib/review.mjs";
 import { ChildFailed } from "../lib/child.mjs";
 import { decide as realDecide } from "../lib/decider.mjs";
 import { answer, openQuestions } from "../lib/questions.mjs";
-import { stateRoot, prState, savePrState } from "../lib/state.mjs";
+import { stateRoot, prState, readSummaryMarker, savePrState } from "../lib/state.mjs";
 import { fingerprint } from "../lib/convergence.mjs";
 import * as github from "../lib/github.mjs";
 import { queueCoreQuestion, saveCorePaths } from "../lib/setup.mjs";
+// The verdict counts of a review body, read the way pr-land reads them.
+const counts = (body) => { const { must, questions, gaps } = readSummaryMarker(body) ?? {}; return { must, questions, gaps }; };
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ghBin = join(mkdtempSync(join(tmpdir(), "ghbin-")), "gh");
@@ -128,7 +130,8 @@ test("happy path posts one review with inline comments and the marker", async ()
   assert.equal(p.length, 1);
   assert.equal(p[0].commitOID, fx.head);
   assert.equal(p[0].event, "REQUEST_CHANGES");
-  assert.match(p[0].body, /^What was checked: light depth, no checks run\.\n\nChanges a\. One must item\.\n\n<!-- pr-review run=\S+ sha=[0-9a-f]{40} key=[0-9a-f]{40} -->$/);
+  assert.match(p[0].body, /^What was checked: light depth, no checks run\.\n\nChanges a\. One must item\.\n\n<!-- pr-review [^\n]+ -->$/);
+  assert.deepEqual(counts(p[0].body), { must: 1, questions: 0, gaps: 0 });
   assert.equal(p[0].threads.length, 1);
   assert.deepEqual([p[0].threads[0].path, p[0].threads[0].line, p[0].threads[0].side], ["a.js", 2, "RIGHT"]);
   assert.match(p[0].threads[0].body, new RegExp(`^\\*\\*must:\\*\\* off by one\n\n<!-- pr-review run=.* key=[0-9a-f]{40} fp=${fingerprint(F())} -->$`));
@@ -232,6 +235,7 @@ test("split + jev missing + loop -> question queued, review posted without it, e
   assert.equal(p[0].event, "COMMENT");
   assert.deepEqual(p[0].threads.map((t) => t.line), [3]);
   assert.match(p[0].body, /1 point is still open with the reviewer\./);
+  assert.deepEqual(counts(p[0].body), { must: 0, questions: 1, gaps: 0 });
   assert.ok(run.calls.find((c) => c.k === "compose"));
 });
 
@@ -255,6 +259,7 @@ test("secret in a finding -> that post blocked, question queued", async () => {
   assert.ok(!JSON.stringify(q).includes("leaks"), "no comment text in the question");
   assert.ok(!readFileSync(join(fx.state, "questions", `${q[0].id}.md`), "utf8").includes("leaks"));
   assert.match(p[0].body, /1 point is still open with the reviewer\./);
+  assert.equal(counts(p[0].body).questions, 1, "the marker counts the question the scan queued at post time");
   // answer post -> the comment is composed again and posted with the secret redacted
   answer(fx.state, q[0].id, "post");
   const again = await go(fx, happy({ compose: { body: "Summary.", comments: [{ id: "c1", body: `**must:** token ${token} leaks` }] } }));
@@ -771,6 +776,9 @@ test("answer-only rerun: 'post' goes out as one small COMMENT follow-up, never t
   assert.equal(p[1].event, "COMMENT");
   assert.match(p[1].body, new RegExp(`^Follow-up on the review of ${fx.head}: points settled by the maintainer\\.\\n\\n<!-- pr-review `));
   assert.deepEqual(p[1].threads.map((t) => [t.line, t.body.split("\n")[0]]), [[2, "**must:** Off by one"]]);
+  // the follow-up's marker is the head's new state for pr-land: the must it posts adds to the full review's, the answered question is gone
+  assert.deepEqual(counts(p[0].body), { must: 1, questions: 1, gaps: 0 });
+  assert.deepEqual(counts(p[1].body), { must: 2, questions: 0, gaps: 0 });
   // the posted finding joins agreed with its lens, so a reworded repeat on that line still links
   const ag = prState(fx.state, N).agreed.find((a) => a.id === q.fingerprint);
   assert.equal(ag?.lens, "correctness");
@@ -1030,6 +1038,7 @@ test("a dropped seat blocks APPROVE, interactive and loop", async () => {
     assert.equal(p.event, "COMMENT", mode);
     assert.equal(r.queueApprove, false, mode);
     assert.doesNotMatch(p.body, /Seat /);
+    assert.deepEqual(counts(p.body), { must: 0, questions: 0, gaps: 1 }, "the marker still tells pr-land the review is incomplete");
   }
 });
 
@@ -1456,6 +1465,15 @@ test("the body index lists only threads that went inline, at their real line, Cr
   assert.match(b, /Outside the diff:/);
 });
 
+test("the body marker counts a must off the diff, for pr-land", async () => {
+  const fx = fixture(); routes(fx);
+  const compose = { verdict: "The off-diff bug blocks.", body: "", comments: [{ id: "c1", body: "**must:** off by one" }, { id: "c2", body: "**must:** off diff" }] };
+  const { r } = await go(fx, { all: { findings: [F()] }, merge: [C("c1"), C("c2", { line: 99, title: "Off diff" })], "v~2": [keep("c1"), keep("c2")], compose });
+  assert.equal(r.exit, 0, r.summary);
+  assert.match(posts(fx)[0].body, /Outside the diff:/);
+  assert.deepEqual(counts(posts(fx)[0].body), { must: 2, questions: 0, gaps: 0 });
+});
+
 test("the author's questions in the PR body reach compose, and the answers come after the verdict", async () => {
   const fx = fixture(); routes(fx, { body: "Changes a.\n\nIs 2 the right value?" });
   const { r, run } = await go(fx, happy({ compose: { verdict: "Nothing blocks.", answers: ["Yes, 2 matches the spec.", "extra"], body: "", comments: [{ id: "c1", body: "**must:** off by one" }] } }));
@@ -1521,6 +1539,7 @@ test("pass 2: an earlier must still open reaches compose, and \"Nothing blocks.\
   const p = posts(fx)[0];
   assert.equal(p.event, "REQUEST_CHANGES");
   assert.match(p.body, /^Second pass, on `[0-9a-f]{7}`\.\n\n1 earlier must finding is still open, so the PR is blocked\.\n\nWhat was checked: light depth, no checks run\.\n\nStill open\./);
+  assert.deepEqual(counts(p.body), { must: 1, questions: 0, gaps: 0 });
 });
 
 test("an empty answer keeps the next answers on their own question numbers", async () => {

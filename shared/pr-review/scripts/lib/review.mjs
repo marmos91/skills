@@ -18,10 +18,10 @@ import { hygiene as realHygiene } from "./hygiene.mjs";
 import { limiter } from "./limit.mjs";
 import { decide as realDecide } from "./decider.mjs";
 import { linkFix } from "./reply.mjs";
-import { appliedAnswer, pendingAnswers, queueQuestion } from "./questions.mjs";
+import { appliedAnswer, pendingAnswers, queueQuestion, waitingQuestions } from "./questions.mjs";
 import { applyProof, checkFix, directionOnly, isProven, markUnproven, mutantFindings, proofLine, runMutants, scopePatch, suggestionOf, uncheckedNote } from "./proof.mjs";
 import { cherryPicked, coreCandidates, depthLine, pickDepth, queueCoreQuestion, readCorePaths, runSetup, settleCoreQuestions } from "./setup.mjs";
-import { FINAL_STAGE, VERSION, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, usageByStage, writeAtomic } from "./state.mjs";
+import { FINAL_STAGE, VERSION, acquireLock, done, markDone, prState, runDir as pickRunDir, savePrState, stateRoot, summaryMarker, usageByStage, writeAtomic } from "./state.mjs";
 
 export const STAGES = ["frame", "setup", "round1", "merge", "round2", "tally", "decide", "compose", "post"];
 const RANK = { must: 0, should: 1, nit: 2 };
@@ -569,6 +569,9 @@ async function once(o, restart) {
     agreed: [...agreed, ...hygItems], earlierMustOpen: blocking.length,
     openQuestions: open.length, failedLenses: run.missing?.length ?? 0, droppedSeats: run.dropped.length + missedNow.length, ci: ci.state, mode, trustedAuthor: f.shellOk, unanimousZero, ownPr: f.ownPr,
   });
+  // The verdict's inputs, for pr-land: open musts (earlier, inline, off-diff), questions waiting, lenses and seats missing.
+  // A function, like v(): the post step still queues the questions the secret scan holds, so the marker reads the final count.
+  const counts = () => ({ must: blocking.length + [...agreed, ...hygItems].filter((x) => x.severity === "must").length, questions: waitingQuestions(repoState, n).length, gaps: (run.missing?.length ?? 0) + run.dropped.length + missedNow.length });
   // "No new findings." over a posted finding contradicts itself: drop it whatever compose wrote
   const said = composed.body.trim(), anyFinding = posted.length + hygItems.length > 0;
   // Engine layout of the body (spec 6.8): pass line, corrections, verdict, checks, answers, thread index, praise.
@@ -616,7 +619,7 @@ async function once(o, restart) {
     belowFloor ? `${belowFloor} unproven ${belowFloor === 1 ? "finding was" : "findings were"} left out: review ${f.reviewNumber} posts only must findings.` : "",
     run.missing?.length ? `Lenses not run: ${run.missing.join(", ")}.` : "",
     // Dropped seats and missed parts stay out of the body: they are in run.json and the run log.
-    ci.line ?? "", marker(runId, f.headSha, key),
+    ci.line ?? "", summaryMarker(runId, f.headSha, key, counts()),
   ].filter(Boolean).join("\n\n");
   const permalink = `https://github.com/${repo}/blob/${f.headSha}`;
 
@@ -712,6 +715,7 @@ async function once(o, restart) {
     const fps = [...recorded, ...rejected, ...hygItems].map((c) => c.fp);
     Object.assign(st, {
       reviews: st.reviews + 1, lastReviewedSha: f.headSha, lastRunId: runId, settled: [...new Set([...st.settled, ...fps])],
+      counts: { sha: f.headSha, ...counts() }, // a follow-up at this head starts from these
       agreed: [...(st.agreed ?? []), ...recorded.map((c) => ({ id: c.fp, lens: c.lens, severity: c.severity, file: c.file, line: c.line, title: c.title }))],
     });
     savePrState(repoState, n, st);
@@ -787,13 +791,22 @@ async function followUp(o, head, pst, answered) {
     const fps = items.map((x) => x.q.fingerprint).sort();
     const key = sha1(`followup\0${head}\0${fps.join(",")}`);
     const p = place(items.map(({ q, text }) => ({ file: q.finding.file, line: q.finding.line, body: `${text}\n\n${marker(runId, head, sha1(`inline\0${head}\0${q.fingerprint}`), q.fingerprint)}` })), hunks, `https://github.com/${repo}/blob/${head}`);
-    const body = [`Follow-up on the review of ${head}: points settled by the maintainer.`, p.body.length ? p.body.map((l) => `- ${l}`).join("\n") : "", marker(runId, head, key)].filter(Boolean).join("\n\n");
+    // The follow-up's marker is the new state of the head for pr-land: the full review's counts, plus the musts posted
+    // now, minus the questions answered now. Without the full review's counts here, gaps=1 holds the merge until a full review.
+    const was = pst.counts?.sha === head ? pst.counts : null;
+    const counts = {
+      must: (was?.must ?? 0) + items.filter((x) => x.q.finding?.severity === "must").length,
+      questions: waitingQuestions(repoState, n).filter((q) => !answered.some((a) => a.id === q.id)).length,
+      gaps: was ? was.gaps : 1,
+    };
+    const body = [`Follow-up on the review of ${head}: points settled by the maintainer.`, p.body.length ? p.body.map((l) => `- ${l}`).join("\n") : "", summaryMarker(runId, head, key, counts)].filter(Boolean).join("\n\n");
     if (!scanOutbound(body).ok) return { exit: 4, skipped: true, summary: "follow-up blocked by the secret scan" };
     if (!seen.has(key)) {
       if (await gh.pendingReview(repo, n)) return { exit: 0, skipped: true, summary: "skipped: you have a pending review on this PR; submit or delete it, then run again" };
       url = (await gh.postReview(repo, n, { commitOID: head, event: "COMMENT", body, threads: p.inline })).url;
     }
     const st = prState(repoState, n);
+    st.counts = { sha: head, ...counts };
     st.settled = [...new Set([...st.settled, ...fps])];
     // posted findings join agreed too, so a reworded repeat on the same line still links (same lens)
     st.agreed = [...(st.agreed ?? []), ...items.map(({ q }) => ({ id: q.fingerprint, lens: q.finding.lens, severity: q.finding.severity, file: q.finding.file, line: q.finding.line, title: q.finding.title }))];
