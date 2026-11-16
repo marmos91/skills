@@ -11,7 +11,7 @@ import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.
 import { tally } from "./tally.mjs";
 import { validate } from "./schema.mjs";
 import { allowedSeverities, filterNew, findingKey, fingerprint, learnKey, settledKey } from "./convergence.mjs";
-import { learn, learnedKeys, parseMarker, suggestion } from "./learnings.mjs";
+import { learn, learnedKeys, noMarkup, parseMarker, suggestion } from "./learnings.mjs";
 import { codeLink, diffLine, linkRefs, parseHunks, place } from "./hunks.mjs";
 import { verdict, whyNotApproved } from "./verdict.mjs";
 import { redact, scanOutbound } from "./secrets.mjs";
@@ -737,7 +737,7 @@ async function once(o, restart) {
   const fresh = [];
   const seen = await gh.markerKeys(repo, n); // one fetch for every check of this post phase
   for (const x of clean) if (!seen.has(inlineKey(x))) fresh.push(x);
-  const p = place(fresh.map((x) => ({ file: x.file, line: x.line, body: `${x.body}\n\n${marker(runId, f.headSha, inlineKey(x), x.fps.join(","), x.learns.join(","))}` })), hunks, permalink);
+  const p = place(fresh.map((x) => ({ file: x.file, line: x.line, body: `${noMarkup(x.body)}\n\n${marker(runId, f.headSha, inlineKey(x), x.fps.join(","), x.learns.join(","))}` })), hunks, permalink);
   const key = sha1(`review\0${runId}`);
   const body = bodyOf(p.body, key, clean.filter((x) => !offDiff(x)));
   const scan = scanOutbound(body, { repo });
@@ -920,7 +920,7 @@ async function followUp(o, head, pst, answered) {
     // by line too: a later answer for another line of one fp is a new follow-up
     const fps = items.map((x) => findingKey(x.q.fingerprint, x.q.finding.line)).sort();
     const key = sha1(`followup\0${head}\0${fps.join(",")}`);
-    const p = place(items.map(({ q, text }) => ({ file: q.finding.file, line: q.finding.line, body: `${text}\n\n${marker(runId, head, inlineKeyOf(head, q.fingerprint, q.finding.file, q.finding.line), q.fingerprint, learnKey(q.finding))}` })), hunks, `https://github.com/${repo}/blob/${head}`);
+    const p = place(items.map(({ q, text }) => ({ file: q.finding.file, line: q.finding.line, body: `${noMarkup(text)}\n\n${marker(runId, head, inlineKeyOf(head, q.fingerprint, q.finding.file, q.finding.line), q.fingerprint, learnKey(q.finding))}` })), hunks, `https://github.com/${repo}/blob/${head}`);
     const body = [`Follow-up on the review of ${head}: points settled by the maintainer.`, p.body.length ? p.body.map((l) => `- ${l}`).join("\n") : "", summaryMarker(runId, head, key, counts)].filter(Boolean).join("\n\n");
     if (!scanOutbound(body, { repo }).ok) return { exit: 4, skipped: true, summary: "follow-up blocked by the secret scan" };
     if (!seen.has(key)) {
