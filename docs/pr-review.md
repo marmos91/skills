@@ -238,13 +238,17 @@ Compose gets only the repo's review guidance: `REVIEW.md` and the files in
 - Findings stay inline. One finding per inline comment: severity label and a
   title that states the conclusion with a verb, the case in one line with the
   source of each claim ("(ran ...)", "(read `fn` in file)", "I think"), then a
-  paste-ready fix. Findings with one root cause and one fix on the same line
+  paste-ready fix, and "Done when:" (the test or behavior that resolves it,
+  engine text). Findings with one root cause and one fix on the same line
   (often from 2 lenses) share one comment.
-- The body is a short index of the threads, in this order: the verdict line
-  (what blocks and why, or "Nothing blocks."), the answers to the author's
-  questions, the inline threads grouped by theme with a `Critical` group
-  first (each line ends with a link to its thread), and 1 or 2 lines of
-  specific praise when earned. Then the hygiene list and the engine lines.
+- The body is a short index of the threads, in this order: the decision line
+  ("**Blocks: 1 must, 2 questions.**" or "**Nothing blocks.**", from the
+  marker counts; on a later pass with the delta: "Pass 2, since `<sha>`: 3
+  fixed, 1 new, 1 still open."), the verdict line (what blocks and why), the
+  answers to the author's questions, the inline threads grouped by severity
+  (Must, Should, Nit; each line ends with a link to its thread), and 1 or 2
+  lines of specific praise when earned. Then the hygiene list and the engine
+  lines.
   The engine posts the review, then edits the body to link each index line
   to its inline comment (a permalink to the code at the head until then),
   and leaves out a finding that did not post inline.
@@ -254,13 +258,14 @@ Compose gets only the repo's review guidance: `REVIEW.md` and the files in
 - The author's questions are the lines of the PR body that end with "?", and
   the lines under a heading that names questions (code blocks skipped, 10 at
   most). Frame writes them to `pr.json`, and compose answers them first.
-- A later review opens with "Second pass, on `<sha>`." It does not describe
-  the PR again, and says if the author's replies check out. An earlier
+- A later review does not describe the PR again. Earlier threads that only
+  check out (fixed, or a reply that holds) go in one collapsed list, each
+  linked to its thread. An earlier
   finding of ours that 2 seats now judge wrong (none open) is retracted first,
   as "Correction: ...". Its thread is resolved and recorded, so it no longer
   blocks and a later pass does not judge it again. An earlier `must` of ours
   that is still open goes to compose, and the verdict names it; the engine
-  never lets the verdict say "Nothing blocks." while it blocks. Otherwise the body says "No new
+  drops a verdict that says nothing blocks (the decision line says it). Otherwise the body says "No new
   findings." Fixed earlier findings get their link in the thread.
 - A finding off the diff lines is listed once, under "Outside the diff".
 - A `pre-existing` finding (a real problem in code the PR touches, caused
@@ -326,7 +331,12 @@ Each posted body ends with a hidden marker:
 later run links a repeat of any of these findings to the thread. The summary
 of a full review adds `must=<n> questions=<n> gaps=<n>`: the open must
 findings, the questions waiting, and the lenses not run, seats dropped and
-parts missed, as they stand when the review is posted. Questions are the
+parts missed, as they stand when the review is posted. It then adds
+`state=<json>` for agents: `verdict` (the event), `next` (`fix`, `answer`,
+`rerun`, `respond` or `land`), `items` (each open earlier thread and each new
+finding: `fp`, `severity`, `file`, `line`, `status` open or new, the thread
+`url` or null off the diff, `done_when`), and the `fixed` and `retracted`
+thread URLs. `pr-land` names the open musts from it. Questions are the
 finding questions on the PR that wait on you or on a run to apply your
 answer (`waitingQuestions` in `questions.mjs`). A follow-up that posts
 findings writes the same fields: the full review's counts plus the musts it

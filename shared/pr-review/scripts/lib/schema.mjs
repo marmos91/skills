@@ -60,7 +60,7 @@ const stages = {
       if (typeof g?.theme !== "string") errs.push(`${p}.theme: must be a string`);
       list(g?.items, `${p}.items`, errs, (x, q) => { if (!str(x?.id) || typeof x?.text !== "string") errs.push(`${q}: needs id and text`); });
     });
-    if (v?.corrections !== undefined) list(v.corrections, "corrections", errs, (x, p) => { if (!str(x?.thread_id) || !str(x?.text)) errs.push(`${p}: needs thread_id and text`); });
+    for (const k of ["corrections", "confirmed"]) if (v?.[k] !== undefined) list(v[k], k, errs, (x, p) => { if (!str(x?.thread_id) || !str(x?.text)) errs.push(`${p}: needs thread_id and text`); });
     list(v?.comments, "comments", errs, (x, p) => {
       if (!str(x?.id)) errs.push(`${p}.id: required`);
       if (!str(x?.body)) errs.push(`${p}.body: required`);

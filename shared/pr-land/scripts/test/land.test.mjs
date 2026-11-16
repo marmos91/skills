@@ -43,6 +43,9 @@ test("notReady: each gap is named", () => {
     [{ reviews: [rv(mark("b".repeat(40)))] }, 0, /review is on bbbbbbb, the head is aaaaaaa/],
     [{ reviews: [rv(mark(HEAD, 1))] }, 0, /1 open must/],
     [{ reviews: [rv(mark(HEAD, 0, 2))] }, 0, /2 pr-review questions not settled/],
+    // the state block names each open must: its thread, or its file when it is off the diff
+    [{ reviews: [rv(summaryMarker("r1", HEAD, "0123", { must: 2, questions: 1, gaps: 0 }, { items: [{ severity: "must", url: "https://github.com/o/r/pull/27#discussion_r9" }, { severity: "must", file: "b.js", url: null }, { severity: "nit", file: "c.js" }] }))] }, 0,
+      /2 open must \(https:\/\/github\.com\/o\/r\/pull\/27#discussion_r9, b\.js\); 1 pr-review question not settled/],
     [{ reviews: [rv(mark(HEAD, 0, 0, 1))] }, 0, /incomplete: 1 lens or seat missing .*run a full pr-review on the head/],
     // a marker pasted by anyone else does not count
     [{ reviews: [rv(mark(HEAD, 1)), rv(mark(HEAD), "mallory")] }, 0, /1 open must/],

@@ -142,7 +142,7 @@ test("happy path posts one review with inline comments and the marker", async ()
   assert.equal(p.length, 1);
   assert.equal(p[0].commitOID, fx.head);
   assert.equal(p[0].event, "REQUEST_CHANGES");
-  assert.match(p[0].body, /^What was checked: light depth, no checks run\.\n\nChanges a\. One must item\.\n\n<!-- pr-review [^\n]+ -->$/);
+  assert.match(p[0].body, /^\*\*Blocks: 1 must\.\*\*\n\nWhat was checked: light depth, no checks run\.\n\nChanges a\. One must item\.\n\n<!-- pr-review [^\n]+ -->$/);
   assert.deepEqual(counts(p[0].body), { must: 1, questions: 0, gaps: 0 });
   assert.equal(p[0].threads.length, 1);
   assert.deepEqual([p[0].threads[0].path, p[0].threads[0].line, p[0].threads[0].side], ["a.js", 2, "RIGHT"]);
@@ -1863,7 +1863,7 @@ test("compose gets outside: true on a finding off the diff lines, and only there
   assert.deepEqual(data.map((x) => [x.id, x.outside ?? false]), [["c1", false], ["c2", true]]);
 });
 
-test("the body index lists only threads that went inline, at their real line, Critical first", async () => {
+test("the body index lists only threads that went inline, at their real line, grouped by severity", async () => {
   const fx = fixture(OFF_FILES); routes(fx);
   const c2 = C("c2", { ...OFF, severity: "should", title: "Off diff" }), c3 = C("c3", { line: 3, severity: "should", title: "Name" });
   const compose = {
@@ -1874,7 +1874,7 @@ test("the body index lists only threads that went inline, at their real line, Cr
   const { r } = await go(fx, { all: { findings: [F()] }, merge: [C("c1"), c2, c3], "v~2": [keep("c1"), keep("c2"), keep("c3")], compose });
   assert.equal(r.exit, 0, r.summary);
   const b = posts(fx)[0].body;
-  assert.match(b, /^The off by one blocks\.\n\nWhat was checked: light depth, no checks run\.\n\nCritical:\n- Fix the total\. \(\[`a\.js`\]\(https:\/\/github\.com\/o\/r\/blob\/\w+\/a\.js#L2\)\)\n\nTotals:\n- Rename c\. \(\[`a\.js`\]\(https:\/\/github\.com\/o\/r\/blob\/\w+\/a\.js#L3\)\)\n\nThe test covers the edge\./);
+  assert.match(b, /^\*\*Blocks: 1 must\.\*\*\n\nThe off by one blocks\.\n\nWhat was checked: light depth, no checks run\.\n\nMust:\n- Fix the total\. \(\[`a\.js`\]\(https:\/\/github\.com\/o\/r\/blob\/\w+\/a\.js#L2\)\)\n\nShould:\n- Rename c\. \(\[`a\.js`\]\(https:\/\/github\.com\/o\/r\/blob\/\w+\/a\.js#L3\)\)\n\nThe test covers the edge\./);
   assert.doesNotMatch(b, /Off-diff item|Made up/);
   assert.match(b, /Outside the diff:/);
 });
@@ -1944,7 +1944,7 @@ test("the author's questions in the PR body reach compose, and the answers come 
   assert.equal(r.exit, 0, r.summary);
   assert.match(run.calls.find((c) => c.k === "compose").prompt, /## The author's questions[\s\S]*1\. Is 2 the right value\?/);
   // c1 is a must of this run: "Nothing blocks." would contradict REQUEST_CHANGES
-  assert.match(posts(fx)[0].body, /^The must findings block the merge\.\n\nWhat was checked: light depth, no checks run\.\n\nYour questions:\n1\. Yes, 2 matches the spec\.\n\n<!-- pr-review/);
+  assert.match(posts(fx)[0].body, /^\*\*Blocks: 1 must\.\*\*\n\nWhat was checked: light depth, no checks run\.\n\nYour questions:\n1\. Yes, 2 matches the spec\.\n\n<!-- pr-review/);
 });
 
 test("a bold or reworded \"nothing blocks\" verdict next to an earlier must still open is replaced", async () => {
@@ -1955,7 +1955,8 @@ test("a bold or reworded \"nothing blocks\" verdict next to an earlier must stil
   for (const verdict of ["**Nothing blocks.**", "I find nothing blocking the merge."]) {
     const { r } = await go(fx, { all: { findings: [], earlier: [{ thread_id: "T1", status: "open", evidence: "x" }] }, compose: { verdict, body: "Still open.", comments: [] } }, { restart: true });
     assert.equal(r.exit, 0, r.summary);
-    assert.match(posts(fx).at(-1).body, /1 earlier must finding is still open, so the PR is blocked\./, verdict);
+    assert.match(posts(fx).at(-1).body, /^\*\*Blocks: 1 must\.\*\* Pass \d/, verdict);
+    assert.doesNotMatch(posts(fx).at(-1).body, /nothing block/i, verdict);
   }
 });
 
@@ -1970,7 +1971,7 @@ test("pass 2: an earlier finding the seats judge wrong is retracted first, and n
   assert.equal(r.exit, 0, r.summary);
   assert.match(run.calls.find((c) => c.k === "compose").prompt, /a\.js:1 is the documented default/);
   const p = posts(fx)[0];
-  assert.match(p.body, new RegExp(`^Second pass, on \`${fx.head.slice(0, 7)}\`\\.\n\nCorrection: Our finding on a was wrong: 2 is the documented default\\. \\(\\[thread\\]\\(https://github\\.com/o/r/pull/5#discussion_r11\\)\\)\n\nNothing blocks\\.`));
+  assert.match(p.body, new RegExp(`^\\*\\*Nothing blocks\\.\\*\\* Pass 2, since \`${fx.base.slice(0, 7)}\`: 0 fixed, 0 new, 0 still open, 1 retracted\\.\n\nCorrection: Our finding on a was wrong: 2 is the documented default\\. \\(\\[thread\\]\\(https://github\\.com/o/r/pull/5#discussion_r11\\)\\)\n\n`));
   assert.notEqual(p.event, "REQUEST_CHANGES");
   assert.ok(!mutations(fx).some((x) => x.key.includes("replies")), "a retracted thread gets no 'Fixed in' reply");
   assert.ok(mutations(fx).some((x) => x.key === "graphql ResolveThread"), "a retracted thread is resolved");
@@ -1988,7 +1989,7 @@ test("pass 3: a thread we retracted is not judged again and does not block, also
   assert.deepEqual(JSON.parse(readFileSync(join(r.runDir, "ctx", "earlier.json"), "utf8")), []);
   const p = posts(fx)[0];
   assert.notEqual(p.event, "REQUEST_CHANGES");
-  assert.match(p.body, /^Pass 3, on `[0-9a-f]{7}`\.\n\nNothing blocks\./);
+  assert.match(p.body, /^\*\*Nothing blocks\.\*\* Pass 3, since `[0-9a-f]{7}`: 0 fixed, 0 new, 0 still open\.\n\n/);
   assert.doesNotMatch(p.body, /Correction/);
 });
 
@@ -2002,8 +2003,42 @@ test("pass 2: an earlier must still open reaches compose, and \"Nothing blocks.\
   assert.match(prompt, /Never write "Nothing blocks\."/);
   const p = posts(fx)[0];
   assert.equal(p.event, "REQUEST_CHANGES");
-  assert.match(p.body, /^Second pass, on `[0-9a-f]{7}`\.\n\n1 earlier must finding is still open, so the PR is blocked\.\n\nWhat was checked: light depth, no checks run\.\n\nStill open\./);
+  assert.match(p.body, /^\*\*Blocks: 1 must\.\*\* Pass 2, since `[0-9a-f]{7}`: 0 fixed, 0 new, 1 still open\.\n\nWhat was checked: light depth, no checks run\.\n\nStill open\./);
   assert.deepEqual(counts(p.body), { must: 1, questions: 0, gaps: 0 });
+});
+
+test("pass 2: a fixed earlier thread and a reply that checks out go in one collapsed list, each linked to its thread", async () => {
+  const fx = fixture(); routes(fx, { threads: T1() });
+  savePrState(fx.state, N, { ...prState(fx.state, N), reviews: 1, lastReviewedSha: fx.base });
+  const compose = { verdict: "Nothing blocks.", body: "", confirmed: [{ thread_id: "T1", text: "a is 2 now, as the docs say." }], comments: [] };
+  const { r } = await go(fx, { all: { findings: [], earlier: [{ thread_id: "T1", status: "fixed", evidence: "a.js:1" }] }, compose });
+  assert.equal(r.exit, 0, r.summary);
+  const b = posts(fx)[0].body;
+  assert.match(b, /^\*\*Nothing blocks\.\*\* Pass 2, since `[0-9a-f]{7}`: 1 fixed, 0 new, 0 still open\./);
+  assert.match(b, /\n<details><summary>1 earlier thread checks out<\/summary>\n\n- a is 2 now, as the docs say\. \(\[thread\]\(https:\/\/github\.com\/o\/r\/pull\/5#discussion_r11\)\)\n<\/details>\n/);
+});
+
+test("each inline comment ends with the finding's done when, before the marker", async () => {
+  const fx = fixture(); routes(fx);
+  const { r } = await go(fx, happy({ merge: [C("c1", { done_when: "a test sums a and b to 5" })] }));
+  assert.equal(r.exit, 0, r.summary);
+  assert.match(posts(fx)[0].threads[0].body, /\n\nDone when: a test sums a and b to 5\n\n<!-- pr-review /);
+});
+
+test("the state block in the marker lists an off-diff must with its file and done when, next to an open question", async () => {
+  const fx = fixture(); routes(fx);
+  const off = C("c3", { file: "b.js", line: 99, title: "Caller passes 0", done_when: "load(0) returns an error" });
+  const answers = split({ merge: [C("c1", { found: [S0] }), off], "v~2": [drop("c1"), keep("c3")],
+    compose: { verdict: "The off-diff bug blocks.", body: "", comments: [{ id: "c3", body: "**must:** off diff" }] } });
+  const decide = (c, v, h, cfg) => realDecide(c, v, h, cfg, { env: { PATH: "/nonexistent" } });
+  const { r } = await go(fx, answers, { mode: "loop", decide });
+  assert.equal(r.exit, 0, r.summary);
+  const m = readSummaryMarker(posts(fx)[0].body);
+  assert.deepEqual([m.must, m.questions], [1, 1]);
+  assert.deepEqual({ ...m.state, items: m.state.items.map(({ fp, ...x }) => x) }, {
+    verdict: "REQUEST_CHANGES", next: "fix", fixed: [], retracted: [],
+    items: [{ severity: "must", file: "b.js", line: 99, status: "new", url: null, done_when: "load(0) returns an error" }],
+  });
 });
 
 test("an empty answer keeps the next answers on their own question numbers", async () => {
