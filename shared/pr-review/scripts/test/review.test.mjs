@@ -1125,6 +1125,18 @@ test("CI pending alone never overwrites an answer already given to the approve q
   assert.equal(pendingAnswers(fx.state).find((q) => q.id === id)?.answer, "drop");
 });
 
+test("a later review at the same head that blocks withdraws the auto-answered approval (#82)", async () => {
+  const fx = fixture(); routes(fx);
+  const gh = { ...github, checks: async () => ({ state: "pending", since: null, items: [] }) };
+  await go(fx, { all: { findings: [] }, compose: { body: "Fine.", comments: [] } }, { gh });
+  assert.equal(pendingAnswers(fx.state).filter((q) => q.finding.kind === "approve").length, 1, "auto-answered post");
+  const { r } = await go(fx, happy(), { gh, restart: true });
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(posts(fx).at(-1).event, "REQUEST_CHANGES");
+  assert.equal(pendingAnswers(fx.state).filter((q) => q.finding.kind === "approve").length, 0, "withdrawn");
+  assert.deepEqual(prState(fx.state, N).verdict, { sha: fx.head, queueApprove: false });
+});
+
 test("a CI read that fails at post time counts as unknown: no APPROVE", async () => {
   const fx = fixture(); routes(fx);
   let k = 0;

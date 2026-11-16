@@ -769,6 +769,12 @@ async function once(o, restart) {
     // Pending CI alone needs no human: answered here, the tick approves once CI is green at this head.
     // never over an answer already given: the owner's drop stands
     if (reasons.join() === "ci pending" && openQuestions(repoState).some((q) => q.id === id)) answer(repoState, id, "post");
+  } else {
+    // A review at this head that does not queue withdraws an approval queued earlier, answered or not.
+    for (const q of [...openQuestions(repoState), ...pendingAnswers(repoState)].filter((q) => q.pr === n && q.sha === f.headSha && q.finding?.kind === "approve")) {
+      if (q.answer === null) answer(repoState, q.id, "drop");
+      appliedAnswer(repoState, q.id);
+    }
   }
 
   // A folded finding counts as posted when its host comment is.
@@ -779,6 +785,7 @@ async function once(o, restart) {
     Object.assign(st, {
       reviews: st.reviews + 1, lastReviewedSha: f.headSha, lastRunId: runId, settled: [...new Set([...st.settled, ...fps])],
       counts: { sha: f.headSha, ...counts() }, // a follow-up at this head starts from these
+      verdict: { sha: f.headSha, queueApprove }, // the tick approves only while the latest verdict at this head queues it
       agreed: [...(st.agreed ?? []), ...recorded.map((c) => ({ id: c.fp, lens: c.lens, severity: c.severity, file: c.file, line: c.line, title: c.title }))],
     });
     savePrState(repoState, n, st);

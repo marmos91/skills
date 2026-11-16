@@ -288,6 +288,8 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
       const p = await gh.pr(repo, q.pr);
       const ci = p.headSha === q.sha ? await gh.checks(repo, q.pr, q.sha) : null;
       if (!ci || ci.stale) { log(`#${q.pr}: head moved since question ${q.id}; approve dropped`); return true; }
+      const last = prState(rs, q.pr).verdict;
+      if (last?.sha === q.sha && !last.queueApprove) { log(`#${q.pr}: a later review at ${q.sha} blocks; approve (${q.id}) dropped`); return true; }
       if (ci.state === "pending") { log(`#${q.pr}: CI pending; approve (${q.id}) waits for the next tick`); return false; }
       if (ci.state !== "green" && ci.state !== "none") { log(`#${q.pr}: CI ${ci.state}; approve (${q.id}) dropped`); return true; }
       const key = `key=${sha1(`approve\0${q.pr}\0${q.sha}`)}`;

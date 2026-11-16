@@ -333,9 +333,10 @@ const answered = (rs, pr, option, over = {}) => {
   return id;
 };
 
-async function approveAnswered(ci, over = {}) {
+async function approveAnswered(ci, over = {}, verdict) {
   const rs = fresh();
   withBaseline(rs);
+  if (verdict) savePrState(rs, 1, { ...prState(rs, 1), verdict });
   const id = queueQuestion(rs, { pr: 1, sha: "sha1", fingerprint: "a".repeat(40), file: "(whole PR)", line: 0, snippet: "", finding: { kind: "approve", title: "Approve this PR?", case: "c" }, sides: { keep: "k", drop: "d" }, failure: "" });
   answer(rs, id, "post");
   const gh = Object.assign(fakeGh({ ci }), over);
@@ -357,6 +358,15 @@ test("approve? post with red CI or stale checks is dropped with a note", async (
     assert.deepEqual(pendingAnswers(rs), []);
     assert.ok(lines.some((l) => /dropped/.test(l)));
   }
+});
+
+test("approve? post is dropped when the latest review at that head does not queue it (#82)", async () => {
+  const { rs, gh, lines } = await approveAnswered({ state: "green", items: [] }, {}, { sha: "sha1", queueApprove: false });
+  assert.deepEqual(gh.calls.postReview, []);
+  assert.deepEqual(pendingAnswers(rs), []);
+  assert.ok(lines.some((l) => /later review .* blocks/.test(l)), lines.join("\n"));
+  const ok = await approveAnswered({ state: "green", items: [] }, {}, { sha: "sha1", queueApprove: true });
+  assert.equal(ok.gh.calls.postReview.length, 1, "the latest verdict still queues it");
 });
 
 test("approve? post with no checks counts as green", async () => {

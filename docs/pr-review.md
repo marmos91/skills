@@ -293,7 +293,10 @@ body has one engine line that says why it is not an approval, for example "Not
 approved yet: CI is still running. It is approved when CI passes." Only
 pr-review-loop posts the approval, at the same head with green CI; an
 interactive review says "pr-review-loop approves it when CI passes." An answer
-you already gave to the approve question is never replaced.
+you already gave to the approve question is never replaced. A later review at
+the same head that does not queue an approval (a must, an open question, a
+gap) withdraws it, and the loop checks the latest verdict at that head before
+it approves.
 
 ### 9. Post
 
