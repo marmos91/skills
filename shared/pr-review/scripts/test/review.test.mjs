@@ -776,6 +776,9 @@ test("answer-only rerun: 'post' goes out as one small COMMENT follow-up, never t
   assert.equal(p[1].event, "COMMENT");
   assert.match(p[1].body, new RegExp(`^Follow-up on the review of ${fx.head}: points settled by the maintainer\\.\\n\\n<!-- pr-review `));
   assert.deepEqual(p[1].threads.map((t) => [t.line, t.body.split("\n")[0]]), [[2, "**must:** Off by one"]]);
+  // the follow-up's marker is the head's new state for pr-land: the must it posts adds to the full review's, the answered question is gone
+  assert.deepEqual(counts(p[0].body), { must: 1, questions: 1, gaps: 0 });
+  assert.deepEqual(counts(p[1].body), { must: 2, questions: 0, gaps: 0 });
   // the posted finding joins agreed with its lens, so a reworded repeat on that line still links
   const ag = prState(fx.state, N).agreed.find((a) => a.id === q.fingerprint);
   assert.equal(ag?.lens, "correctness");

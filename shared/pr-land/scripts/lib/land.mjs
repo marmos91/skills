@@ -1,18 +1,20 @@
-// Land one converged PR: check the live state, retarget stacked children, squash-merge through merge-async,
-// delete the branch, rebase the children, clean up locally, tick the tracking issue and close fixed issues.
+// Land one converged PR: check the live state, squash-merge through merge-async, retarget the stacked children,
+// delete the branch, rebase the children, tick the tracking issue, close fixed issues and clean up locally.
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scanOutbound } from "../../../pr-review/scripts/lib/secrets.mjs";
 import { threads } from "../../../pr-review/scripts/lib/github.mjs";
-import { openQuestions } from "../../../pr-review/scripts/lib/questions.mjs";
+import { waitingQuestions } from "../../../pr-review/scripts/lib/questions.mjs";
 import { readSummaryMarker, stateRoot } from "../../../pr-review/scripts/lib/state.mjs";
 import { aiMentions } from "../../../pr-open/scripts/lib/check.mjs";
 import { Blocked, Usage } from "../../../pr-open/scripts/lib/counts.mjs";
+import { readOverride } from "../../../pr-open/scripts/lib/detect.mjs";
+import { parentOf } from "../../../pr-open/scripts/lib/open.mjs";
 
 export { Blocked, Usage };
-export const STEPS = ["check", "retarget children", "merge", "delete branch", "rebase children", "issues", "local cleanup"];
+export const STEPS = ["check", "merge", "retarget children", "delete branch", "rebase children", "issues", "local cleanup"];
 const PR_FIELDS = "number,title,body,state,isDraft,headRefName,headRefOid,baseRefName,mergeable,reviewDecision,statusCheckRollup,reviews,closingIssuesReferences,isCrossRepository";
 const POLL_MS = () => Number(process.env.PR_LAND_POLL_MS ?? 2000);
 const POLLS = 150; // about 5 minutes at the default interval
@@ -107,12 +109,20 @@ function reviewGaps(pr, me, localQuestions) {
   return out;
 }
 
+const LIMIT = 1000;
+/** Open PRs whose base is this branch (a base is always a branch of this repo). More than LIMIT: blocked, never a partial list. */
+function prsOn(dir, branch) {
+  const prs = ghJson(dir, ["pr", "list", "--base", branch, "--state", "open", "--limit", String(LIMIT + 1), "--json", "number,headRefName,headRefOid,isCrossRepository,body"]);
+  if (prs.length > LIMIT) throw new Blocked(`more than ${LIMIT} open PRs are based on ${branch}: retarget them by hand`);
+  return prs;
+}
+
 /** Squash title and message: the PR title with (#N), the body without HTML comments. Blocked on a bad title, an AI mention or a secret. */
-export function squash(pr) {
+export function squash(pr, allow = []) {
   const title = `${pr.title.replace(/\s*\(#\d+\)\s*$/, "")} (#${pr.number})`;
   const message = (pr.body ?? "").replace(/<!--[\s\S]*?-->/g, "").trim();
   if (!/^[a-z]+(\([\w./-]+\))?!?: \S/.test(title) || title.length > 72) throw new Blocked(`retitle the PR as a concise conventional title (72 chars max): ${title}`);
-  const ai = aiMentions(`${title}\n${message}`);
+  const ai = aiMentions(`${title}\n${message}`, allow); // the allow list of .pr-open.json, as pr-open checks
   if (ai.length) throw new Blocked("AI or tool mentions in the squash title or message", { ai });
   const hits = secretHits(`${title}\n${message}`);
   if (hits.length) throw new Blocked("the secret scan found a hit in the squash title or message", { hits });
@@ -147,22 +157,26 @@ export async function land(dir, n, { dryRun = false } = {}) {
     pr = ghJson(dir, ["pr", "view", String(n), "--json", PR_FIELDS]);
     remote = remoteOf(dir, repo);
     const st = stateRoot(repo);
-    const localQuestions = (runId) => (existsSync(join(st, "pr", String(n), "runs", runId))
-      ? openQuestions(st).filter((q) => Number(q.pr) === n).length : null);
+    // The same set the marker counts: questions waiting on a person or on a run to apply the answer.
+    const localQuestions = (runId) => (existsSync(join(st, "pr", String(n), "runs", runId)) ? waitingQuestions(st, n).length : null);
     const why = notReady(pr, (await threads(repo, n)).filter((t) => !t.isResolved).length, ghJson(dir, ["api", "user"]).login, localQuestions);
     if (why.length) throw new Blocked(`#${n} is not ready`, { why });
-    msg = squash(pr);
+    msg = squash(pr, readOverride(dir).allow ?? []);
     // A base is always a branch of this repo, so a fork PR's head is nobody's base.
-    children = pr.isCrossRepository ? [] : ghJson(dir, ["pr", "list", "--base", pr.headRefName, "--state", "open", "--json", "number,headRefName,headRefOid,isCrossRepository"]);
+    children = pr.isCrossRepository ? [] : prsOn(dir, pr.headRefName);
   });
   const { headRefName: head, baseRefName: base, headRefOid: sha } = pr;
   if (dryRun) return { pr: n, dryRun: true, ...msg, base, children: children.map((c) => c.number), plan: STEPS.slice(1) };
 
-  // Retarget before anything is deleted: deleting a base closes the PRs stacked on it.
-  const managed = [];
-  await step("retarget children", () => {
+  // Merge first: a failed merge leaves every child where it was. The branch is deleted only after the retarget below.
+  await step("merge", async () => {
     // Keep the merged head locally: the rebase below needs it after the branch is gone.
     if (children.length) git(dir, "fetch", "-q", remote, `+refs/heads/${head}:refs/pr-land/${n}`);
+    await mergeAsync(dir, repo, pr, msg);
+  });
+
+  const managed = [];
+  await step("retarget children", () => {
     for (const c of children) {
       const r = ghRaw(dir, ["pr", "edit", String(c.number), "--base", base]);
       if (r.status === 0) continue;
@@ -170,7 +184,6 @@ export async function land(dir, n, { dryRun = false } = {}) {
       else throw new Error(`gh pr edit ${c.number} --base ${base} failed: ${String(r.stderr).trim()}`);
     }
   });
-  await step("merge", () => mergeAsync(dir, repo, pr, msg));
 
   await step("delete branch", async () => {
     for (const c of managed) {
@@ -182,7 +195,18 @@ export async function land(dir, n, { dryRun = false } = {}) {
       }
     }
     if (pr.isCrossRepository) return notes.push(`${head} is on a fork: not deleted`);
-    const r = ghRaw(dir, ["api", "-X", "DELETE", `repos/${repo}/git/refs/heads/${head}`]);
+    // Deleting a base closes the PRs on it: confirm none is left (a PR opened since the check, or one the list missed).
+    const left = prsOn(dir, head);
+    if (left.length) throw new Blocked(`${left.map((c) => `#${c.number}`).join(" ")} still based on ${head}: the branch was kept`);
+    const ref = `repos/${repo}/git/refs/heads/${head.split("/").map(encodeURIComponent).join("/")}`;
+    const now = ghRaw(dir, ["api", ref.replace("/git/refs/", "/git/ref/")]);
+    if (now.status !== 0) {
+      if (/Not Found|HTTP 404/i.test(now.stdout + now.stderr)) return notes.push(`${head} is already gone`); // the repo deletes merged branches itself
+      throw new Error(`reading ${head} failed: ${String(now.stderr).trim()}`);
+    }
+    const at = JSON.parse(now.stdout).object?.sha;
+    if (at !== sha) return notes.push(`${head} moved to ${String(at).slice(0, 7)} after the merge: kept`);
+    const r = ghRaw(dir, ["api", "-X", "DELETE", ref]);
     if (r.status !== 0 && !/Reference does not exist/i.test(r.stdout + r.stderr)) throw new Error(`deleting ${head} failed: ${String(r.stderr).trim()}`);
   });
 
@@ -192,6 +216,8 @@ export async function land(dir, n, { dryRun = false } = {}) {
     git(dir, "fetch", "-q", remote, `+refs/heads/${base}:refs/remotes/${remote}/${base}`);
     for (const c of children) {
       if (c.isCrossRepository) { notes.push(`#${c.number} is on a fork: not rebased`); continue; }
+      // A force-push rewrites someone's branch: only for a PR that pr-open opened as stacked on this head.
+      if (parentOf(c.body ?? "") !== head) { notes.push(`#${c.number} has no pr-open parent marker for ${head}: retargeted, not rebased`); continue; }
       git(dir, "fetch", "-q", remote, `+refs/heads/${c.headRefName}:refs/remotes/${remote}/${c.headRefName}`);
       const wt = mkdtempSync(join(tmpdir(), "pr-land-"));
       try {

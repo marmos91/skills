@@ -7,7 +7,7 @@ import { initRepo, commit, git } from "../../../pr-open/scripts/test/repo.mjs";
 import { ghStub } from "../../../pr-open/scripts/test/gh.mjs";
 import { notReady, repoOfUrl, squash, stackOrder, Blocked } from "../lib/land.mjs";
 import { main } from "../main.mjs";
-import { queueQuestion } from "../../../pr-review/scripts/lib/questions.mjs";
+import { answer, appliedAnswer, queueQuestion } from "../../../pr-review/scripts/lib/questions.mjs";
 import { stateRoot, summaryMarker } from "../../../pr-review/scripts/lib/state.mjs";
 
 // Pin the scanner: a secret-scan on the developer's PATH must not replace the fallback under test.
@@ -140,7 +140,9 @@ const routes = ({ A, B }, extra = {}) => ({
   "api user": { stdout: { login: ME } },
   "pr view 27": { stdout: ready({ headRefOid: A, reviews: [rv(mark(A))] }) },
   "graphql Threads": { stdout: { data: { repository: { pullRequest: { reviewThreads: { pageInfo: { hasNextPage: false }, nodes: [{ isResolved: true, comments: { nodes: [] } }] } } } } } },
-  "pr list --base feat/a": { stdout: [{ number: 29, headRefName: "feat/b", headRefOid: B, isCrossRepository: false }] },
+  // listed at the check, then (retargeted) gone before the delete
+  "pr list --base feat/a": [{ stdout: [{ number: 29, headRefName: "feat/b", headRefOid: B, isCrossRepository: false, body: "Stacked on #27.\n\n<!-- pr-open parent: feat/a -->\n" }] }, { stdout: [] }],
+  "api repos/o/r/git/ref/heads/feat/a": { stdout: { object: { sha: A } } },
   "pr edit 29": { stdout: "" },
   "api -X PUT repos/o/r/pulls/27/merge-async": { stdout: { status: "pending", details: { uuid: "u1" } } },
   "api repos/o/r/pulls/27/merge-async/u1": { stdout: { status: "merged", details: { message: "ok" } } },
@@ -163,7 +165,7 @@ async function run(t, dir, args) {
 const at = (gh, key) => gh.calls().findIndex((c) => c.key.startsWith(key));
 const mutations = (gh) => (existsSync(join(gh.dir, "mutations.jsonl")) ? readFileSync(join(gh.dir, "mutations.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
 
-test("a stacked child: retargeted before the merge, kept open, rebased on the new base; the tracking item ticked and the issue closed", async (t) => {
+test("a stacked child: retargeted after the merge and before the delete, kept open, rebased on the new base; the tracking item ticked and the issue closed", async (t) => {
   const s = stack();
   const gh = ghStub(routes(s));
   const { code, json } = await run(t, s.dir, ["27"]);
@@ -172,7 +174,8 @@ test("a stacked child: retargeted before the merge, kept open, rebased on the ne
   assert.deepEqual([r.retargeted, r.rebased, r.ticked, r.closed], [[29], [29], [12], [40]]);
 
   // retarget, then merge, then delete: never a delete while #29 still points at feat/a
-  assert.ok(at(gh, "pr edit 29 --base main") >= 0 && at(gh, "pr edit 29") < at(gh, "api -X PUT") && at(gh, "api -X PUT") < at(gh, "api -X DELETE"));
+  // merge, then retarget, then delete: a failed merge leaves #29 alone, and the branch never goes while #29 points at it
+  assert.ok(at(gh, "api -X PUT") >= 0 && at(gh, "api -X PUT") < at(gh, "pr edit 29 --base main") && at(gh, "pr edit 29") < at(gh, "api -X DELETE"));
   const put = gh.calls().find((c) => c.key.startsWith("api -X PUT")).argv;
   for (const f of ["merge_method=squash", `sha=${s.A}`, "commit_title=feat(x): a (#27)", "merge_action=direct_merge"]) assert.ok(put.includes(f), f);
   assert.ok(!gh.calls().some((c) => /\bclose\b/.test(c.key) && c.key.includes("29")), "#29 is never closed");
@@ -216,7 +219,7 @@ test("a child left on the old base by GitHub: the branch is kept, the run stops 
   }));
   const { code, json } = await run(t, s.dir, ["27"]);
   assert.equal(code, 4);
-  assert.deepEqual(json.done, ["check", "retarget children", "merge"]);
+  assert.deepEqual(json.done, ["check", "merge", "retarget children"]);
   assert.match(json.error, /#29 is closed on feat\/a.*feat\/a was kept/);
   assert.equal(at(gh, "api -X DELETE"), -1);
 });
@@ -230,6 +233,74 @@ test("a child that conflicts: the rebase is aborted, its branch untouched, the r
   assert.deepEqual(json.notDone, ["rebase children", "issues", "local cleanup"]);
   assert.equal(git(s.dir, "ls-remote", "upstream", "refs/heads/feat/b").split("\t")[0], s.B);
   assert.equal(git(s.dir, "worktree", "list").split("\n").length, 2); // the repo and the user's feat/a worktree: no temp one
+});
+
+test("a failed merge leaves the children where they were and deletes nothing", async (t) => {
+  const s = stack();
+  const gh = ghStub(routes(s, { "api repos/o/r/pulls/27/merge-async/u1": { stdout: { status: "failed", details: { message: "head moved" } } } }));
+  const { code, json } = await run(t, s.dir, ["27"]);
+  assert.equal(code, 4);
+  assert.deepEqual([json.done, json.error], [["check"], "merge failed: head moved"]);
+  assert.deepEqual(mutations(gh).map((m) => m.key.split(" ").slice(0, 4).join(" ")), ["api -X PUT repos/o/r/pulls/27/merge-async"]);
+});
+
+test("a PR still based on the head before the delete: the branch is kept and the run stops", async (t) => {
+  const s = stack();
+  const late = { number: 31, headRefName: "feat/c", headRefOid: s.B, isCrossRepository: false, body: "" };
+  const gh = ghStub(routes(s, { "pr list --base feat/a": [{ stdout: [] }, { stdout: [late] }] }));
+  const { code, json } = await run(t, s.dir, ["27"]);
+  assert.equal(code, 2);
+  assert.match(json.blocked, /#31 still based on feat\/a: the branch was kept/);
+  assert.equal(at(gh, "api -X DELETE"), -1);
+});
+
+test("more children than one list holds: blocked before the merge", async (t) => {
+  const s = stack();
+  const many = Array.from({ length: 1001 }, (_, i) => ({ number: 100 + i, headRefName: `x${i}`, headRefOid: s.B, isCrossRepository: false, body: "" }));
+  const gh = ghStub(routes(s, { "pr list --base feat/a": { stdout: many } }));
+  const { code, json } = await run(t, s.dir, ["27"]);
+
+  assert.equal(code, 2, JSON.stringify(json).slice(0, 400));
+  assert.match(json.blocked, /more than 1000 open PRs are based on feat\/a/);
+  assert.ok(gh.calls().find((c) => c.key.startsWith("pr list --base")).argv.includes("1001"));
+  assert.deepEqual(mutations(gh), []);
+});
+
+test("a PR on the head without pr-open's parent marker: retargeted so it stays open, never rebased or force-pushed", async (t) => {
+  const s = stack();
+  const gh = ghStub(routes(s, { "pr list --base feat/a": [{ stdout: [{ number: 29, headRefName: "feat/b", headRefOid: s.B, isCrossRepository: false, body: "Unrelated work on feat/a." }] }, { stdout: [] }] }));
+  const { code, json } = await run(t, s.dir, ["27"]);
+  assert.equal(code, 0, JSON.stringify(json));
+  assert.deepEqual([json.landed[0].retargeted, json.landed[0].rebased], [[29], []]);
+  assert.ok(json.landed[0].notes.includes("#29 has no pr-open parent marker for feat/a: retargeted, not rebased"));
+  assert.equal(git(s.dir, "ls-remote", "upstream", "refs/heads/feat/b").split("\t")[0], s.B);
+  assert.ok(at(gh, "pr edit 29") >= 0);
+});
+
+test("the delete: each path segment encoded, and only when the branch is still at the merged head", async (t) => {
+  for (const [name, at0, deleted] of [["fix#12/a%2Fb", null, true], ["feat/a", "c".repeat(40), false]]) {
+    const s = stack();
+    const enc = name.split("/").map(encodeURIComponent).join("/");
+    const gh = ghStub(routes(s, {
+      "pr view 27": { stdout: ready({ headRefOid: s.A, headRefName: name, reviews: [rv(mark(s.A))] }) },
+      [`pr list --base ${name}`]: { stdout: [] },
+      [`api repos/o/r/git/ref/heads/${enc}`]: { stdout: { object: { sha: at0 ?? s.A } } },
+      [`api -X DELETE repos/o/r/git/refs/heads/${enc}`]: { stdout: "" },
+    }));
+    const { code, json } = await run(t, s.dir, ["27"]);
+    assert.equal(code, 0, JSON.stringify(json));
+    assert.equal(mutations(gh).some((m) => m.key === `api -X DELETE repos/o/r/git/refs/heads/${enc}`), deleted, name);
+    if (!deleted) assert.ok(json.landed[0].notes.includes("feat/a moved to ccccccc after the merge: kept"));
+  }
+});
+
+test("the AI-mention check takes the allow list of .pr-open.json", async (t) => {
+  const s = stack();
+  writeFileSync(join(s.dir, ".pr-open.json"), JSON.stringify({ allow: ["copilot"] }));
+  ghStub(routes(s, { "pr view 27": { stdout: ready({ headRefOid: s.A, reviews: [rv(mark(s.A))], body: "Asks Copilot for a review.\n\nCloses #40\n" }) } }));
+  const { code, json } = await run(t, s.dir, ["27", "--dry-run"]);
+  assert.equal(code, 0, JSON.stringify(json));
+  assert.throws(() => squash(ready({ body: "Asks Copilot." })), /AI or tool mentions/);
 });
 
 test("a fork PR: no children, its head branch kept; a closing reference to another repo is left alone", async (t) => {
@@ -270,16 +341,25 @@ test("no git remote points at the PR's repo: nothing is merged", async (t) => {
   assert.deepEqual(mutations(gh), []);
 });
 
-test("a question still open in pr-review's local state blocks, though the marker says none", async (t) => {
+test("a question in pr-review's local state blocks, though the marker says none, until a run applies the answer", async (t) => {
   const s = stack();
   const st = stateRoot("o/r");
   mkdirSync(join(st, "pr", "27", "runs", "r1"), { recursive: true });
-  queueQuestion(st, { pr: 27, sha: s.A, fingerprint: "f".repeat(40), file: "a.txt", line: 1, snippet: "a", finding: { title: "t", severity: "should" }, sides: { keep: "k", drop: "d" }, failure: "" });
+  const id = queueQuestion(st, { pr: 27, sha: s.A, fingerprint: "f".repeat(40), file: "a.txt", line: 1, snippet: "a", finding: { title: "t", severity: "should" }, sides: { keep: "k", drop: "d" }, failure: "" });
   t.after(() => rmSync(st, { recursive: true, force: true }));
   const gh = ghStub(routes(s));
   const { code, json } = await run(t, s.dir, ["27"]);
   assert.equal(code, 2);
   assert.deepEqual(json.why, ["1 pr-review question not settled"]);
+  // answered "post", not yet posted by a pr-review run: the finding is not on GitHub yet, so it still blocks
+  answer(st, id, "post");
+  const again = await run(t, s.dir, ["27"]);
+  assert.deepEqual([again.code, again.json.why], [2, ["1 pr-review question not settled"]]);
+  appliedAnswer(st, id);
+  // a loop question (approve) is not about the code: it does not block
+  queueQuestion(st, { pr: 27, sha: s.A, fingerprint: "e".repeat(40), file: "", line: 0, snippet: "", finding: { kind: "approve", title: "Approve?" }, sides: { keep: "k", drop: "d" }, failure: "" });
+  const third = await run(t, s.dir, ["27", "--dry-run"]);
+  assert.equal(third.code, 0, JSON.stringify(third.json));
   assert.deepEqual(mutations(gh), []);
 });
 

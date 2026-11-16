@@ -1,6 +1,7 @@
 // Test stand-in for `gh`. Routes live in $GH_STUB_DIR/routes.json:
 //   { "<key>": { "stdout": <json|string>, "stderr": "...", "exit": 0 } }
 // key = argv joined with spaces; for `api graphql` it is "graphql <OperationName>". A route can also be a prefix of the key.
+// A route that is an array answers its calls in turn (the last entry repeats), for state that changes between calls.
 // Every mutation (GraphQL `mutation`, REST POST/PATCH/PUT/DELETE) is appended to mutations.jsonl.
 import { readFileSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
@@ -31,8 +32,13 @@ const routes = JSON.parse(readFileSync(join(dir, "routes.json"), "utf8"));
 const page = vars ? ["cursor", "cc", "rc"].filter((k) => typeof vars[k] === "string").map((k) => `${k}=${vars[k]}`).join(" ") : "";
 // Else the longest route that is a prefix of the key (word by word), for calls with free text such as `pr create --title`.
 const prefix = Object.keys(routes).filter((k) => key.startsWith(k + " ")).sort((a, b) => b.length - a.length)[0];
-const r = (page && routes[`${key} ${page}`]) || routes[key] || routes[prefix];
+let r = (page && routes[`${key} ${page}`]) || routes[key] || routes[prefix];
+if (Array.isArray(r)) {
+  const nth = readFileSync(join(dir, "calls.jsonl"), "utf8").split("\n").filter((l) => l && JSON.parse(l).key === key).length - 1;
+  r = r[Math.min(nth, r.length - 1)];
+}
 if (!r) { console.error(`gh-stub: no route for key: ${key}`); process.exit(1); }
 if (r.stderr) process.stderr.write(r.stderr);
+// exitCode, not exit(): exit() cuts a large answer on a pipe at 64 KB
 if (r.stdout !== undefined) process.stdout.write(typeof r.stdout === "string" ? r.stdout : JSON.stringify(r.stdout));
-process.exit(r.exit ?? 0);
+process.exitCode = r.exit ?? 0;

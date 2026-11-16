@@ -301,7 +301,11 @@ Each posted body ends with a hidden marker:
 later run links a repeat of any of these findings to the thread. The summary
 of a full review adds `must=<n> questions=<n> gaps=<n>`: the open must
 findings, the questions waiting, and the lenses not run, seats dropped and
-parts missed, as they stand when the review is posted. It is the last line
+parts missed, as they stand when the review is posted. Questions are the
+finding questions on the PR that wait on you or on a run to apply your
+answer (`waitingQuestions` in `questions.mjs`). A follow-up that posts
+findings writes the same fields: the full review's counts plus the musts it
+posts, minus the questions it settles. It is the last line
 of the body; a marker anywhere else is ignored. `pr-land` reads them
 (`summaryMarker` and `readSummaryMarker` in `state.mjs`).
 
