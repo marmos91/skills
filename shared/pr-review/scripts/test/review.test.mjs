@@ -963,7 +963,7 @@ test("a finding whose inline marker is already on GitHub is not posted again", a
   const key = createHash("sha1").update(`inline\0${fx.head}\0${fingerprint(F())}\0a.js\0${2}`).digest("hex");
   // one review comment among many (past the old 100-per-review window)
   const many = Array.from({ length: 150 }, (_, i) => ({ body: `c${i}`, user: { login: ME } }));
-  routes(fx, { reviewComments: [...many, { body: `x <!-- pr-review run=r sha=s key=${key} fp=${fingerprint(F())} -->`, user: { login: ME } }] });
+  routes(fx, { reviewComments: [...many, { body: `x\n\n<!-- pr-review run=r sha=s key=${key} fp=${fingerprint(F())} -->`, user: { login: ME } }] });
   const second = C("c2", { line: 3, title: "Second" });
   const { r } = await go(fx, happy({ merge: [C("c1"), second], "v~2": [keep("c1"), keep("c2")],
     compose: { body: "S.", comments: [{ id: "c1", body: "**must:** one" }, { id: "c2", body: "**must:** two" }] } }));

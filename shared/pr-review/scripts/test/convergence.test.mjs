@@ -1,5 +1,4 @@
 import test from "node:test";
-import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { fingerprint, findingKey, settledKey, allowedSeverities, filterNew, budgetLeft, learnKey } from "../lib/convergence.mjs";
