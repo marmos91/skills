@@ -79,7 +79,10 @@ answer (a stale answer, on code that changed, is not): its learn key and
 title go to the local `learnings.md` in the state folder, and the run prints
 the line. Later reviews of the repo skip it. To share it, ask the user to commit the line to
 `.pr-review/learnings.md` on the base branch, which every review reads.
-`pr-respond decline --wrong` on a council finding is learned the same way. Never push
+`pr-respond decline --wrong` on a council finding is learned the same way; a
+comment posted before the engine wrote `learn=` in its marker cannot be learned.
+`sh "$SKILL_DIR/scripts/pr-review" learnings forget <key>` removes a key from
+the local file; a line on the base branch the user removes there. Never push
 to the base branch yourself.
 
 ## Core paths (exit 3, summary starts with `core paths not set`)
