@@ -202,13 +202,15 @@ export function codeMoved(repoDir, q, head) {
   return shift !== 0;
 }
 
-// The trimmed text of file:line at sha, "" when git cannot show it: the code anchor of a settled entry.
+// The trimmed text of file:line at sha, "" when git cannot show it, null past the end of the file: the code anchor
+// of a settled entry.
 function anchors(dir, sha) {
   const files = new Map();
   return (file, line) => {
     if (!file || !Number.isInteger(line)) return "";
-    if (!files.has(file)) { let t = ""; try { t = git(dir, ["show", `${sha}:${file}`]); } catch { /* no anchor */ } files.set(file, t.split("\n")); }
-    return files.get(file)[line - 1]?.trim() ?? "";
+    if (!files.has(file)) { let t = null; try { t = git(dir, ["show", `${sha}:${file}`]).replace(/\n$/, "").split("\n"); } catch { /* no anchor */ } files.set(file, t); }
+    const lines = files.get(file);
+    return !lines ? "" : line > lines.length ? null : lines[line - 1].trim();
   };
 }
 
@@ -784,7 +786,8 @@ async function once(o, restart) {
   const recorded = [...clean, ...folded.filter((c) => clean.some((h) => h.id === hostOf.get(c.id)))];
   let st = prState(repoState, n);
   if (st.lastRunId !== runId) { // a rerun after a crash here must not count the review twice
-    const fps = [...recorded, ...older, ...rejected, ...hygItems].map((c) => settledKey(c.fp, c.line, anchor(c.file, c.line)));
+    // a finding still settled by an entry an older engine wrote (fp:line) gets its anchored key, so it stays settled once it moves
+    const fps = [...recorded, ...older, ...rejected, ...hygItems, ...dropped.filter((d) => d.reason === "settled").map((d) => d.finding)].map((c) => settledKey(c.fp, c.line, anchor(c.file, c.line)));
     Object.assign(st, {
       reviews: st.reviews + 1, lastReviewedSha: f.headSha, lastRunId: runId, settled: [...new Set([...st.settled, ...fps])],
       counts: { sha: f.headSha, ...counts() }, // a follow-up at this head starts from these

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { fingerprint, findingKey, settledKey, allowedSeverities, filterNew, budgetLeft, learnKey } from "../lib/convergence.mjs";
 
 const f = (o = {}) => ({ lens: "bugs", file: "a.js", line: 42, severity: "must", title: "Null deref in parse()", ...o });
@@ -56,6 +57,16 @@ test("a third instance is new although the settled ones are not passed in (linke
   const settled = new Set([settledKey(fp, 10, "a.parse()"), settledKey(fp, 20, "b.parse()")]);
   const r = filterNew([f({ line: 99 })], { reviewNumber: 2, settled, changedLines: new Map(), anchor: code({ 10: "a.parse()", 20: "b.parse()", 99: "c.parse()" }) });
   assert.deepEqual(r.keep.map((x) => x.line), [99]);
+});
+test("#92: a whitespace-only edit to a settled line keeps it settled, also for an entry hashed before", () => {
+  const anchor = code({ 42: "if (a  &&\tb) x.parse()" });
+  for (const settled of [new Set([settledKey(fp, 42, "if (a && b) x.parse()")]), new Set([`${fp}@${createHash("sha1").update("if (a  &&\tb) x.parse()").digest("hex").slice(0, 16)}`])]) {
+    assert.deepEqual(filterNew([f()], { reviewNumber: 2, settled, changedLines: new Map(), anchor }).dropped.map((d) => d.reason), ["settled"]);
+  }
+});
+test("#92: a finding past the end of its file is dropped, never keyed fp:line", () => {
+  const r = filterNew([f({ line: 99 })], { reviewNumber: 1, settled: new Set(), changedLines: new Map(), anchor: () => null });
+  assert.deepEqual(r.dropped.map((d) => d.reason), ["past end of file"]);
 });
 test("titles that normalize to empty fall back to the case", () => {
   assert.notEqual(fingerprint(f({ title: "1.", case: "a -> b" })), fingerprint(f({ title: "2!", case: "c -> d" })));

@@ -34,12 +34,13 @@ export const EFFORT_AUTO_DEFAULTS = {
   ],
 };
 
-const seat = (harness, model, thinking) => ({ harness, model, thinking, max_turns: 40, timeout_minutes: 15 });
+// Measured on larger PRs at medium effort: mimir needs up to 60 turns and 25 minutes, mimir-pro up to 25 minutes.
+const seat = (harness, model, thinking, max_turns = 40, timeout_minutes = 15) => ({ harness, model, thinking, max_turns, timeout_minutes });
 
 export const DEFAULTS = {
   effort: "medium",
   effort_auto: EFFORT_AUTO_DEFAULTS,
-  seats: [seat("claude", "opus", "high"), seat("auto", "cubbit/mimir", "medium"), seat("auto", "cubbit/mimir-pro", "medium")],
+  seats: [seat("claude", "opus", "high"), seat("auto", "cubbit/mimir", "medium", 60, 25), seat("auto", "cubbit/mimir-pro", "medium", 40, 25)],
   round1: "per-seat",
   lenses: Object.fromEntries(LENSES.map((l) => [l, { enabled: true }])),
   judge: { harness: "claude", model: "opus", thinking: "high" },

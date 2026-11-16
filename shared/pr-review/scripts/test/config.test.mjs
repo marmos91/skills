@@ -16,8 +16,11 @@ const tmp = (text) => {
 test("defaults match spec §5", () => {
   const c = loadConfig({});
   assert.deepEqual(c.seats.map((s) => [seatId(s), s.thinking, s.max_turns, s.timeout_minutes]), [
-    ["claude:opus", "high", 40, 15], ["auto:cubbit/mimir", "medium", 40, 15], ["auto:cubbit/mimir-pro", "medium", 40, 15],
+    ["claude:opus", "high", 40, 15], ["auto:cubbit/mimir", "medium", 60, 25], ["auto:cubbit/mimir-pro", "medium", 40, 25],
   ]);
+  // #92: the example shows the same limits
+  const ex = loadConfig({ userPath: fileURLToPath(example) });
+  assert.deepEqual(ex.seats.map((s) => [s.max_turns, s.timeout_minutes]), c.seats.map((s) => [s.max_turns, s.timeout_minutes]));
   assert.equal(c.round1, "per-seat");
   assert.equal(c.loop.max_review_rounds, 3);
   assert.deepEqual([c.review.ci, c.review.max_diff_lines, c.review.chunk_lines, c.review.max_children, c.review.max_parallel], ["use", 6000, 500, 60, 9]);

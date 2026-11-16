@@ -406,10 +406,14 @@ They apply to a manual `review` and to the loop.
    fingerprint). A fingerprint that was dropped by the vote, answered by you,
    or resolved is not raised again unless the code at that place changed.
    The settled list records the fingerprint with its code anchor: the
-   trimmed text of the finding's line. A finding whose line text matches a
-   settled entry stays settled wherever the line moved; another instance on
-   other code is new. With no anchor (a blank line), and for entries an older
-   engine wrote, the entry is the fingerprint and line number.
+   text of the finding's line with its whitespace collapsed, so a reindent
+   keeps it settled. A finding whose line text matches a settled entry stays
+   settled wherever the line moved; another instance on other code is new.
+   Two lines that read exactly the same share one entry: settling one settles
+   both. With no anchor (a blank line), and for entries an older engine
+   wrote, the entry is the fingerprint and line number; the first time such
+   an entry drops a finding, the engine also records its anchor. A finding on
+   a line past the end of its file is dropped at the merge step.
 4. **No contradiction.** The merge step drops a finding that asks for the
    opposite of an earlier agreed finding, and records the drop.
 5. **Review budget.** `loop.max_review_rounds` (default 3) automatic reviews
@@ -900,8 +904,8 @@ decider and `round1` belong to you.
   // Default council. Each seat runs every lens that has no override.
   "seats": [
     { "harness": "claude", "model": "opus",             "thinking": "high",   "max_turns": 40, "timeout_minutes": 15 },
-    { "harness": "auto",   "model": "cubbit/mimir",     "thinking": "medium", "max_turns": 40, "timeout_minutes": 15 },
-    { "harness": "auto",   "model": "cubbit/mimir-pro", "thinking": "medium", "max_turns": 40, "timeout_minutes": 15 }
+    { "harness": "auto",   "model": "cubbit/mimir",     "thinking": "medium", "max_turns": 60, "timeout_minutes": 25 },
+    { "harness": "auto",   "model": "cubbit/mimir-pro", "thinking": "medium", "max_turns": 40, "timeout_minutes": 25 }
   ],
   "round1": "per-seat",
   // Per-lens override: this lens uses only these seats, in its own children.
@@ -1053,9 +1057,11 @@ on #10 (5 real defects, 1 of them a must):
 
 So Mimir seats think at their own level in round 1 and at `off` in the vote
 and merge stages (`thinking_by_stage`). mimir-pro reasons even at `off`, and
-at `medium` one round 1 took 21 minutes; the default council therefore caps
-it with `max_turns: 40` and `timeout_minutes: 15`, and a seat that hits a cap
-is dropped (the review then never approves).
+at `medium` one round 1 took 21 minutes. On larger PRs at `medium`, mimir
+needed up to 60 turns and 25 minutes, and mimir-pro timed out at 15 minutes on
+most PRs. The default council therefore gives mimir `max_turns: 60` and
+`timeout_minutes: 25`, and mimir-pro `max_turns: 40` and `timeout_minutes: 25`.
+A seat that hits a cap is dropped (the review then never approves).
 
 ## pr-respond
 
