@@ -1009,7 +1009,7 @@ test("per-stage thinking reaches the children: cubbit seats vote with thinking o
 const dropOf = (reason) => async (o) => { const { SeatDropped } = await import("../lib/child.mjs"); throw new SeatDropped(o.seat, reason); };
 const runJson = (r) => JSON.parse(readFileSync(join(r.runDir, "run.json"), "utf8"));
 
-test("a seat that hits its turn limit in round 1 is dropped: the rest of the council posts, the summary names it", async () => {
+test("a seat that hits its turn limit in round 1 is dropped: the rest of the council posts, the summary leaves the seat out", async () => {
   const fx = fixture(); routes(fx);
   const { r, run } = await go(fx, happy({ "all~2": dropOf("turn limit") }));
   assert.equal(r.exit, 0, r.summary);
@@ -1251,7 +1251,7 @@ test("too many children for the parts: a config effort steps down; an explicit -
   }
 });
 
-test("split PR: a seat that misses one part keeps its other parts and its vote; the summary says so; no APPROVE", async () => {
+test("split PR: a seat that misses one part keeps its other parts and its vote; run.json records it; no APPROVE", async () => {
   const fx = splitFixture({});
   const { r, run } = await go(fx, happy({ "all~2@1": dropOf("turn limit") }));
   assert.equal(r.exit, 0, r.summary);
