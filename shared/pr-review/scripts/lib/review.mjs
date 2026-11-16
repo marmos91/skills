@@ -324,7 +324,7 @@ async function once(o, restart) {
     f.mutants = mutants;
   } else markDone(runDir, "setup");
   // Static analysis (#70) at every depth: its hits are security candidates for the vote, never posted as they are.
-  const sast = runSast(f, config, run.lenses, changedLines(f), join(runDir, "sast.json"), log);
+  const sast = await runSast(f, config, run.lenses, changedLines(f), join(runDir, "sast.json"), log);
   f.checked = depthLine(depth, setup, safeText) + sastLine(sast); // the "What was checked" line of the summary (#46)
   if (o.until === "setup") return finish("setup");
 
