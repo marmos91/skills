@@ -12,7 +12,8 @@ import { ChildFailed } from "../lib/child.mjs";
 import { decide as realDecide } from "../lib/decider.mjs";
 import { answer, openQuestions } from "../lib/questions.mjs";
 import { stateRoot, prState, readSummaryMarker, savePrState } from "../lib/state.mjs";
-import { fingerprint } from "../lib/convergence.mjs";
+import { fingerprint, learnKey } from "../lib/convergence.mjs";
+import { learn } from "../lib/learnings.mjs";
 import * as github from "../lib/github.mjs";
 import { queueCoreQuestion, saveCorePaths } from "../lib/setup.mjs";
 // The verdict counts of a review body, read the way pr-land reads them.
@@ -33,7 +34,7 @@ const S0 = "claude:opus", S1 = "auto:cubbit/mimir", S2 = "auto:cubbit/mimir-pro"
 
 const git = (cwd, ...args) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 const commit = (dir, files, msg) => {
-  for (const [p, text] of Object.entries(files)) writeFileSync(join(dir, p), text);
+  for (const [p, text] of Object.entries(files)) { mkdirSync(dirname(join(dir, p)), { recursive: true }); writeFileSync(join(dir, p), text); }
   git(dir, "add", "-A"); git(dir, "commit", "-qm", msg);
   return git(dir, "rev-parse", "HEAD");
 };
@@ -136,7 +137,7 @@ test("happy path posts one review with inline comments and the marker", async ()
   assert.deepEqual(counts(p[0].body), { must: 1, questions: 0, gaps: 0 });
   assert.equal(p[0].threads.length, 1);
   assert.deepEqual([p[0].threads[0].path, p[0].threads[0].line, p[0].threads[0].side], ["a.js", 2, "RIGHT"]);
-  assert.match(p[0].threads[0].body, new RegExp(`^\\*\\*must:\\*\\* off by one\n\n<!-- pr-review run=.* key=[0-9a-f]{40} fp=${fingerprint(F())} -->$`));
+  assert.match(p[0].threads[0].body, new RegExp(`^\\*\\*must:\\*\\* off by one\n\n<!-- pr-review run=.* key=[0-9a-f]{40} learn=${learnKey(F())} fp=${fingerprint(F())} -->$`));
   // round 2 only for the seat that did not find c1
   assert.deepEqual(run.calls.map((c) => c.k).sort(), ["all~0", "all~1", "all~2", "compose", "merge", "v~2"]);
   const st = prState(fx.state, N);
@@ -144,6 +145,19 @@ test("happy path posts one review with inline comments and the marker", async ()
   assert.equal(st.lastReviewedSha, fx.head);
   assert.ok(st.settled.includes(fingerprint(F())));
   assert.equal(existsSync(join(r.runDir, "post.done")), true);
+});
+
+test("learnings: a fingerprint in .pr-review/learnings.md on the base branch, or in the local file, is not raised", async () => {
+  const line = `- ${learnKey(F())} PR #3: not a bug\n`;
+  const fx = fixture({ ".pr-review/learnings.md": line }); routes(fx);
+  const a = await go(fx, happy());
+  assert.equal(a.r.exit, 0, a.r.summary);
+  assert.ok(!a.run.calls.some((c) => c.k === "v~2"), "dropped before the vote");
+  assert.equal(posts(fx)[0]?.threads?.length ?? 0, 0);
+  const fx2 = fixture(); routes(fx2);
+  learn(fx2.state, [learnKey(F())], "PR #3: not a bug");
+  const b = await go(fx2, happy());
+  assert.ok(!b.run.calls.some((c) => c.k === "v~2"), "local file");
 });
 
 test("rerun after a crash before markDone(post) does not post again", async () => {
@@ -648,7 +662,7 @@ test("thread linking: only our own thread with an engine marker of an agreed fin
   const fx0 = fixture(); routes(fx0);
   await go(fx0, happy());
   const real = posts(fx0)[0].threads[0].body;
-  assert.match(real, /key=[0-9a-f]{40} fp=[0-9a-f]{40} -->$/);
+  assert.match(real, /key=[0-9a-f]{40} learn=[0-9a-f]{40} fp=[0-9a-f]{40} -->$/);
   const state0 = prState(fx0.state, N);
   for (const [threads, kept] of [
     [[thread("T1", "bob", real)], true],
@@ -937,6 +951,26 @@ test("7.4: an answer from an older sha is dropped with a note when the finding's
   }
 });
 
+test("a drop answer is learned when the next run applies it", async () => {
+  const fx = fixture(); routes(fx);
+  const first = await go(fx, split());
+  answer(fx.state, basename(first.r.questions[0], ".md"), "drop");
+  pushHead(fx, ["const a = 2;", "const b = 3;", "const c = 4;", "const d = 50;"]);
+  const { r } = await go(fx, split());
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(readFileSync(join(fx.state, "learnings.md"), "utf8"), `- ${learnKey(F())} PR #5: Off by one\n`);
+});
+
+test("a dry run with an answered drop learns nothing", async () => {
+  const fx = fixture(); routes(fx);
+  const first = await go(fx, split());
+  answer(fx.state, basename(first.r.questions[0], ".md"), "drop");
+  pushHead(fx, ["const a = 2;", "const b = 3;", "const c = 4;", "const d = 50;"]);
+  const { r } = await go(fx, split(), { dryRun: true });
+  assert.equal(r.exit, 0, r.summary);
+  assert.equal(existsSync(join(fx.state, "learnings.md")), false);
+});
+
 test("7.4: a stale 'drop' never turns a must the whole council now agrees on into APPROVE", async () => {
   const fx = fixture(); routes(fx);
   const first = await go(fx, split());
@@ -949,6 +983,7 @@ test("7.4: a stale 'drop' never turns a must the whole council now agrees on int
   assert.equal(p.event, "REQUEST_CHANGES");
   assert.deepEqual(p.threads.map((t) => t.line), [2]);
   assert.ok(JSON.parse(readFileSync(join(fx.state, "questions", `${id}.json`), "utf8")).appliedAt);
+  assert.equal(existsSync(join(fx.state, "learnings.md")), false, "a stale drop is not learned");
 });
 
 test("7.4: a re-found split whose stale answer was dropped is asked again as a fresh question", async () => {

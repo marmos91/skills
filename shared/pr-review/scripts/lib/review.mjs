@@ -10,7 +10,8 @@ import { frame as realFrame, git, readTree, cleanupWorktree, HeadMoved, DiffTooL
 import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.mjs";
 import { tally } from "./tally.mjs";
 import { validate } from "./schema.mjs";
-import { allowedSeverities, filterNew, fingerprint } from "./convergence.mjs";
+import { allowedSeverities, filterNew, fingerprint, learnKey } from "./convergence.mjs";
+import { learn, learnedKeys, parseMarker, suggestion } from "./learnings.mjs";
 import { codeLink, diffLine, linkRefs, parseHunks, place } from "./hunks.mjs";
 import { verdict } from "./verdict.mjs";
 import { redact, scanOutbound } from "./secrets.mjs";
@@ -33,15 +34,21 @@ const save = (f, v) => writeAtomic(f, JSON.stringify(v, null, 2) + "\n");
 const headFile = (dir, sha, p) => { try { return /^100\d{3} blob /.test(git(dir, ["ls-tree", sha, "--", p])); } catch { return false; } };
 // The dedupe key of an inline comment: a fingerprint can post at 2 lines (split clusters), each its own thread.
 const inlineKeyOf = (sha, fp, file, line) => sha1(`inline\0${sha}\0${fp}\0${file}\0${line}`);
-const marker = (runId, sha, key, fp) => `<!-- pr-review run=${runId} sha=${sha} key=${key}${fp ? ` fp=${fp}` : ""} -->`;
+// learn= carries the learn key of each finding, which a decline learns (learnings.mjs).
+const marker = (runId, sha, key, fp, learn) => `<!-- pr-review run=${runId} sha=${sha} key=${key}${learn ? ` learn=${learn}` : ""}${fp ? ` fp=${fp}` : ""} -->`;
 // Fields the seats and the judge see; engine bookkeeping stays out of prompts.
 const view = ({ seats, fp, answered, ...c }) => c;
+// A drop answer is learned when a run applies it, not when it is given: a stale answer is never learned.
+const learnDrop = (o, q) => {
+  if (q.answer !== "drop" || q.finding?.secret) return;
+  const lines = learn(o.repoState, [learnKey(q.finding)], `PR #${q.pr}: ${q.finding.title ?? ""}`, o.repo);
+  if (lines.length) o.log(suggestion(lines));
+};
 // GitHub text that the engine puts into a posted body: no markup, no mentions, no marker look-alikes.
 export const safeText = (s) => String(s ?? "").replace(/[<>@`]/g, "").replace(/\s+/g, " ").trim().slice(0, 80);
 // The masked hits (fp included, never the value) of an answered "post" that still hits after redaction.
 const stillHeld = (where, hits) => `${where}: answered "post", but the comment still hits after redaction: ${hits.join("; ")}. Not posted; asked again. Remove the value, or allow a hit by its fp in secret-scan's allow.txt${hits.some((h) => !/fp [0-9a-f]{12}/.test(h)) ? " (a hit with no fp is from gitleaks: use a gitleaks:allow comment or a GITLEAKS_CONFIG allowlist)" : ""}`;
 const ruleIds = (hits) => [...new Set(hits.map((h) => h.split(":")[0]))].join(", ");
-const MARKER_FP = /<!-- pr-review run=\S+ sha=\S+ key=[0-9a-f]{40} fp=([0-9a-f]{40}(?:,[0-9a-f]{40})*) -->/;
 
 /** Config, flag or state problems: exit 1, not a failed stage. */
 export class SetupError extends Error { constructor(m) { super(m); this.name = "SetupError"; } }
@@ -379,6 +386,7 @@ async function once(o, restart) {
 
   // Merge (spec 6.4, 7.5 rule 4): a cluster that reverses an earlier agreed finding is dropped and recorded.
   const pst = pst0;
+  const learned = learnedKeys(repoState, f.learnings);
   const raw = Object.values(bySeat).some((x) => x.length)
     ? await child(ctx, "merge", "merge", { seat: config.judge, schema: "merge", prompt: (s) => mergePrompt(f, bySeat, pst.agreed ?? [], s.max_turns) })
     : [];
@@ -390,7 +398,7 @@ async function once(o, restart) {
   // The judge may reword a repeat (other fingerprint), so an agreed thread on the same line also links a cluster of
   // the SAME lens; a cluster of another lens on that line is a different finding and is kept.
   const agreedLens = new Map((pst.agreed ?? []).map((a) => [a.id, a.lens]));
-  const ours = threads.filter((t) => t.comments[0]?.author === me && t.line != null).map((t) => ({ t, keys: (MARKER_FP.exec(t.comments[0].body ?? "")?.[1] ?? "").split(",").filter(Boolean) }));
+  const ours = threads.filter((t) => t.comments[0]?.author === me && t.line != null).map((t) => ({ t, keys: parseMarker(t.comments[0].body).fps }));
   const resolvedThread = (c) => ours.some(({ t, keys }) => t.path === c.file && t.line === c.line &&
     keys.some((key) => key === c.fp || (agreedLens.has(key) && agreedLens.get(key) === c.lens)));
   const all = raw.filter((c) => run.lenses.includes(c.lens)).map((c) => {
@@ -400,7 +408,7 @@ async function once(o, restart) {
   });
   const reversed = all.filter((c) => c.reverses), linked = all.filter((c) => !c.reverses && resolvedThread(c));
   const { keep: clusters, dropped } = filterNew(all.filter((c) => !c.reverses && !resolvedThread(c)), {
-    reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: changedLines(f),
+    reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: changedLines(f), learned,
   });
   save(join(runDir, "clusters.json"), { clusters, reversed, linked, dropped });
   markDone(runDir, "merge");
@@ -428,7 +436,7 @@ async function once(o, restart) {
   if (o.until === "tally") return finish("tally");
 
   // Decide (spec 6.7): jev settles splits; otherwise a question. A finding of one seat, or settled by jev, asks the author.
-  const agreed = [], rejected = [], open = [], applied = [];
+  const agreed = [], rejected = [], open = [], applied = [], drops = [];
   // Marco's answers win over the tally, from this run or an earlier one (the loop posts without the finding).
   const answers = new Map(pendingAnswers(repoState).filter((q) => q.pr === n).map((q) => [q.fingerprint, q]));
   const repoDir = o.repoDir ?? process.cwd();
@@ -439,7 +447,7 @@ async function once(o, restart) {
   };
   const take = (q, c) => {
     if (!applied.includes(q.id)) applied.push(q.id);
-    if (q.answer === "drop") rejected.push(c);
+    if (q.answer === "drop") { rejected.push(c); drops.push(q); }
     else agreed.push({ ...c, ask_author: q.answer === "ask-author", answered: q.answer });
   };
   // the question is per fingerprint, so its answer settles every cluster with that fp (the fp has no line)
@@ -496,7 +504,7 @@ async function once(o, restart) {
   // same delta and severity filters as a council finding.
   if (depth === "full") {
     applyProof(agreed, tallied, fids);
-    const mf = filterNew(mutantFindings(mutants), { reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: changedLines(f) }).keep;
+    const mf = filterNew(mutantFindings(mutants), { reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: changedLines(f), learned }).keep;
     agreed.push(...mf.map((m, i) => ({ ...m, id: `m${i + 1}`, found: [], seats: [], fp: fingerprint(m) })));
   }
 
@@ -513,7 +521,7 @@ async function once(o, restart) {
   const belowFloor = agreed.filter((c) => !c.answered && !floor.has(c.severity)).length;
   const leftOut = agreed.length - posted.length - belowFloor;
   // Hygiene obeys the same severity floor and settled list as council findings (spec 7.5).
-  const hygNew = filterNew(hyg.findings.map((h) => ({ ...h, file: "", line: null })), { reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: new Map() }).keep;
+  const hygNew = filterNew(hyg.findings.map((h) => ({ ...h, file: "", line: null })), { reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: new Map(), learned }).keep;
   const hygItems = hygNew.filter((h) => allowed.has(h.severity)).map((h, i) => ({ ...h, id: `h${i + 1}`, fp: fingerprint(h) }));
   if (!restart && (pst.summaryBlocked?.[f.headSha] ?? 0) >= 2) {
     return { exit: 4, runDir, planned, summary: `the review summary was blocked by the secret scan twice at ${f.headSha}; see the question, or use --restart` };
@@ -558,7 +566,7 @@ async function once(o, restart) {
   // Full depth: an unproven finding says so in its body (engine text).
   const mark = (c, b) => (depth === "full" && !c.proven ? markUnproven(b, offDiff(c)) : b);
   const items = posted.filter((c) => !hostOf.has(c.id)).map((c) => ({
-    ...c, fps: [c.fp, ...folded.filter((o) => hostOf.get(o.id) === c.id).map((o) => o.fp)],
+    ...c, fps: [c.fp, ...folded.filter((o) => hostOf.get(o.id) === c.id).map((o) => o.fp)], learns: [c, ...folded.filter((o) => hostOf.get(o.id) === c.id)].map(learnKey),
     body: mark(c, text.get(c.id) ?? refs(`**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}`)),
   }));
   // Checked fixes (#37), full depth: a suggestion that fails the tests, or lets a caught mutant pass, is posted
@@ -650,7 +658,7 @@ async function once(o, restart) {
   if (now !== f.headSha) throw new HeadMoved(f.headSha, now);
   const clean = [];
   // A host the scan holds keeps none of its folded findings: they go out on their own, through the same scan.
-  const own = (c) => ({ ...c, fps: [c.fp], body: mark(c, refs(`**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}`)) });
+  const own = (c) => ({ ...c, fps: [c.fp], learns: [learnKey(c)], body: mark(c, refs(`**${c.severity}:** ${c.title}\n\n${c.case}${c.fix ? `\n\n${c.fix}` : ""}`)) });
   // One scan per item: each scan spawns gitleaks.
   const scans = new Map();
   const scan1 = (x) => { if (!scans.has(x)) scans.set(x, scanOutbound(x.answered ? redact(x.body) : x.body, { repo })); return scans.get(x); };
@@ -684,7 +692,7 @@ async function once(o, restart) {
   const fresh = [];
   const seen = await gh.markerKeys(repo, n); // one fetch for every check of this post phase
   for (const x of clean) if (!seen.has(inlineKey(x))) fresh.push(x);
-  const p = place(fresh.map((x) => ({ file: x.file, line: x.line, body: `${x.body}\n\n${marker(runId, f.headSha, inlineKey(x), x.fps.join(","))}` })), hunks, permalink);
+  const p = place(fresh.map((x) => ({ file: x.file, line: x.line, body: `${x.body}\n\n${marker(runId, f.headSha, inlineKey(x), x.fps.join(","), x.learns.join(","))}` })), hunks, permalink);
   const key = sha1(`review\0${runId}`);
   const body = bodyOf(p.body, key, clean.filter((x) => !offDiff(x)));
   const scan = scanOutbound(body, { repo });
@@ -769,6 +777,8 @@ async function once(o, restart) {
   }
   markDone(runDir, FINAL_STAGE);
   for (const id of applied) appliedAnswer(repoState, id);
+  // only now: a dry run, a question exit, a held post or a crash before this line learns nothing
+  for (const q of drops.filter((x) => applied.includes(x.id))) learnDrop(o, q);
   return {
     // Interactive: a comment held by the secret scan is an open question, so exit 3. The rerun takes the answer-only path.
     exit: open.length && mode === "interactive" ? 3 : 0, runDir, planned, url, event, queueApprove, reasons, questions: questionFiles(),
@@ -815,7 +825,7 @@ async function followUp(o, head, pst, answered) {
   if (items.length) {
     const fps = items.map((x) => x.q.fingerprint).sort();
     const key = sha1(`followup\0${head}\0${fps.join(",")}`);
-    const p = place(items.map(({ q, text }) => ({ file: q.finding.file, line: q.finding.line, body: `${text}\n\n${marker(runId, head, inlineKeyOf(head, q.fingerprint, q.finding.file, q.finding.line), q.fingerprint)}` })), hunks, `https://github.com/${repo}/blob/${head}`);
+    const p = place(items.map(({ q, text }) => ({ file: q.finding.file, line: q.finding.line, body: `${text}\n\n${marker(runId, head, inlineKeyOf(head, q.fingerprint, q.finding.file, q.finding.line), q.fingerprint, learnKey(q.finding))}` })), hunks, `https://github.com/${repo}/blob/${head}`);
     // The follow-up's marker is the new state of the head for pr-land: the full review's counts, plus the musts posted
     // now, minus the questions answered now. Without the full review's counts here, gaps=1 holds the merge until a full review.
     const was = pst.counts?.sha === head ? pst.counts : null;
@@ -842,6 +852,7 @@ async function followUp(o, head, pst, answered) {
     st.settled = [...new Set([...st.settled, ...already])];
     savePrState(repoState, n, st);
   }
+  for (const q of answered) if (!codeMoved(o.repoDir ?? process.cwd(), q, head)) learnDrop(o, q);
   for (const q of answered) appliedAnswer(repoState, q.id);
   // still held: ask again (an applied question comes back fresh); returned like a full run's questions
   const asked = held.map((q) => queueQuestion(repoState, { pr: n, sha: head, fingerprint: q.fingerprint, file: q.finding.file, line: q.finding.line, snippet: "", finding: q.finding, sides: q.sides, failure: q.finding.case }));

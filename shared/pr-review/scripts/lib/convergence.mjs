@@ -10,16 +10,25 @@ export function fingerprint(f) {
   return createHash("sha1").update([f.lens, f.file, f.symbol ?? "", title].join("\u0000")).digest("hex");
 }
 
+// The key of a rejected finding (learnings.mjs): the fingerprint inputs with the title's digits kept, so
+// "null check at line 3" and "at line 40" stay apart. A block across PRs must not catch a neighbour.
+export function learnKey(f) {
+  const title = String(f.title ?? "").toLowerCase().replace(/\p{P}/gu, "").replace(/\s+/g, " ").trim();
+  return createHash("sha1").update(["learn", f.lens, f.file, f.symbol ?? "", title].join("\u0000")).digest("hex");
+}
+
 export function allowedSeverities(reviewNumber) {
   return new Set(reviewNumber <= 1 ? ["must", "should", "nit"] : reviewNumber === 2 ? ["must", "should"] : ["must"]);
 }
 
-export function filterNew(findings, { reviewNumber, settled, changedLines }) {
+// learned: learn keys rejected on any PR of the repo (learnings.mjs). Dropped wherever they are, changed lines too.
+export function filterNew(findings, { reviewNumber, settled, changedLines, learned = new Set() }) {
   const allowed = allowedSeverities(reviewNumber);
   const keep = [];
   const dropped = [];
   for (const finding of findings) {
     if (!allowed.has(finding.severity)) dropped.push({ finding, reason: "severity floor" });
+    else if (learned.has(learnKey(finding))) dropped.push({ finding, reason: "learned" });
     else if (settled.has(fingerprint(finding)) && !changedLines.get(finding.file)?.has(finding.line)) dropped.push({ finding, reason: "settled" });
     else keep.push(finding);
   }

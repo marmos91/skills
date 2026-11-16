@@ -70,6 +70,14 @@ questions.
 
 `ask-author` posts the finding as a question to the PR author.
 
+`drop` on a finding is learned when the next `review` run applies the
+answer (a stale answer, on code that changed, is not): its learn key and
+title go to the local `learnings.md` in the state folder, and the run prints
+the line. Later reviews of the repo skip it. To share it, ask the user to commit the line to
+`.pr-review/learnings.md` on the base branch, which every review reads.
+`pr-respond decline --wrong` on a council finding is learned the same way. Never push
+to the base branch yourself.
+
 ## Core paths (exit 3, summary starts with `core paths not set`)
 
 The depth is `auto` and the repo has no core paths yet. Ask this one time:

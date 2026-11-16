@@ -49,6 +49,14 @@ test("answer: no args lists open questions as JSON; an answer closes the questio
   assert.equal(cli(fx, "answer", id, "maybe").status, 1);
 });
 
+test("answer drop learns nothing until a review run applies it", () => {
+  const fx = fixture();
+  process.env.XDG_STATE_HOME = fx.env.XDG_STATE_HOME;
+  const r = cli(fx, "answer", queueQuestion(stateRoot("o/r"), QUESTION), "drop");
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(existsSync(join(fx.state, "learnings.md")), false);
+});
+
 test("a command with no --repo and no git remote is a usage error", () => {
   const fx = fixture();
   execFileSync("git", ["remote", "remove", "origin"], { cwd: fx.dir });
