@@ -33,9 +33,15 @@ test("a learned finding is dropped, also on a changed line", () => {
   assert.equal(r.dropped[0].reason, "learned");
 });
 test("a learned finding does not drop one whose title differs only in digits", () => {
-  const [a, b] = [f({ title: "Missing null check at line 3" }), f({ title: "Missing null check at line 40" })];
+  const [a, b] = [f({ title: "Retry timeout of 3s is too short" }), f({ title: "Retry timeout of 30s is too short" })];
   assert.equal(fingerprint(a), fingerprint(b));
   assert.deepEqual(filterNew([b], { reviewNumber: 1, settled: new Set(), changedLines: new Map(), learned: new Set([learnKey(a)]) }).keep, [b]);
+});
+test("learnKey drops a line number from the title, so moved code keeps its key", () => {
+  const k = learnKey(f({ title: "Missing null check at line 3" }));
+  for (const t of ["Missing null check at line 40", "Missing null check at L42", "Missing null check at lines 3-5"]) assert.equal(learnKey(f({ title: t })), k, t);
+  assert.equal(learnKey(f({ title: "Null check in a.js:42" })), learnKey(f({ title: "Null check in a.js:7" })));
+  assert.notEqual(learnKey(f({ title: "Missing null check at line 3 in 2 places" })), k, "other digits stay");
 });
 test("learnKey ignores case and punctuation in the title", () => {
   assert.equal(learnKey(f({ title: "Null deref in parse()." })), learnKey(f({ title: "null deref in Parse" })));
