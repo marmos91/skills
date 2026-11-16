@@ -1963,3 +1963,33 @@ test("2 split clusters with one fingerprint get a decision each", async () => {
   // the judge's id never reaches the file name: a cached merge.json from an older run is not validated again
   assert.ok(readdirSync(join(r.runDir, "decide")).every((n) => /^[0-9a-f]{40}\.json$/.test(n)));
 });
+
+test("a cached merge output that fails the schema runs the merge again", async () => {
+  const fx = fixture(); routes(fx);
+  let composed = 0;
+  const answers = happy({ compose: () => { if (!composed++) throw new ChildFailed("judge timeout"); return { body: "Summary.", comments: [{ id: "c1", body: "**must:** off by one" }] }; } });
+  const first = await go(fx, answers);
+  assert.equal(first.r.exit, 4, first.r.summary);
+  // a merge.json from before the duplicate-id check: 2 clusters named c1
+  const runs = join(fx.state, "pr", String(N), "runs");
+  writeFileSync(join(runs, readdirSync(runs)[0], "merge", "merge.json"), JSON.stringify([C("c1"), C("c1", { line: 3 })]));
+  const { r, run } = await go(fx, answers);
+  assert.equal(r.exit, 0, r.summary);
+  assert.ok(run.calls.some((c) => c.k === "merge"), "the merge ran again");
+  assert.equal(posts(fx)[0].threads.length, 1);
+});
+
+test("one answer settles every split cluster that shares its fingerprint", async () => {
+  const fx = fixture(); routes(fx);
+  // the fingerprint has no line: the same title at lines 2 and 3 gives 2 clusters with one fp, and one question
+  const answers = split({ merge: [C("c1", { found: [S0] }), C("c2", { found: [S0], line: 3 })], "v~1": [keep("c1"), keep("c2")], "v~2": [drop("c1"), drop("c2")],
+    compose: { body: "Summary.", comments: [{ id: "c1", body: "**must:** one" }, { id: "c2", body: "**must:** two" }] } });
+  const first = await go(fx, answers);
+  assert.equal(first.r.exit, 3, first.r.summary);
+  const qs = openQuestions(fx.state);
+  assert.equal(qs.length, 1);
+  answer(fx.state, qs[0].id, "post");
+  const { r } = await go(fx, answers);
+  assert.equal(r.exit, 0, r.summary);
+  assert.deepEqual(posts(fx)[0].threads.map((t) => t.line).sort(), [2, 3]);
+});

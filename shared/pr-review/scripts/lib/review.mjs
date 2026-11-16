@@ -9,6 +9,7 @@ import { WHOLE_PR_LENSES, applyEffort, loadUserConfig, lowerEffort, pickEffort, 
 import { frame as realFrame, git, readTree, cleanupWorktree, HeadMoved, DiffTooLarge } from "./frame.mjs";
 import { composePrompt, mergePrompt, round1Prompt, votePrompt } from "./prompts.mjs";
 import { tally } from "./tally.mjs";
+import { validate } from "./schema.mjs";
 import { allowedSeverities, filterNew, fingerprint } from "./convergence.mjs";
 import { diffLine, parseHunks, place } from "./hunks.mjs";
 import { verdict } from "./verdict.mjs";
@@ -108,7 +109,11 @@ async function child(ctx, stage, key, { seat, prompt, schema, tools = "read", le
   const council = stage === "round1" || stage === "round2";
   if (council && ctx.dropped(seat)) return null;
   const dir = join(ctx.runDir, stage), outFile = join(dir, `${key}.json`);
-  if (done(ctx.runDir, stage, key)) return readJson(outFile);
+  if (done(ctx.runDir, stage, key)) {
+    const v = readJson(outFile);
+    // votes and proof join on the merge ids: a merge cached by an older engine meets today's schema, or runs again
+    if (stage !== "merge" || !validate(schema, v).length) return v;
+  }
   mkdirSync(dir, { recursive: true });
   const promptFile = join(dir, `${key}.prompt`);
   const limited = withLimits(ctx.config, seat, lens, stage);
@@ -427,15 +432,16 @@ async function once(o, restart) {
     return true;
   };
   const take = (q, c) => {
-    answers.delete(q.fingerprint);
-    applied.push(q.id);
+    if (!applied.includes(q.id)) applied.push(q.id);
     if (q.answer === "drop") rejected.push(c);
     else agreed.push({ ...c, ask_author: q.answer === "ask-author", answered: q.answer });
   };
+  // the question is per fingerprint, so its answer settles every cluster with that fp (the fp has no line)
+  const used = new Set();
   for (const { c, votes, status } of tallied) {
     if (answers.has(c.fp)) {
       const q = answers.get(c.fp);
-      if (!moved(q)) { take(q, c); continue; }
+      if (!moved(q)) { take(q, c); used.add(c.fp); continue; }
       // The answer was about other code: close it now, and let the tally (and jev or a fresh question) decide again.
       answers.delete(q.fingerprint);
       appliedAnswer(repoState, q.id);
@@ -467,6 +473,7 @@ async function once(o, restart) {
     else if (d.decision === "rejected") rejected.push(c);
     else open.push(d.question);
   }
+  for (const fp of used) answers.delete(fp);
   // An answered finding that this run did not find again is posted from the question record.
   // A held comment that was not found again has no text to post: its answer is closed.
   for (const q of [...answers.values()].filter((x) => x.finding?.secret)) { answers.delete(q.fingerprint); applied.push(q.id); }
