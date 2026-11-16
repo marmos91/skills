@@ -442,7 +442,9 @@ async function once(o, restart) {
     }
     if (status === "agreed") { agreed.push({ ...c, ask_author: c.found.length === 1 }); continue; }
     if (status === "rejected") { rejected.push(c); continue; }
-    const dfile = join(runDir, "decide", `${c.id}-${c.fp}.json`); // by id too: 2 clusters can share one fp, as in applyProof
+    // by id too (2 clusters can share one fp, as in applyProof); hashed, because the id is judge output and a cached
+    // merge.json from an older run is never validated again
+    const dfile = join(runDir, "decide", `${sha1(`${c.id}\0${c.fp}`)}.json`);
     if (!existsSync(dfile)) {
       const snippet = hunk(f, c);
       const r = await o.decide(view(c), votes, snippet, config);

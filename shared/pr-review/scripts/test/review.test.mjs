@@ -1960,4 +1960,6 @@ test("2 split clusters with one fingerprint get a decision each", async () => {
   assert.equal(r.exit, 0, r.summary);
   assert.equal(calls, 2, "c2 is not given c1's decision");
   assert.deepEqual(agreedInCompose(run).map((x) => x.id), ["c1"]);
+  // the judge's id never reaches the file name: a cached merge.json from an older run is not validated again
+  assert.ok(readdirSync(join(r.runDir, "decide")).every((n) => /^[0-9a-f]{40}\.json$/.test(n)));
 });
