@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.0](https://github.com/marmos91/skills/compare/v0.4.0...v0.5.0) (2026-11-16)
+
+
+### Features
+
+* **pr-review:** learn rejected findings in .pr-review/learnings.md ([#79](https://github.com/marmos91/skills/issues/79)) ([07f60fc](https://github.com/marmos91/skills/commit/07f60fca371f53a294344d9d437e4a4e0c4c2b80))
+* **pr-review:** set a pr-review commit status on the reviewed head ([#80](https://github.com/marmos91/skills/issues/80)) ([47bf2eb](https://github.com/marmos91/skills/commit/47bf2ebfd5ae66eebdb5aa4744291fce2ab05c4f))
+
+
+### Bug Fixes
+
+* **pr-review:** key questions and settled records by fingerprint and line ([#81](https://github.com/marmos91/skills/issues/81)) ([78617a5](https://github.com/marmos91/skills/commit/78617a5c1bd1efe17276030d3df9a5675789815e))
+
 ## [0.4.0](https://github.com/marmos91/skills/compare/v0.3.0...v0.4.0) (2026-11-16)
 
 
