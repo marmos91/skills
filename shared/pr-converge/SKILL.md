@@ -13,12 +13,12 @@ This skill adds a loop and its stop rules around three skills: `pr-review`
 rounds, keeps the state, and tells you when it is your turn. `$SKILL_DIR`
 is the folder of this file.
 
-Run it in a clone of the repo, on the PR branch. It prints JSON. `pr-land`
-merges the PR of this clone's repo, so the loop refuses to land when the
-clone is not `--repo`.
+Run it in a clone of the repo, on the PR branch. It prints JSON. It passes
+`--repo` to `pr-land`, which blocks when the clone has no remote for it.
+`--config <file>` and `--effort <level>` go to every `pr-review` round.
 
 ```sh
-sh $SKILL_DIR/scripts/pr-converge run <n> [--merge]
+sh $SKILL_DIR/scripts/pr-converge run <n> [--merge] [--config <file>] [--effort low|medium|high|max|auto]
 ```
 
 | Exit | Status | What you do |
@@ -40,13 +40,14 @@ sh $SKILL_DIR/scripts/pr-converge run <n> [--merge]
    the checks and, with `--merge`, to `pr-land`.
 3. **Respond** (exit `2`). Follow the `pr-respond` skill for one round:
    decide, fix with a test, run the full suite, commit signed, push, reply
-   `fixed`, and post the point-by-point summary. Then run
-   `pr-converge run <n> --pushed <sha> --points <points.json>` with the
-   full sha of the head you pushed (`git rev-parse HEAD`) and the same
-   points file you gave `pr-respond summary` (checked the same way). Add
-   `"fp"` to each point: the fingerprint of the finding it answers, from
-   `rounds[].findings[].fp` in the JSON. A `must` counts as fixed only when
-   a `done` point names its `fp` and its commit is new since the round. The
+   `fixed`, and post the point-by-point summary, each point with its
+   `thread`. Then run `pr-converge run <n> --pushed <sha>` with the full
+   sha of the head you pushed (`git rev-parse HEAD`). The loop reads the
+   points `pr-respond summary` recorded at that head, with the
+   fingerprints of each thread's findings (`fps`); you copy none by hand.
+   (`--points <file>` still takes a hand-written file, with `"fp"` per
+   point.) A `must` counts as fixed only when a `done` point names its
+   fingerprint and its commit is new since the round. The
    push counts for this one step; the next round's findings are your turn
    again. Every finding declined and nothing pushed: pass the current head;
    the loop then goes to the checks without another round.
@@ -64,7 +65,9 @@ sh $SKILL_DIR/scripts/pr-converge run <n> [--merge]
 - **Open must:** a `must` that no `done` point with a new commit names
   (declined, left out, or nothing pushed) stops the loop before land
   (`declined`). It never merges; the user decides. A declined `should`
-  does not block.
+  does not block. To fix the must after all, push the fix, run
+  `pr-respond fixed` and `summary`, then
+  `pr-converge run <n> --resume --pushed <sha>`: the push is a new round.
 
 ## Pauses
 
@@ -97,7 +100,7 @@ manual review of the same PR waits.
 
 ## Done
 
-At the end the loop posts one PR comment: the rounds, the findings fixed,
+At the end the loop posts one PR comment (a rerun edits it): the rounds, the findings fixed,
 those declined with the reason, those still open, and the merge commit.
 It passes the secret scan first (`secret-scan` when installed). Report the
 same to the user with the PR URL.

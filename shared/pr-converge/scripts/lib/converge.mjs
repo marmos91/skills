@@ -22,18 +22,18 @@ export const saveState = (repo, n, s) => writeAtomic(join(convergeDir(repo, n), 
  *   head() -> sha of the PR head on GitHub
  *   review({ restart }) -> { sha, findings: [{ fp, severity, title }], questions, skipped }: one pr-review round; findings are
  *     the new agreed ones; skipped: why pr-review did not review (an already reviewed head, a pending review)
- *   respond(state) -> { handoff: true } | { question } | { sha, points }: points as pr-respond summary takes them, plus
- *     fp: the fingerprint of the finding a point answers
+ *   respond(state) -> { handoff: true } | { question } | { sha, points }: points as pr-respond summary records them, with
+ *     fps: the fingerprints of the findings a point answers (fp: one, written by hand)
  *   checks(sha) -> "green" | "pending" | "red"
  *   land() -> { merged: true, commit } | { blocked: why }
  * save(state) persists after every step. -> { status, state }; status: converged|merged|capped|stalled|declined|paused|respond
  */
-// The musts still open. A must is fixed only when a done point names its fingerprint (fp) and a commit was pushed
-// after the round's head; a declined, unnamed or unpushed must stays open.
+// The musts still open. A must is fixed only when a done point names its fingerprint and a commit was pushed after
+// the round's head, in that round's respond step or a later one (a resumed declined run); else it stays open.
+const fpsOf = (p) => p.fps ?? (p.fp ? [p.fp] : []);
 export const openMusts = (s) => s.rounds.flatMap((r) => {
-  const resp = s.responses.find((x) => x.round === r.round);
-  const pushed = resp && resp.sha !== r.sha;
-  const fixed = new Set(pushed ? resp.points.filter((p) => p.status === "done" && p.fp && p.sha !== r.sha).map((p) => p.fp) : []);
+  const fixed = new Set(s.responses.filter((x) => x.round >= r.round && x.sha !== r.sha)
+    .flatMap((x) => x.points.filter((p) => p.status === "done" && p.sha !== r.sha).flatMap(fpsOf)));
   return r.findings.filter((f) => f.severity === "must" && !fixed.has(f.fp));
 });
 

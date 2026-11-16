@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { chmodSync } from "node:fs";
 import { main, realDeps } from "../main.mjs";
 import { loadState } from "../lib/converge.mjs";
@@ -241,15 +241,74 @@ test("a round that stops at a question keeps the head it was called on", async (
   assert.equal(last().status, "merged");
 });
 
-test("pr-land is not run when the clone is another repo than --repo", async (t) => {
+test("pr-land gets --repo: it lands the PR the loop reviewed, not the clone's default repo", async (t) => {
   const { dir } = setup(t);
-  const gh = join(dir, "gh");
-  writeFileSync(gh, `#!/bin/sh\necho '{"nameWithOwner":"example/other"}'\n`);
-  chmodSync(gh, 0o755);
+  const args = join(dir, "args"), land = join(dir, "pr-land"), gh = join(dir, "gh");
+  writeFileSync(land, `#!/bin/sh\necho "$@" > '${args}'\n`);
+  writeFileSync(gh, `#!/bin/sh\necho '{"mergeCommit":{"oid":"${sha("f")}"}}'\n`);
+  chmodSync(land, 0o755); chmodSync(gh, 0o755);
   const old = process.env.GH_BIN; process.env.GH_BIN = gh;
   t.after(() => { if (old === undefined) delete process.env.GH_BIN; else process.env.GH_BIN = old; });
-  const r = await realDeps(REPO, 7).land();
-  assert.match(r.blocked ?? "", /this clone is example\/other, not example\/app/);
+  assert.deepEqual(await realDeps(REPO, 7, { landBin: land }).land(), { merged: true, commit: sha("f") });
+  assert.equal(readFileSync(args, "utf8").trim(), `7 --repo ${REPO}`);
+});
+
+test("the end summary has one comment per PR: a rerun with another body edits it", async (t) => {
+  setup(t);
+  const posted = [], edited = [];
+  const gh = {
+    viewer: async () => "me",
+    comments: async () => posted.map((body, i) => ({ id: i + 1, user: { login: "me" }, body: edited.at(-1)?.body ?? body })),
+    comment: async (_r, _n, body) => { posted.push(body); },
+    edit: async (_r, id, body) => { edited.push({ id, body }); },
+  };
+  const d = realDeps(REPO, 7, { gh });
+  await d.post("Converged. Nothing is merged.");
+  await d.post("The PR converged and is merged.");
+  await d.post("The PR converged and is merged.");
+  assert.equal(posted.length, 1);
+  assert.deepEqual(edited.map((e) => [e.id, e.body.split("\n")[0]]), [[1, "The PR converged and is merged."]]);
+});
+
+test("--config and --effort reach every pr-review round", async (t) => {
+  const { dir } = setup(t);
+  const f = fakes([]);
+  delete f.deps.review;
+  const e = engine([() => { e.post(sha("a")); return { exit: 0, summary: "posted" }; }]);
+  const cfg = join(dir, "config.json");
+  writeFileSync(cfg, "{}");
+  assert.equal(await main(["run", "7", "--repo", REPO, "--config", cfg, "--effort", "low"], { deps: f.deps, review: e.review }), 0);
+  assert.deepEqual([e.asked[0].configPath, e.asked[0].effort], [cfg, "low"]);
+  assert.equal(await main(["run", "7", "--repo", REPO, "--effort", "huge"], { deps: f.deps, review: e.review }), 1);
+});
+
+test("--pushed takes the points pr-respond summary recorded at that head, with their fingerprints", async (t) => {
+  const { last } = setup(t);
+  const f = fakes([{ findings: [finding("m1", "must")] }, { findings: [] }]);
+  delete f.deps.respond;
+  assert.equal(await run(f.deps, "--merge"), 2);
+  f.moveHead(sha("b"));
+  // what pr-respond summary records: the fps come from the thread's marker, not from the agent
+  const file = join(stateRoot(REPO), "pr", "7", "respond.json");
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify({ points: { [sha("b")]: [{ n: 1, status: "done", sha: sha("b"), thread: "T1", fps: ["m1"], text: "fixed." }] } }));
+  assert.equal(await run(f.deps, "--pushed", sha("b")), 0);
+  assert.equal(last().status, "merged");
+});
+
+test("--resume after a declined stop: the push that fixes the must is a new round, then it lands", async (t) => {
+  const { dir, last } = setup(t);
+  const f = fakes([{ findings: [finding("m1", "must")] }, { findings: [] }]);
+  f.deps.respond = async (s) => ({ sha: s.head, points: [{ n: 1, status: "open", text: "declined." }] });
+  assert.equal(await run(f.deps, "--merge"), 5);
+  assert.equal(last().status, "declined");
+  delete f.deps.respond; // the user changed their mind: the agent fixes and pushes
+  f.moveHead(sha("b"));
+  const points = join(dir, "points.json");
+  writeFileSync(points, JSON.stringify([{ n: 1, status: "done", sha: sha("b"), fp: "m1", text: "fixed after all." }]));
+  assert.equal(await run(f.deps, "--resume", "--pushed", sha("b"), "--points", points), 0);
+  assert.equal(last().status, "merged");
+  assert.deepEqual([f.calls.review, f.calls.land, f.calls.posts.length], [2, 1, 2]);
 });
 
 test("a respond step that pushed nothing goes to land, not to a round pr-review would skip", async (t) => {
