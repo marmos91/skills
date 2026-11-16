@@ -151,6 +151,14 @@ export async function comment(repo, n, body) {
   return json(["api", "-X", "POST", `repos/${repo}/issues/${n}/comments`, "--input", "-"], { input: JSON.stringify({ body }) });
 }
 
+/** Every PR (issue) comment, fully paged. */
+export const issueComments = async (repo, n) => (await json(["api", "--paginate", "--slurp", `repos/${repo}/issues/${n}/comments`])).flat();
+
+/** Replaces the body of a PR (issue) comment. */
+export async function editIssueComment(repo, id, body) {
+  return json(["api", "-X", "PATCH", `repos/${repo}/issues/comments/${id}`, "--input", "-"], { input: JSON.stringify({ body }) });
+}
+
 /** Replaces the body of a review comment. */
 export async function editComment(repo, commentId, body) {
   return json(["api", "-X", "PATCH", `repos/${repo}/pulls/comments/${commentId}`, "--input", "-"], { input: JSON.stringify({ body }) });

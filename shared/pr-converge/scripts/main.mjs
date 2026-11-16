@@ -38,13 +38,7 @@ function secretHits(text) {
   return r.status === 0 ? [] : [String(r.stderr || "secret-scan: hit").trim()];
 }
 
-// 64 MiB, as pr-land: a PR with many comments passes the 1 MiB default of execFileSync
-const ghJson = (args, input) => JSON.parse(execFileSync(process.env.GH_BIN || "gh", args, { encoding: "utf8", input, stdio: ["pipe", "pipe", "pipe"], maxBuffer: 64 << 20 }) || "null");
-const ghIssues = {
-  viewer: github.viewer, comment: github.comment,
-  comments: async (repo, n) => ghJson(["api", "--paginate", "--slurp", `repos/${repo}/issues/${n}/comments`]).flat(),
-  edit: async (repo, id, body) => ghJson(["api", "-X", "PATCH", `repos/${repo}/issues/comments/${id}`, "--input", "-"], JSON.stringify({ body })),
-};
+const ghIssues = { viewer: github.viewer, comment: github.comment, comments: github.issueComments, edit: github.editIssueComment };
 
 /**
  * The real steps: pr-review's engine in process (its result says when it skipped), pr-land as a child, GitHub through
@@ -80,7 +74,7 @@ export function realDeps(repo, n, { review = realReview, reviewOpts = {}, landBi
       // pr-land exits 0 landed, 1 usage, 2 blocked (not ready, a scan hit, a conflict), 4 a step failed
       if (r.status === 2) { let j = {}; try { j = JSON.parse(r.stdout); } catch {} return { blocked: [j.blocked, ...(j.why ?? [])].filter(Boolean).join("; ") || "not ready" }; }
       if (r.status !== 0) throw new Error(`pr-land exited ${r.status ?? r.signal}: ${r.stdout.trim()}`);
-      const commit = ghJson(["pr", "view", String(n), "-R", repo, "--json", "mergeCommit"]).mergeCommit?.oid ?? null;
+      const commit = JSON.parse(execFileSync(process.env.GH_BIN || "gh", ["pr", "view", String(n), "-R", repo, "--json", "mergeCommit"], { encoding: "utf8" })).mergeCommit?.oid ?? null;
       return { merged: true, commit };
     },
     // one summary per PR: the key names the PR, not the body, so a rerun edits the same comment
@@ -106,7 +100,10 @@ function readPoints(file) {
   return points;
 }
 
-/** Applies the flags of a rerun to the saved state. recorded(sha): the points pr-respond summary recorded at that head. */
+/**
+ * Applies the flags of a rerun to the saved state. recorded(sha, reviewed): the points pr-respond summary recorded at
+ * that head in answer to the review of reviewed (the round's head).
+ */
 export function applyFlags(s, v, recorded = () => null) {
   if (v.merge) s.merge = true; // the opt-in holds for every rerun
   // a declined stop resumes at the respond step: the push that fixes the must comes with --pushed
@@ -116,8 +113,9 @@ export function applyFlags(s, v, recorded = () => null) {
   for (const k of ["pushed", "rebased"]) if (v[k] !== undefined && !SHA.test(v[k])) throw new Usage(`--${k} needs the full 40-character sha`);
   if (v.pushed && s.phase !== "respond") throw new Usage(`--pushed is for the end of a respond step; the loop is at ${s.phase}`);
   if (v.points && !v.pushed) throw new Usage("--points goes with --pushed");
-  if (v.pushed && !v.points && !recorded(v.pushed)) console.error(`pr-converge: no pr-respond summary was recorded at ${v.pushed.slice(0, 7)}, so no point counts and a must stays open: run pr-respond summary at that head, or pass --points`);
-  if (v.pushed) s.pushed = { sha: v.pushed, points: v.points ? readPoints(v.points) : recorded(v.pushed) ?? [] };
+  const saved = v.pushed && !v.points ? recorded(v.pushed, s.rounds.at(-1)?.sha) : null;
+  if (v.pushed && !v.points && !saved) console.error(`pr-converge: no pr-respond summary was recorded at ${v.pushed.slice(0, 7)} for this round's review, so no point counts and a must stays open: run pr-respond summary at that head, or pass --points`);
+  if (v.pushed) s.pushed = { sha: v.pushed, points: v.points ? readPoints(v.points) : saved ?? [] };
   if (v.rebased) { s.head = v.rebased; s.pause = null; } // a rebase that only resolves conflicts: same round, no review
   if (v.resume && s.pause) {
     if (s.pause.kind === "foreign-push") s.head = null; // the user took the push: the next round reviews it
@@ -145,7 +143,7 @@ export async function main(argv, { deps, review } = {}) {
     const release = acquireLock(convergeDir(repo, n), ` (pr-converge) of PR #${n}`);
     try {
       const d = { ...realDeps(repo, n, { review, reviewOpts: { configPath: v.config, effort: v.effort } }), ...deps }; // tests replace any step
-      const state = applyFlags(loadState(repo, n), v, (sha) => recordedPoints(repo, n, sha));
+      const state = applyFlags(loadState(repo, n), v, (sha, reviewed) => recordedPoints(repo, n, sha, reviewed));
       saveState(repo, n, state);
       const { status, state: s } = await converge(state, { deps: d, save: (x) => saveState(repo, n, x), maxRounds: config.converge.max_rounds });
       if (status in { converged: 1, merged: 1, capped: 1, stalled: 1, declined: 1 } && !s.summaryPosted) {
