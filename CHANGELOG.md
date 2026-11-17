@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/marmos91/skills/compare/v0.7.0...v0.8.0) (2026-11-17)
+
+
+### Features
+
+* **pr-review:** size-aware auto effort and a configurable finding limit ([#113](https://github.com/marmos91/skills/issues/113)) ([5ab8cf8](https://github.com/marmos91/skills/commit/5ab8cf89b0ed4fe414cc8ee05ee357016957e615))
+
 ## [0.7.0](https://github.com/marmos91/skills/compare/v0.6.0...v0.7.0) (2026-11-17)
 
 
