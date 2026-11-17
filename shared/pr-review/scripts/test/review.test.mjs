@@ -716,6 +716,18 @@ test("a folded hygiene problem blocks APPROVE, is listed and counted like the ch
   assert.ok(prState(fx.state, N).settled.includes(keyOf(fingerprint({ ...h, file: "", line: null }), null, "")), "settled, so a later review drops it");
 });
 
+test("a malformed folded hygiene item is dropped and logged; compose and the valid items stand", async () => {
+  const ok = { lens: "hygiene", severity: "should", title: "Docs miss the flag", case: "The diff adds --x. Are the docs still right?", fix: "Document --x" };
+  const fx = fixture(); routes(fx);
+  const lines = [];
+  const { r } = await go(fx, { all: { findings: [] }, compose: { body: "Looks good.", comments: [], hygiene: [{ ...ok, severity: "must" }, ok] } }, { log: (l) => lines.push(l) });
+  assert.equal(r.exit, 0, r.summary);
+  const p = posts(fx)[0];
+  assert.notEqual(p.event, "APPROVE", "the valid item counts");
+  assert.match(p.body, /Hygiene:\n- The diff adds --x\. Are the docs still right\?$/m);
+  assert.ok(lines.some((l) => /compose hygiene item 0 dropped: item\.severity/.test(l)), lines.join("\n"));
+});
+
 test("each voter gets the head lines around its findings inline", async () => {
   const fx = fixture(); routes(fx);
   const { run } = await go(fx, happy());

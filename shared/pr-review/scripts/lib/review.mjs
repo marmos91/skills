@@ -592,7 +592,10 @@ async function once(o, restart) {
         hygiene: hyg.folded ? ["should", "nit"].filter((s) => allowed.has(s) && floor.has(s)) : [] }),
   });
   // Its findings join the child's hygiene items: the same settled list, verdict, counts and summary list.
-  const foldedHyg = hyg.folded ? hygOf((composed.hygiene ?? []).map((h) => ({ ...h, ask_author: true })), hygItems.length) : [];
+  // A malformed item is dropped and logged, not the whole compose output: the check is advisory, as its child is.
+  const foldedRaw = hyg.folded && Array.isArray(composed.hygiene) ? composed.hygiene : [];
+  const foldedOk = foldedRaw.filter((h, i) => { const e = validate("hygiene", { findings: [h] }); if (e.length) log(`compose hygiene item ${i} dropped: ${e.join("; ").replace("findings[0]", "item")}`); return !e.length; });
+  const foldedHyg = hygOf(foldedOk.map((h) => ({ ...h, ask_author: true })), hygItems.length);
   hygItems.push(...foldedHyg);
   markDone(runDir, "compose");
   if (o.until === "compose") return finish("compose");
