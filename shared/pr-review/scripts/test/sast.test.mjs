@@ -37,3 +37,15 @@ test("a semgrep timeout kills its whole process group", async (t) => {
   for (const end = Date.now() + 5000; alive() && Date.now() < end;) await new Promise((r) => setTimeout(r, 50));
   assert.equal(alive(), false, "the grandchild still runs");
 });
+
+test("review.sast_timeout_s caps the scan", async (t) => {
+  const d = mkdtempSync(join(tmpdir(), "sast-cap-"));
+  writeFileSync(join(d, "a.js"), "x\n");
+  writeFileSync(join(d, "semgrep"), `#!/bin/sh\nsleep 5\necho '{"results": []}'\n`);
+  chmodSync(join(d, "semgrep"), 0o755);
+  const was = process.env.PR_REVIEW_SEMGREP;
+  process.env.PR_REVIEW_SEMGREP = join(d, "semgrep");
+  t.after(() => { process.env.PR_REVIEW_SEMGREP = was; });
+  const r = await runSast({ worktree: d, shellOk: true }, { review: { sast: true, sast_timeout_s: 1 } }, ["security"], new Map([["a.js", new Set([1])]]), join(d, "sast.json"));
+  assert.match(r.note, /timed out after 1s/);
+});

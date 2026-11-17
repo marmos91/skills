@@ -40,10 +40,10 @@
   // go build, go vet and go test -race (3 runs). {dirs} = the folders of the matching changed paths.
   // mutate: true marks the test command for mutants and checked fixes (full depth). mutants: the caps;
   // each run keeps the repeat and timeout_s of its check.
-  // sast: semgrep on the changed files at every depth (when installed, 2 minute cap). Its hits on added lines are
+  // sast: semgrep on the changed files at every depth (when installed, capped at sast_timeout_s seconds). Its hits on added lines are
   // security candidates the seats vote on. The repo's .semgrep.yml is used for trusted authors. Repo level may set it.
   "review": { "max_turns": 40, "timeout_minutes": 10, "chunk_lines": 500, "max_children": 60, "max_parallel": 9,
-    "depth": "light", "sast": true,
+    "depth": "light", "sast": true, "sast_timeout_s": 120,
     "checks": [
       { "name": "go vet", "run": "go vet {dirs}", "paths": ["**/*.go"] },
       { "name": "go test", "run": "go test -race -count=1 {dirs}", "paths": ["**/*.go"], "repeat": 3, "timeout_s": 900, "mutate": true }

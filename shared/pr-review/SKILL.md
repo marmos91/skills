@@ -30,7 +30,8 @@ sh "$SKILL_DIR/scripts/pr-review" review <n> [--repo owner/repo] \
   changed paths and `review.core_paths`.
 - At every depth, semgrep (when installed) scans the changed files. Its hits
   on added lines go to the security seats as candidates; only a hit the vote
-  keeps is posted. `review.sast: false` turns it off.
+  keeps is posted. `review.sast: false` turns it off; `review.sast_timeout_s`
+  (default 120) caps the scan.
 - `--lens a,b` runs only these lenses. The review then never approves. Your
   own lenses are files in `~/.config/pr-review/lenses/<name>.md`.
 - `--max-diff-lines N` reviews a diff above `review.max_diff_lines` (exit

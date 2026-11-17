@@ -7,14 +7,13 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ChildFailed, stopping, track, untrack } from "./child.mjs";
 
-const TIMEOUT_MS = 120_000; // shortcut: a fixed cap, make it a config key when a repo needs longer
 const REPO_RULES = [".semgrep.yml", ".semgrep.yaml", ".semgrep"];
 
 /**
  * Runs semgrep once per run (cached in file). changed: file -> Set of added lines.
  * -> { tool, ran, note, hits: [{ rule, file, line, message }] }; note says why it did not run or what went wrong.
  */
-export async function runSast(f, config, lenses, changed, file, log = () => {}, timeoutMs = TIMEOUT_MS) {
+export async function runSast(f, config, lenses, changed, file, log = () => {}, timeoutMs = (config.review.sast_timeout_s ?? 120) * 1000) {
   if (existsSync(file)) return JSON.parse(readFileSync(file, "utf8"));
   const r = await scan(f, config, lenses, changed, timeoutMs);
   if (stopping) throw new ChildFailed("engine is stopping on a signal"); // a killed scan is not a result
