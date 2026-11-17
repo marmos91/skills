@@ -332,7 +332,7 @@ export async function frame({ repo, n, repoDir, runDir, config, gh = github, prS
   for (const a of new Set(authors)) if (shellOk && !(await ok(a))) shellOk = false;
   const f = {
     headSha: head, baseRef: p.baseRef, trusted, ownPr: p.author === viewer, shellOk,
-    reviewNumber: (prState.reviews ?? 0) + 1, delta, ctxDir, worktree, changedPaths, chunks, ci, repoConfigText, nonce, questions,
+    reviewNumber: (prState.reviews ?? 0) + 1, delta, ctxDir, worktree, changedPaths, diffLines: lines, chunks, ci, repoConfigText, nonce, questions,
     learnings: show(repoDir, base, LEARNINGS),
   };
   json(runDir, "frame.json", f);

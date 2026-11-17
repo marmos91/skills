@@ -468,7 +468,7 @@ They apply to a manual `review` and to the loop.
 
 ## Effort
 
-`--effort` (config `effort`, default `medium`) limits token use. It sets the
+`--effort` (config `effort`, default `auto`) limits token use. It sets the
 council size and depth. It never removes a lens or the vote.
 
 | | low | medium | high | max |
@@ -485,6 +485,9 @@ council size and depth. It never removes a lens or the vote.
 - The hygiene model check does not run at `low`.
 - `low` posts no `nit` and no `pre-existing` finding. This is the default
   behavior, and no option changes it.
+- `review.max_findings` replaces the "Findings posted" limit at every effort
+  (`null`: no limit). It does not change the severities posted. The summary
+  says how many findings the limit cut, by severity.
 
 `auto` picks the level from the changed paths. The first match wins:
 
@@ -493,7 +496,9 @@ council size and depth. It never removes a lens or the vote.
    `Dockerfile*`, Terraform, k8s, helm, infra): `high`.
 2. Every path matches `effort_auto.low_paths` (`*.md`, `docs/**`, `*.txt`,
    lockfiles, images): `low`.
-3. Otherwise: `medium`.
+3. The diff has more lines than `effort_auto.high_lines` (default 1000):
+   `high`.
+4. Otherwise: `medium`.
 
 Patterns match the whole path and ignore case (`Dockerfile*` matches
 `dockerfile`, `*.png` matches `.PNG`).
@@ -972,7 +977,7 @@ decider and `round1` belong to you.
   },
   "judge": { "harness": "claude", "model": "opus", "thinking": "high" },
   "decider": { "kind": "auto", "confidence": 0 },
-  "effort": "medium",
+  "effort": "auto",
   "loop": {
     "authors_ignore": ["dependabot[bot]", "renovate[bot]"],
     "repos": ["acme/api", "acme/web"],

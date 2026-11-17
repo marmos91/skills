@@ -270,7 +270,7 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
       if (!doReview && !existsSync(join(dir, "run.json"))) markDone(dir, FINAL_STAGE);
       if (doReview) {
         const pcfg = loadCfg(fr.repoConfigText ?? null);
-        let effort = pcfg.loop.effort === "auto" ? pickEffort(fr.changedPaths, pcfg) : pcfg.loop.effort;
+        let effort = pcfg.loop.effort === "auto" ? pickEffort(fr.changedPaths, pcfg, fr.diffLines) : pcfg.loop.effort;
         if (fr.delta?.isAncestor) effort = lowerEffort(effort); // 5.1: delta review one level below
         const res = await review({ repo, n, mode: "loop", effort, effortFromConfig: true, repoDir, gh, log: (m) => log(`#${n}: ${m}`) }); // seat drops are logged, not posted
         // Exit 1 (diff too large, ...) repeats on every tick until the PR changes: close its answers and cache it.

@@ -278,7 +278,7 @@ async function once(o, restart) {
   const runFile = join(runDir, "run.json");
   if (!existsSync(runFile)) {
     let effort = o.effort ?? (mode === "loop" ? config.loop.effort : config.effort);
-    if (effort === "auto") effort = pickEffort(f.changedPaths, config);
+    if (effort === "auto") effort = pickEffort(f.changedPaths, config, f.diffLines);
     const lenses = Object.keys(config.lenses).filter((l) => config.lenses[l].enabled && (!o.lenses || o.lenses.includes(l)));
     if (!lenses.length) throw new SetupError("no lens runs: the requested lens is disabled in the config, or every lens is disabled");
     let depth = o.depth ?? config.review.depth;
@@ -575,7 +575,11 @@ async function once(o, restart) {
   const posted = chosen.filter((c) => !pre(c)), older = chosen.filter(pre);
   // below the floor here is only a must that proof lowered: a higher effort would not post it
   const belowFloor = agreed.filter((c) => !c.answered && !floor.has(c.severity)).length;
-  const leftOut = agreed.length - chosen.length - belowFloor;
+  // an answered finding is always chosen; the rest left out is cut by the effort's severities or by its count limit
+  const cut = agreed.filter((c) => !chosen.includes(c) && floor.has(c.severity));
+  const leftOut = cut.length;
+  const bySeverity = (cs) => Object.keys(RANK).map((s) => [s, cs.filter((c) => c.severity === s).length]).filter(([, k]) => k).map(([s, k]) => `${k} ${s}`).join(", ");
+  const overLimit = cut.some((c) => allowed.has(c.severity));
   // Hygiene obeys the same severity floor and settled list as council findings (spec 7.5).
   const hygOf = (fs, from = 0) => filterNew(fs.map((h) => ({ ...h, file: "", line: null })), { reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: new Map(), learned }).keep
     .filter((h) => allowed.has(h.severity)).map((h, i) => ({ ...h, id: `h${from + i + 1}`, fp: fingerprint(h) }));
@@ -724,7 +728,7 @@ async function once(o, restart) {
     noTracking ? "No tracking issue or plan." : "",
     outside.length ? `Outside the diff:\n${outside.map((l) => `- ${l}`).join("\n")}` : "",
     open.length ? `${open.length} ${open.length === 1 ? "point is" : "points are"} still open with the reviewer.` : "",
-    leftOut ? `${leftOut} ${leftOut === 1 ? "finding was" : "findings were"} left out by the effort limit.` : "",
+    leftOut ? `${leftOut} ${leftOut === 1 ? "finding was" : "findings were"} left out by the effort limit (${bySeverity(cut)}). Raise it with --effort${overLimit ? " or review.max_findings" : ""}.` : "",
     belowFloor ? `${belowFloor} unproven ${belowFloor === 1 ? "finding was" : "findings were"} left out: review ${f.reviewNumber} posts only must findings.` : "",
     run.missing?.length ? `Lenses not run: ${run.missing.join(", ")}.` : "",
     // Dropped seats and missed parts stay out of the body: they are in run.json and the run log.
