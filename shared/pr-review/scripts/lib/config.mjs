@@ -213,7 +213,7 @@ function validate(c, known) {
   need(isObj(c.prices), "prices", "an object");
   for (const [m, p] of Object.entries(c.prices)) for (const k of ["input", "output", "cache_read", "cache_write"]) need(isObj(p) && typeof p[k] === "number" && p[k] >= 0, `prices.${m}.${k}`, "a number >= 0");
   need(typeof c.review.sast === "boolean", "review.sast", "a boolean");
-  need(posInt(c.review.sast_timeout_s), "review.sast_timeout_s", "a positive integer");
+  need(posInt(c.review.sast_timeout_s) && c.review.sast_timeout_s <= 3600, "review.sast_timeout_s", "a positive integer, at most 3600");
   need(["light", "full", "auto"].includes(c.review.depth), "review.depth", "light, full or auto");
   need(c.review.core_paths === undefined || strList(c.review.core_paths), "review.core_paths", "an array of strings");
   need(c.review.checks === null || Array.isArray(c.review.checks), "review.checks", "an array");

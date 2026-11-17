@@ -40,7 +40,8 @@ async function scan(f, config, lenses, changed, timeoutMs) {
     const kill = () => { try { process.kill(-p.pid, "SIGKILL"); } catch { /* gone */ } };
     let out = "", over = false;
     p.stdout.setEncoding("utf8").on("data", (d) => { out += d; });
-    const t = setTimeout(() => { over = true; kill(); }, timeoutMs);
+    // setTimeout fires at once above 2^31-1 ms: clamp, the config caps it far below anyway
+    const t = setTimeout(() => { over = true; kill(); }, Math.min(timeoutMs, 2 ** 31 - 1));
     p.on("exit", kill); // a child left behind would hold stdout open
     p.on("close", (code) => { clearTimeout(t); untrack(p.pid); resolve({ error: code === 0 ? null : { code }, timedOut: over, stdout: out }); });
     p.on("error", (e) => { clearTimeout(t); if (p.pid) untrack(p.pid); resolve({ error: e, timedOut: false, stdout: "" }); });
