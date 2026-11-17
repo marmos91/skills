@@ -192,8 +192,8 @@ replaces the user level for one run.
 
 ### 5.1 Effort
 
-`--effort low|medium|high|max` (config `effort`, default `medium`; the loop
-uses `loop.effort`, default `medium`) limits token use. It sets the council
+`--effort low|medium|high|max` (config `effort`, default `auto`; the loop
+uses `loop.effort`, default `auto`) limits token use. It sets the council
 size and depth. It never removes a lens or the agreement step.
 
 | | low | medium | high | max |
@@ -208,7 +208,8 @@ size and depth. It never removes a lens or the agreement step.
   configured value stays, a higher one is lowered to the cap.
 - Lens model overrides stay at every effort; their thinking is capped too.
 - Findings above the limit are dropped lowest severity first; the summary
-  says how many were left out.
+  says how many were left out, by severity. `review.max_findings` replaces
+  the limit (`null`: no limit).
 - The loop runs a delta review one level below `loop.effort` (not below
   `low`).
 - `--dry-run` and `doctor` print the planned children and models.
@@ -220,12 +221,13 @@ size and depth. It never removes a lens or the agreement step.
    `*.sql`, `.github/workflows/**`, `Dockerfile*` and infra code.
 2. Every changed path matches `effort_auto.low_paths` -> `low`. The default
    patterns cover `*.md`, `docs/**`, `*.txt`, lockfiles and images.
-3. Otherwise -> `medium`.
+3. The diff has more lines than `effort_auto.high_lines` (default 1000) ->
+   `high`.
+4. Otherwise -> `medium`.
 
 `effort_auto.*` are user-level arrays of glob patterns. The repo level may
 add patterns to `high_paths` only, never to `low_paths`, so a PR cannot
-lower its own review. The default `effort` stays `medium` for a manual run;
-`loop.effort` defaults to `auto`.
+lower its own review. `effort` and `loop.effort` both default to `auto`.
 
 ### 5.2 CI
 

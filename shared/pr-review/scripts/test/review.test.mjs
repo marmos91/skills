@@ -680,6 +680,18 @@ test("--effort low posts at most 5 findings, no nits, and says how many were lef
   assert.match(p.body, /4 findings were left out by the effort limit \(2 should, 2 nit\)\. Raise it with --effort or review.max_findings\./);
 });
 
+test("--effort low: nits cut only by the severity list do not point to review.max_findings", async () => {
+  const fx = fixture(); routes(fx);
+  const clusters = ["must", "should", "nit"].map((s, i) => C(`c${i + 1}`, { severity: s, title: `finding ${"abc"[i]}`, line: 1 + i }));
+  const compose = { body: "Summary.", comments: clusters.map((c) => ({ id: c.id, body: `**${c.severity}:** ${c.title}` })) };
+  const { r } = await go(fx, { all: { findings: [F()] }, merge: clusters, compose }, { effort: "low" });
+  assert.equal(r.exit, 0, r.summary);
+  const p = posts(fx)[0];
+  assert.equal(p.threads.length, 2);
+  assert.match(p.body, /1 finding was left out by the effort limit \(1 nit\)\. Raise it with --effort\./);
+  assert.doesNotMatch(p.body, /max_findings/);
+});
+
 test("hygiene findings appear as one list in the summary, not as inline comments", async () => {
   const fx = fixture(); routes(fx, { body: "" });
   const compose = { body: "Summary.\n\nHygiene:\n- PR body is empty", comments: [{ id: "c1", body: "**must:** off by one" }, { id: "h1", body: "should not be inline" }] };
