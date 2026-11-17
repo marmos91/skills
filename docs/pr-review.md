@@ -20,10 +20,10 @@ attribution.
 | `pr-review review <n> [--repo o/r] [--effort low\|medium\|high\|max\|auto] [--depth light\|full\|auto] [--lens a,b] [--max-diff-lines N] [--dry-run] [--until stage] [--restart]` | Review one PR. `<n>` is a number or a PR URL. Without `--repo`, the repo of the current directory |
 | `pr-review answer` | Print the open questions as JSON |
 | `pr-review answer <id> <post\|drop\|ask-author>` | Record your answer to one question |
-| `pr-review status [owner/repo]` | Questions, to-do items, review and reply counts per PR, lock holder, unfinished runs, tokens (and cost, with `prices`) per stage and per PR, paused flag |
+| `pr-review status [owner/repo...] [--org <owner>]` | Questions, to-do items, review and reply counts per PR, lock holder, unfinished runs, tokens (and cost, with `prices`) per stage and per PR, paused flag |
 | `pr-review doctor` | Merged config, the loaded lenses, a 1-token probe per seat, `gh auth status`, jev, gitleaks, claude login mode, planned child count per effort level |
 | `pr-review config core-paths <owner/repo> ['glob'...]` | Save the core paths of a repo for `auto` depth. No glob saves "none". Quote each glob: an argument that is a file here gets a warning (the shell may have expanded a glob), and is saved as given |
-| `pr-review tick [owner/repo]` | One loop run (a tick); `pr-review-loop` calls it |
+| `pr-review tick [owner/repo...] [--org <owner>]` | One loop run (a tick) per repo; `pr-review-loop` calls it |
 | `pr-review-loop [owner/repo]` | One loop run (a tick) |
 | `pr-review-loop pause` / `resume [owner/repo]` | Stop or restart every tick for the repo |
 | `pr-review-loop answer [<id> <option>]` | Same as `pr-review answer` |
@@ -811,6 +811,15 @@ PR head.
   launchd give a bare PATH and none of your exports: the job sets PATH (node
   and `~/.local/bin`) and sources a mode-600 file with `GH_TOKEN` and
   `CLAUDE_CODE_OAUTH_TOKEN`. The skill file has the line.
+- Several repos: `pr-review-loop owner/a owner/b`, or `pr-review-loop --org
+  owner` for every repo of the owner that is not archived (only the ones in
+  `loop.repos` of your config when that list is set). Run it in a folder that
+  is a clone of each repo or holds the clones as `./<name>`. The repos tick one
+  after another, each with its own lock, state and question queue; a repo that
+  fails, or that you named and has no clone, is logged, the others still run,
+  and the exit is 4. With `--org` a repo without a clone is only skipped,
+  but when no repo has a clone the exit is 1.
+  `pr-review status` takes the same repos and prints each.
 
 ### One tick
 
@@ -966,6 +975,7 @@ decider and `round1` belong to you.
   "effort": "medium",
   "loop": {
     "authors_ignore": ["dependabot[bot]", "renovate[bot]"],
+    "repos": ["acme/api", "acme/web"],
     "max_prs_per_run": 10,
     "max_parallel_prs": 3,
     "max_review_rounds": 3,

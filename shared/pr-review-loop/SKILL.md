@@ -1,6 +1,6 @@
 ---
 name: pr-review-loop
-description: "Keep the PR queue of one GitHub repo moving: on an interval, review PRs that ask for your review (council review from pr-review), reply to reviewers on your own PRs, and answer mentions. Posts agreed findings, queues disagreements as questions for you, never blocks, never changes code or merges. Use on 'pr-review-loop', 'watch my PRs', 'keep my reviews moving', 'answer the pr-review questions'."
+description: "Keep the PR queue of one or more GitHub repos moving: on an interval, review PRs that ask for your review (council review from pr-review), reply to reviewers on your own PRs, and answer mentions. Posts agreed findings, queues disagreements as questions for you, never blocks, never changes code or merges. Use on 'pr-review-loop', 'watch my PRs', 'keep my reviews moving', 'answer the pr-review questions'."
 metadata:
   version: "0.6.0" # x-release-please-version
 ---
@@ -23,6 +23,13 @@ the skills repo, section "The loop".
   `cd /path/to/clone && PATH=<dir of node>:$HOME/.local/bin:$PATH
   && . ~/.config/pr-review/env && pr-review-loop`, where the env file (mode
   600) exports `GH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN`.
+
+Several repos: `pr-review-loop owner/a owner/b` or `pr-review-loop --org
+owner` (its repos that are not archived; only those in `loop.repos` of the
+user config when set). Run it in a folder that is a clone of each repo or
+holds the clones as `./<name>`. Each repo ticks in turn with its own lock and
+question queue; one that fails is logged and the rest still run. With
+`--org`, a repo without a clone is skipped; no clone at all is exit 1.
 
 Without `owner/repo`, the loop uses the GitHub remote of the current
 directory, `origin` first. `pause`, `resume` and the tick use the same rule,
@@ -75,4 +82,4 @@ the next run.
 
 - Never post, approve, resolve or commit yourself. The engine does each
   action.
-- `pr-review status [owner/repo]` shows the queue, the budgets and the lock.
+- `pr-review status [owner/repo...] [--org owner]` shows the queue, the budgets and the lock.

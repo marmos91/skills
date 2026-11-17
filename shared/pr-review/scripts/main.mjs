@@ -24,10 +24,10 @@ installSignalHandlers();
 const USAGE = `usage: pr-review review [<n|url>] [--repo owner/repo] [--dry-run] [--lens a,b] [--until ${STAGES.join("|")}]
                  [--config <file>] [--effort low|medium|high|max|auto] [--depth light|full|auto] [--max-diff-lines N] [--restart] [--loop]
        pr-review answer [<question-id> post|drop|ask-author] [--repo owner/repo]
-       pr-review status [owner/repo]
+       pr-review status [owner/repo...] [--org <owner>]
        pr-review doctor [--config <file>]
        pr-review config core-paths <owner/repo> ['glob'...]
-       pr-review tick [owner/repo]
+       pr-review tick [owner/repo...] [--org <owner>]
        pr-review digest [owner/repo]
        pr-review pause|resume [owner/repo]
        pr-review learnings forget <key> [--repo owner/repo]
@@ -44,6 +44,21 @@ function repoOf(flag) {
   if (!repo) throw new Usage("cannot tell the repo: pass --repo owner/repo or run in a clone of it");
   try { stateRoot(repo); } catch (e) { throw new Usage(e.message); }
   return repo;
+}
+
+// tick and status: the repos named, else --org <owner>'s repos that are not archived (only those in loop.repos when it is set).
+function reposOf(rest, v) {
+  if (!v.org) return rest.length ? rest.map(repoOf) : [repoOf(v.repo)];
+  if (rest.length || v.repo) throw new Usage("--org takes no repo");
+  let config;
+  try { config = loadUserConfig({}); } catch (e) { throw new Usage(e.message); }
+  let list;
+  try { list = JSON.parse(execFileSync(process.env.GH_BIN || "gh", ["repo", "list", v.org, "--no-archived", "--limit", "1000", "--json", "nameWithOwner"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })); }
+  catch (e) { throw new Error(`gh repo list ${v.org} failed: ${String(e.stderr || e.message).trim()}`); }
+  const only = new Set(config.loop.repos.map((r) => r.toLowerCase()));
+  const repos = list.map((r) => r.nameWithOwner).filter((r) => !only.size || only.has(r.toLowerCase())).map(repoOf);
+  if (!repos.length) throw new Usage(`--org ${v.org}: no repos${only.size ? " in loop.repos" : ""}`);
+  return repos;
 }
 
 // No number: the PR of the current branch.
@@ -235,10 +250,11 @@ export async function main(argv, deps = {}) {
     args: argv, allowPositionals: true,
     options: {
       repo: { type: "string" }, "dry-run": { type: "boolean" }, lens: { type: "string" }, until: { type: "string" },
-      config: { type: "string" }, effort: { type: "string" }, depth: { type: "string" }, "max-diff-lines": { type: "string" }, restart: { type: "boolean" }, loop: { type: "boolean" }, wrong: { type: "boolean" }, pr: { type: "string" }, help: { type: "boolean", short: "h" },
+      config: { type: "string" }, effort: { type: "string" }, depth: { type: "string" }, "max-diff-lines": { type: "string" }, restart: { type: "boolean" }, org: { type: "string" }, loop: { type: "boolean" }, wrong: { type: "boolean" }, pr: { type: "string" }, help: { type: "boolean", short: "h" },
     },
   });
   if (v.help || !cmd) { console.log(USAGE); return v.help ? 0 : 1; }
+  if (v.org && cmd !== "tick" && cmd !== "status") throw new Usage("--org works only with tick and status");
   if (cmd === "answer") {
     const [id, option] = rest;
     if (rest.length > 2 || (id && !option)) throw new Usage(USAGE);
@@ -249,11 +265,11 @@ export async function main(argv, deps = {}) {
     return 0;
   }
   if (cmd === "status") {
-    if (rest.length > 1) throw new Usage(USAGE);
+    const repos = reposOf(rest, v);
     // prices only: a config error never hides the status, it leaves tokens without a cost
     let prices = {};
     try { prices = loadUserConfig({ cliPath: v.config }).prices; } catch (e) { console.error(`warning: config not loaded, tokens shown without cost: ${e.message}`); }
-    console.log(JSON.stringify(status(repoOf(rest[0] ?? v.repo), prices), null, 2));
+    console.log(JSON.stringify(repos.length === 1 && !v.org ? status(repos[0], prices) : repos.map((r) => status(r, prices)), null, 2));
     return 0;
   }
   if (cmd === "digest") {
@@ -293,12 +309,37 @@ export async function main(argv, deps = {}) {
     return ok ? 0 : 1;
   }
   if (cmd === "tick") {
-    if (rest.length > 1) throw new Usage(USAGE);
     const { tick } = await import("./lib/tick.mjs");
-    const repo = repoOf(rest[0] ?? v.repo);
-    if (!isClone(repo)) throw new Usage(`this folder is not a clone of ${repo}; cd into one: a tick fetches PR heads here`);
-    const r = await tick({ repo });
-    return r?.exit ?? 0;
+    const repos = reposOf(rest, v);
+    // The clone of owner/name is this folder or ./name; tick and review work in the current folder, so chdir there.
+    const home = process.cwd(), name = (repo) => repo.split("/")[1];
+    const cloneOf = (repo) => [home, join(home, name(repo))].find((d) => { try { process.chdir(d); return isClone(repo); } catch { return false; } });
+    if (repos.length === 1 && !v.org) {
+      try {
+        if (!cloneOf(repos[0])) throw new Usage(`this folder is not a clone of ${repos[0]}, nor is ./${name(repos[0])}; cd into one: a tick fetches PR heads there`);
+        await tick({ repo: repos[0] });
+        return 0;
+      } finally { process.chdir(home); }
+    }
+    // Several repos: one tick each, one after another, each with its own lock and queue. A failed repo does not stop
+    // the rest; with --org a repo without a clone is only skipped, as an org lists repos you may not work on.
+    let code = 0, cloned = 0;
+    for (const repo of repos) {
+      console.error(`pr-review-loop: ${repo}`);
+      try {
+        if (!cloneOf(repo)) {
+          console.error(`pr-review-loop: ${repo}: no clone here or in ./${name(repo)}; skipped`);
+          if (!v.org) code = 4;
+          continue;
+        }
+        cloned++;
+        await tick({ repo });
+      } catch (e) { console.error(`pr-review-loop: ${repo}: ${e.message}`); code = 4; }
+      finally { process.chdir(home); }
+    }
+    // a loop run in the wrong folder must not pass as a quiet success
+    if (v.org && !cloned) throw new Usage(`no clone of any ${v.org} repo here or in ./<name>`);
+    return code;
   }
   if (cmd === "respond") return respondCmd(rest, v, deps);
   if (cmd !== "review" || rest.length > 1) throw new Usage(USAGE);
