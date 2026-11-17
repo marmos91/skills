@@ -323,7 +323,7 @@ export async function main(argv, deps = {}) {
     }
     // Several repos: one tick each, one after another, each with its own lock and queue. A failed repo does not stop
     // the rest; with --org a repo without a clone is only skipped, as an org lists repos you may not work on.
-    let code = 0;
+    let code = 0, cloned = 0;
     for (const repo of repos) {
       console.error(`pr-review-loop: ${repo}`);
       try {
@@ -332,10 +332,13 @@ export async function main(argv, deps = {}) {
           if (!v.org) code = 4;
           continue;
         }
+        cloned++;
         await tick({ repo });
       } catch (e) { console.error(`pr-review-loop: ${repo}: ${e.message}`); code = 4; }
       finally { process.chdir(home); }
     }
+    // a loop run in the wrong folder must not pass as a quiet success
+    if (v.org && !cloned) throw new Usage(`no clone of any ${v.org} repo here or in ./<name>`);
     return code;
   }
   if (cmd === "respond") return respondCmd(rest, v, deps);

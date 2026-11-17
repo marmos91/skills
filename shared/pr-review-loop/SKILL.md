@@ -29,7 +29,7 @@ owner` (its repos that are not archived; only those in `loop.repos` of the
 user config when set). Run it in a folder that is a clone of each repo or
 holds the clones as `./<name>`. Each repo ticks in turn with its own lock and
 question queue; one that fails is logged and the rest still run. With
-`--org`, a repo without a clone is skipped.
+`--org`, a repo without a clone is skipped; no clone at all is exit 1.
 
 Without `owner/repo`, the loop uses the GitHub remote of the current
 directory, `origin` first. `pause`, `resume` and the tick use the same rule,

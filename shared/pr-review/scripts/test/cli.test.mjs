@@ -1,7 +1,7 @@
 import "./hermetic.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -293,6 +293,23 @@ test("tick --org skips a repo without a clone and exits 0", () => {
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stderr, /o\/z: no clone here or in \.\/z; skipped/);
   assert.equal(r.stderr.match(/paused/g)?.length, 2, r.stderr);
+});
+
+test("tick --org with no clone of any repo is a usage error", () => {
+  const fx = multi();
+  fx.dir = join(fx.root, "state");
+  const r = cli(fx, "tick", "--org", "o");
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /no clone of any o repo here or in \.\/<name>/);
+});
+
+test("a repo whose tick throws does not stop the next repo; the exit is 4", () => {
+  const fx = multi();
+  rmSync(join(fx.root, "state", "pr-review", "o__a", "paused")); // o/a ticks for real: the fake gh fails its first call
+  const r = cli(fx, "tick", "o/a", "o/b");
+  assert.equal(r.status, 4, r.stderr);
+  assert.match(r.stderr, /pr-review-loop: o\/a: .*exited 9/);
+  assert.match(r.stderr, /pr-review-loop: o\/b\n[^]*paused/);
 });
 
 test("--org outside tick and status is a usage error", () => {

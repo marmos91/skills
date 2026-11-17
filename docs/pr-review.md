@@ -817,7 +817,8 @@ PR head.
   is a clone of each repo or holds the clones as `./<name>`. The repos tick one
   after another, each with its own lock, state and question queue; a repo that
   fails, or that you named and has no clone, is logged, the others still run,
-  and the exit is 4. With `--org` a repo without a clone is only skipped.
+  and the exit is 4. With `--org` a repo without a clone is only skipped,
+  but when no repo has a clone the exit is 1.
   `pr-review status` takes the same repos and prints each.
 
 ### One tick
