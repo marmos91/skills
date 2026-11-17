@@ -26,8 +26,8 @@ test("low: 2 seats, per-seat, thinking capped at low, must+should, 5 findings", 
   assert.deepEqual(c.post, { severities: ["must", "should"], maxFindings: 5 });
 });
 
-test("medium is the default effort", () => {
-  assert.equal(loadConfig({}).effort, "medium");
+test("auto is the default effort; medium: 3 seats, 10 findings", () => {
+  assert.equal(loadConfig({}).effort, "auto");
   const c = applyEffort(loadConfig({}), "medium");
   assert.equal(c.seats.length, 3);
   assert.equal(c.seats[0].thinking, "medium");
@@ -136,6 +136,22 @@ test("auto: only README.md and docs/a.md -> low", () => {
 
 test("auto: docs plus src/x.ts -> medium", () => {
   assert.equal(pickEffort(["docs/a.md", "src/x.ts"], loadConfig({})), "medium");
+});
+
+test("auto: a diff above effort_auto.high_lines -> high; at the limit -> medium", () => {
+  const c = loadConfig({});
+  assert.equal(pickEffort(["src/x.ts"], c, c.effort_auto.high_lines + 1), "high");
+  assert.equal(pickEffort(["src/x.ts"], c, c.effort_auto.high_lines), "medium");
+  assert.equal(pickEffort(["src/x.ts"], loadConfigWith({ effort_auto: { high_lines: 10 } }), 11), "high");
+  assert.equal(pickEffort(["docs/a.md"], c, c.effort_auto.high_lines + 1), "low", "docs only stays low");
+  assert.throws(() => loadConfigWith({ effort_auto: { high_lines: 0 } }), /effort_auto.high_lines/);
+});
+
+test("review.max_findings overrides the effort's limit; null means no limit", () => {
+  assert.equal(applyEffort(loadConfigWith({ review: { max_findings: 25 } }), "medium").post.maxFindings, 25);
+  assert.equal(applyEffort(loadConfigWith({ review: { max_findings: null } }), "low").post.maxFindings, null);
+  assert.deepEqual(applyEffort(loadConfigWith({ review: { max_findings: 25 } }), "low").post.severities, ["must", "should"]);
+  assert.throws(() => loadConfigWith({ review: { max_findings: 0 } }), /review.max_findings/);
 });
 
 test("auto: no changed paths -> medium", () => {

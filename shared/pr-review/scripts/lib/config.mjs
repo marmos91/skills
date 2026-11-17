@@ -32,13 +32,15 @@ export const EFFORT_AUTO_DEFAULTS = {
     "**/*.md", "docs/**", "**/*.txt", "**/*.lock", "**/package-lock.json", "**/pnpm-lock.yaml",
     "**/*.png", "**/*.jpg", "**/*.svg",
   ],
+  // A diff with more lines than this gets high: a big PR has more findings than medium may post.
+  high_lines: 1000,
 };
 
 // Measured on larger PRs at medium effort: mimir needs up to 60 turns and 25 minutes, mimir-pro up to 25 minutes.
 const seat = (harness, model, thinking, max_turns = 40, timeout_minutes = 15) => ({ harness, model, thinking, max_turns, timeout_minutes });
 
 export const DEFAULTS = {
-  effort: "medium",
+  effort: "auto",
   effort_auto: EFFORT_AUTO_DEFAULTS,
   seats: [seat("claude", "opus", "high"), seat("auto", "cubbit/mimir", "medium", 60, 25), seat("auto", "cubbit/mimir-pro", "medium", 40, 25)],
   round1: "per-seat",
@@ -203,6 +205,7 @@ function validate(c, known) {
   need(EFFORT_VALUES.includes(c.loop.effort), "loop.effort", `one of ${EFFORT_VALUES.join("|")}`);
   need(isObj(c.effort_auto), "effort_auto", "an object");
   for (const k of ["high_paths", "low_paths"]) need(strList(c.effort_auto[k]), `effort_auto.${k}`, "an array of strings");
+  need(posInt(c.effort_auto.high_lines), "effort_auto.high_lines", "a positive integer");
   need(isObj(c.review) && strList(c.review.guidance), "review.guidance", "an array of strings");
   need(["use", "ignore"].includes(c.review.ci), "review.ci", "use or ignore");
   need(isObj(c.hygiene) && typeof c.hygiene.enabled === "boolean", "hygiene.enabled", "a boolean");
@@ -228,6 +231,8 @@ function validate(c, known) {
   need(isObj(c.review.mutants), "review.mutants", "an object");
   for (const k of ["max", "total_s"]) need(posInt(c.review.mutants[k]), `review.mutants.${k}`, "a positive integer");
   for (const k of ["max_diff_lines", "chunk_lines", "max_children", "max_parallel", "max_turns", "timeout_minutes"]) need(posInt(c.review[k]), `review.${k}`, "a positive integer");
+  // unset: the effort's limit; null: no limit
+  need(c.review.max_findings === undefined || c.review.max_findings === null || posInt(c.review.max_findings), "review.max_findings", "a positive integer or null");
 }
 
 /** The config of this user: config file, lens folder, and the optional --config file and repo text. */
@@ -344,6 +349,7 @@ export function applyEffort(config, effort) {
   }
   c.round1 = p.round1;
   c.post = structuredClone(p.post);
+  if (c.review?.max_findings !== undefined) c.post.maxFindings = c.review.max_findings;
   return c;
 }
 
@@ -384,10 +390,11 @@ export function globMatch(glob, path) {
   return new RegExp(`^${re}$`, "i").test(path);
 }
 
-export function pickEffort(changedPaths, config) {
-  const { high_paths, low_paths } = config.effort_auto;
+export function pickEffort(changedPaths, config, diffLines = 0) {
+  const { high_paths, low_paths, high_lines } = config.effort_auto;
   const any = (globs, p) => globs.some((g) => globMatch(g, p));
   if (changedPaths.some((p) => any(high_paths, p))) return "high";
   if (changedPaths.length > 0 && changedPaths.every((p) => any(low_paths, p))) return "low";
+  if (diffLines > high_lines) return "high";
   return "medium";
 }

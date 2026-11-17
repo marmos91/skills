@@ -677,7 +677,7 @@ test("--effort low posts at most 5 findings, no nits, and says how many were lef
   assert.equal(p.threads.length, 5);
   assert.ok(p.threads.every((t) => !t.body.startsWith("**nit:**")));
   assert.equal(p.threads.filter((t) => t.body.startsWith("**must:**")).length, 2);
-  assert.match(p.body, /4 findings were left out by the effort limit\./);
+  assert.match(p.body, /4 findings were left out by the effort limit \(2 should, 2 nit\)\. Raise it with --effort or review.max_findings\./);
 });
 
 test("hygiene findings appear as one list in the summary, not as inline comments", async () => {

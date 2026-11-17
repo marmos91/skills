@@ -278,7 +278,7 @@ async function once(o, restart) {
   const runFile = join(runDir, "run.json");
   if (!existsSync(runFile)) {
     let effort = o.effort ?? (mode === "loop" ? config.loop.effort : config.effort);
-    if (effort === "auto") effort = pickEffort(f.changedPaths, config);
+    if (effort === "auto") effort = pickEffort(f.changedPaths, config, f.diffLines);
     const lenses = Object.keys(config.lenses).filter((l) => config.lenses[l].enabled && (!o.lenses || o.lenses.includes(l)));
     if (!lenses.length) throw new SetupError("no lens runs: the requested lens is disabled in the config, or every lens is disabled");
     let depth = o.depth ?? config.review.depth;
@@ -576,6 +576,9 @@ async function once(o, restart) {
   // below the floor here is only a must that proof lowered: a higher effort would not post it
   const belowFloor = agreed.filter((c) => !c.answered && !floor.has(c.severity)).length;
   const leftOut = agreed.length - chosen.length - belowFloor;
+  // by severity, so a reader sees at once whether only nits were cut
+  const cut = agreed.filter((c) => !chosen.includes(c) && (c.answered || floor.has(c.severity)));
+  const cutBy = Object.keys(RANK).map((s) => [s, cut.filter((c) => c.severity === s).length]).filter(([, k]) => k).map(([s, k]) => `${k} ${s}`).join(", ");
   // Hygiene obeys the same severity floor and settled list as council findings (spec 7.5).
   const hygOf = (fs, from = 0) => filterNew(fs.map((h) => ({ ...h, file: "", line: null })), { reviewNumber: f.reviewNumber, settled: new Set(pst.settled), changedLines: new Map(), learned }).keep
     .filter((h) => allowed.has(h.severity)).map((h, i) => ({ ...h, id: `h${from + i + 1}`, fp: fingerprint(h) }));
@@ -724,7 +727,7 @@ async function once(o, restart) {
     noTracking ? "No tracking issue or plan." : "",
     outside.length ? `Outside the diff:\n${outside.map((l) => `- ${l}`).join("\n")}` : "",
     open.length ? `${open.length} ${open.length === 1 ? "point is" : "points are"} still open with the reviewer.` : "",
-    leftOut ? `${leftOut} ${leftOut === 1 ? "finding was" : "findings were"} left out by the effort limit.` : "",
+    leftOut ? `${leftOut} ${leftOut === 1 ? "finding was" : "findings were"} left out by the effort limit (${cutBy}). Raise it with --effort or review.max_findings.` : "",
     belowFloor ? `${belowFloor} unproven ${belowFloor === 1 ? "finding was" : "findings were"} left out: review ${f.reviewNumber} posts only must findings.` : "",
     run.missing?.length ? `Lenses not run: ${run.missing.join(", ")}.` : "",
     // Dropped seats and missed parts stay out of the body: they are in run.json and the run log.
