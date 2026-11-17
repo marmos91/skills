@@ -2,7 +2,7 @@
 name: secret-scan
 description: "One check before any push or post: scan a diff, commits, a PR body, a review comment or an issue for secrets (gitleaks when installed, built-in patterns without it), private infrastructure names from a local untracked list, and values from your sops-rendered files. Prints only masked hits; a hit blocks; a local allow list with reasons lets a false hit through. pr-review, pr-respond and pr-open use it. Use on 'secret-scan', 'scan for secrets', 'is this safe to push', 'check this before I post'."
 metadata:
-  version: "0.6.0" # x-release-please-version
+  version: "0.7.0" # x-release-please-version
 ---
 
 # secret-scan: one check before any push or post

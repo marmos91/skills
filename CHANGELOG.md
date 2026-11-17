@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.7.0](https://github.com/marmos91/skills/compare/v0.6.0...v0.7.0) (2026-11-17)
+
+
+### Features
+
+* **pr-review-loop:** daily digest of open questions and to-dos ([#110](https://github.com/marmos91/skills/issues/110)) ([e6c44e4](https://github.com/marmos91/skills/commit/e6c44e49162d691ce29905947f94411f7d9183d7))
+* **pr-review-loop:** tick and status for several repos or --org ([#111](https://github.com/marmos91/skills/issues/111)) ([a42033f](https://github.com/marmos91/skills/commit/a42033f0f8367630fc4492a6f607480ac8d9622c))
+* **pr-review:** cost per stage, run and PR from a user price table ([#106](https://github.com/marmos91/skills/issues/106)) ([8a36356](https://github.com/marmos91/skills/commit/8a36356f38f68c274684b2cf31848fbbfb8f1c11))
+* **pr-review:** decision line, severity groups, state block for agents ([#103](https://github.com/marmos91/skills/issues/103)) ([dd84ddc](https://github.com/marmos91/skills/commit/dd84ddcdd0d821ceab91d74cb030c2567ee87ef2))
+* **pr-review:** semgrep hits as security candidates at every depth ([#96](https://github.com/marmos91/skills/issues/96)) ([aff05ba](https://github.com/marmos91/skills/commit/aff05ba44a1b5f2ee568eccbb9f2afb5540d3819))
+
+
+### Bug Fixes
+
+* **pr-review:** approve queue edges left after [#85](https://github.com/marmos91/skills/issues/85) ([#108](https://github.com/marmos91/skills/issues/108)) ([37a3a08](https://github.com/marmos91/skills/commit/37a3a08d85a510359df2df4bbc685717b8a358e9))
+* **pr-review:** learnings edges from [#84](https://github.com/marmos91/skills/issues/84) ([#99](https://github.com/marmos91/skills/issues/99)) ([7befde1](https://github.com/marmos91/skills/commit/7befde10e35e7b6f23d29c0d141ec5f2fe8aabc9))
+* **pr-review:** review output edges left after [#75](https://github.com/marmos91/skills/issues/75) and [#103](https://github.com/marmos91/skills/issues/103) ([#109](https://github.com/marmos91/skills/issues/109)) ([1705767](https://github.com/marmos91/skills/commit/1705767e4d5fb0f362befeaf4a970df0e87aae27))
+* **pr-review:** settled anchor edges and roomier mimir seat limits ([#98](https://github.com/marmos91/skills/issues/98)) ([cd9e5b3](https://github.com/marmos91/skills/commit/cd9e5b3fcba21fb273df9b0160f1e3d618b1195c))
+* **pr-review:** status edges left after [#80](https://github.com/marmos91/skills/issues/80) ([#101](https://github.com/marmos91/skills/issues/101)) ([9be6ef6](https://github.com/marmos91/skills/commit/9be6ef6515540e845faae2bb3292f723156bf1e8))
+* small edges of [#87](https://github.com/marmos91/skills/issues/87), [#92](https://github.com/marmos91/skills/issues/92), [#105](https://github.com/marmos91/skills/issues/105), [#78](https://github.com/marmos91/skills/issues/78) ([#112](https://github.com/marmos91/skills/issues/112)) ([391b1a4](https://github.com/marmos91/skills/commit/391b1a403569e762d4290adaf65742319f861840))
+
+
+### Performance
+
+* **pr-review:** inline code for votes, fold hygiene into compose for small PRs ([#107](https://github.com/marmos91/skills/issues/107)) ([09b3102](https://github.com/marmos91/skills/commit/09b3102bec8c3310f8193f7b845285d86d69c0f3))
+
 ## [0.6.0](https://github.com/marmos91/skills/compare/v0.5.0...v0.6.0) (2026-11-16)
 
 
