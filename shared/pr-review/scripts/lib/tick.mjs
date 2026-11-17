@@ -13,6 +13,7 @@ import { FINAL_STAGE, acquireLock, Locked, markDone, prState, savePrState, runDi
 import { limiter } from "./limit.mjs";
 import { settleCoreQuestions } from "./setup.mjs";
 import { appliedAnswer, openQuestions, pendingAnswers, queueQuestion, questionWarnings } from "./questions.mjs";
+import { withdraws } from "./verdict.mjs";
 
 const sha1 = (s) => createHash("sha1").update(s).digest("hex");
 // A corrupt journal or baseline file counts as missing, so one bad write cannot stop every later tick.
@@ -282,21 +283,25 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
       return { acted: true, cache: !wait, reviewed: doReview && !wait };
     }
 
-    // 7.4: check against the current head first; a moved head drops the answer with a note.
-    // -> true when the answer is settled (approved or dropped), false to retry next tick.
     async function approve(q) {
-      const p = await gh.pr(repo, q.pr);
-      const ci = p.headSha === q.sha ? await gh.checks(repo, q.pr, q.sha) : null;
-      if (!ci || ci.stale) { log(`#${q.pr}: head moved since question ${q.id}; approve dropped`); return true; }
-      const last = prState(rs, q.pr).verdict;
-      if (last?.sha === q.sha && !last.queueApprove) { log(`#${q.pr}: a later review at ${q.sha} blocks; approve (${q.id}) dropped`); return true; }
-      if (ci.state === "pending") { log(`#${q.pr}: CI pending; approve (${q.id}) waits for the next tick`); return false; }
-      if (ci.state !== "green" && ci.state !== "none") { log(`#${q.pr}: CI ${ci.state}; approve (${q.id}) dropped`); return true; }
-      const key = `key=${sha1(`approve\0${q.pr}\0${q.sha}`)}`;
-      if (await gh.findMarker(repo, q.pr, key)) return true;
-      await gh.postReview(repo, q.pr, { commitOID: q.sha, event: "APPROVE", body: `<!-- pr-review run=${runId} sha=${q.sha} ${key} -->` });
-      log(`#${q.pr}: approved at ${q.sha} (answer to ${q.id})`);
-      return true;
+      const r = await postApproval({ repo, gh, rs, q, runId });
+      log(r.note);
+      return r.done;
     }
   }
+}
+
+// 7.4: check against the current head first; a moved head drops the answer with a note. The tick and a pr-review
+// rerun at the same head use it. -> { done: true when settled (approved or dropped), false to retry; note }
+export async function postApproval({ repo, gh, rs, q, runId }) {
+  const p = await gh.pr(repo, q.pr);
+  const ci = p.headSha === q.sha ? await gh.checks(repo, q.pr, q.sha) : null;
+  if (!ci || ci.stale) return { done: true, note: `#${q.pr}: head moved since question ${q.id}; approve dropped` };
+  if (withdraws(prState(rs, q.pr).verdict, q)) return { done: true, note: `#${q.pr}: a later review at ${q.sha} blocks; approve (${q.id}) dropped` };
+  if (ci.state === "pending") return { done: false, note: `#${q.pr}: CI pending; approve (${q.id}) waits until CI is done` };
+  if (ci.state !== "green" && ci.state !== "none") return { done: true, note: `#${q.pr}: CI ${ci.state}; approve (${q.id}) dropped` };
+  const key = `key=${sha1(`approve\0${q.pr}\0${q.sha}`)}`;
+  if (await gh.findMarker(repo, q.pr, key)) return { done: true, note: `#${q.pr}: already approved at ${q.sha}` };
+  await gh.postReview(repo, q.pr, { commitOID: q.sha, event: "APPROVE", body: `<!-- pr-review run=${runId} sha=${q.sha} ${key} -->` });
+  return { done: true, note: `#${q.pr}: approved at ${q.sha} (answer to ${q.id})` };
 }
