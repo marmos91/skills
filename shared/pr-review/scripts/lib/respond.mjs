@@ -243,21 +243,22 @@ export function summaryText(repo, points) {
  * carries its fp itself. The first summary of a step wins: the
  * recorded points stay those of the posted comment. -> { action: "posted"|"skipped", points }
  */
-export async function summary({ repo, n, points: given, gh, warn = (m) => console.error(m) }) {
+export async function summary({ repo, n, points: given, gh }) {
   const { headSha } = await gh.pr(repo, n);
   const named = given.some((p) => p.thread) ? [await gh.viewer(), await gh.threads(repo, n)] : [];
   // A finding outside the diff has no thread: its point names the fingerprint, one this PR's reviews recorded (local
   // agreed, else the state items of our review markers on GitHub: hygiene items, or a review run on another machine).
-  // An unknown fp is dropped from its point with a warning; the point is still posted.
+  // An unknown fp is a mistake: refused before anything is saved or posted, since the first summary at a head wins.
   const own = (p) => (p.thread ? [] : p.fps ?? (p.fp ? [p.fp] : []));
   const local = new Set((prState(stateRoot(repo), n).agreed ?? []).map((a) => a.id));
   const known = given.flatMap(own).every((f) => local.has(f)) ? local : new Set([...local, ...await gh.markerFps(repo, n)]);
+  const unknown = given.flatMap((p) => own(p).filter((f) => !known.has(f)).map((f) => `point ${p.n}: ${f}`));
+  if (unknown.length) throw new Error(`not a finding of a review of ${repo}#${n} (fix the points file and run again): ${unknown.join("; ")}`);
   const points = given.map((p) => {
     if (!p.thread) {
       if (!own(p).length) return p;
-      for (const f of own(p).filter((x) => !known.has(x))) warn(`pr-respond summary: point ${p.n}: ${f} is not a finding of a review of ${repo}#${n}; the point is posted without it`);
       const { fp, ...rest } = p;
-      return { ...rest, fps: own(p).filter((x) => known.has(x)) };
+      return { ...rest, fps: own(p) };
     }
     const t = named[1].find((x) => x.id === p.thread);
     if (!t) throw new Error(`point ${p.n}: thread ${p.thread} not found on ${repo}#${n}`);

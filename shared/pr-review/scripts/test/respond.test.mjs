@@ -296,13 +296,14 @@ test("summary: a point with no thread (a finding outside the diff) carries its f
   freshState();
   const h = "4".repeat(40);
   assert.deepEqual((await summary({ repo: REPO, n: N, points: [{ ...pt, fp: h }], gh: fakeGh([], { fps: [h] }) })).points[0].fps, [h]);
-  // an unknown fp is dropped from its point with a warning; the summary still posts every point
+  // an unknown fp refuses the whole summary, naming it: nothing posted, nothing saved; the corrected rerun posts
   freshState();
-  const warned = [], gh = fakeGh([], { fps: [h] });
-  const r = await summary({ repo: REPO, n: N, points: [{ ...pt, fp: k }, { ...pt, n: 2, fp: h }], gh, warn: (m) => warned.push(m) });
-  assert.deepEqual(r.points.map((p) => p.fps), [[], [h]]);
+  const gh = fakeGh([], { fps: [h] }), bad = [{ ...pt, fp: k }, { ...pt, n: 2, fp: h }];
+  await assert.rejects(summary({ repo: REPO, n: N, points: bad, gh }), /point 1: 9{40}/);
+  assert.equal(gh.calls.comment.length, 0);
+  assert.equal(recordedPoints(REPO, N, "h1"), null);
+  assert.equal((await summary({ repo: REPO, n: N, points: [{ ...pt, fp: h }, bad[1]], gh })).action, "posted");
   assert.equal(gh.calls.comment.length, 1);
-  assert.match(warned.join(), /point 1: 9{40} is not a finding/);
 });
 
 test("summary: a rerun at the same head keeps the points of the posted comment", async () => {
