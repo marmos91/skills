@@ -745,3 +745,26 @@ test("digest: still sent when the tick's run fails, with the reason", async () =
   await assert.rejects(go({ gh, loadCfg: digestCfg(`cat > '${out}'`) }), /authentication expired/);
   assert.match(readFileSync(out, "utf8"), /^pr-review-loop digest for o\/r\nLast tick failed: gh: authentication expired\n\n1 open question/);
 });
+
+test("digest: a bad repo config fails the tick but the digest still goes out, from the user config", async () => {
+  const rs = fresh();
+  withBaseline(rs);
+  const out = join(rs, "..", "digest.out");
+  queueQuestion(rs, QUEUED);
+  // no argument reads the repo's .pr-review.json (here: bad); null reads the user config only
+  const loadCfg = (repoText) => { if (repoText !== null) throw new Error("config key not allowed at repo level: bogus"); return digestCfg(`cat > '${out}'`)(); };
+  await assert.rejects(go({ loadCfg }), /not allowed at repo level/);
+  assert.match(readFileSync(out, "utf8"), /\nLast tick failed: config key not allowed at repo level: bogus\n/);
+});
+
+test("digest: a failed tick with nothing open sends nothing and keeps the day's slot", async () => {
+  const rs = fresh();
+  withBaseline(rs);
+  const out = join(rs, "..", "digest.out");
+  const gh = { ...fakeGh(), viewer: async () => { throw new Error("gh: authentication expired"); } };
+  await assert.rejects(go({ gh, loadCfg: digestCfg(`cat > '${out}'`) }));
+  assert.equal(existsSync(out), false);
+  queueQuestion(rs, QUEUED);
+  await go({ loadCfg: digestCfg(`cat > '${out}'`), now: () => NOW + 3600e3 });
+  assert.ok(existsSync(out));
+});

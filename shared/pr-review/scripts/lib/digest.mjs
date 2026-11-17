@@ -9,13 +9,14 @@ import { redact } from "./secrets.mjs";
 const DAY = 24 * 3600e3;
 const prUrl = (repo, n) => `https://github.com/${repo}/pull/${n}`;
 
-/** The message, or "" when no question is open and todo.md has no open item. Titles are redacted at queue time. */
+/** The message, or "" when no question is open and todo.md has no open item (even if the tick failed). Titles are redacted at queue time. */
 export function digestText(repo, rs, failed) {
   const qs = openQuestions(rs);
   const todoFile = join(rs, "todo.md");
   const todo = existsSync(todoFile) ? readFileSync(todoFile, "utf8").trim() : "";
   const todos = todo.match(/^- \[ \].*$/gm) ?? [];
-  if (!qs.length && !todos.length && !failed) return "";
+  // a failed tick alone sends nothing: the failure line rides on a digest that is due anyway
+  if (!qs.length && !todos.length) return "";
   const lines = [`pr-review-loop digest for ${repo}`];
   if (failed) lines.push(`Last tick failed: ${redact(String(failed.message ?? failed).split("\n")[0]).slice(0, 200)}`);
   if (qs.length) lines.push("", `${qs.length} open question(s). Answer with "pr-review-loop answer".`);

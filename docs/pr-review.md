@@ -1061,8 +1061,10 @@ your user config (`~/.config/pr-review/config.json`; a repo's
 ```
 
 The tick pipes the message to the command on stdin, at most once every 24
-hours and only when something is open. It is sent even when the tick fails
-(GitHub down, expired `gh` auth), with a `Last tick failed:` line. Any shell command works, for example
+hours and only when something is open. A failed tick (GitHub down, expired `gh`
+auth, a bad `.pr-review.json` in the repo) does not stop a digest that is due:
+it gets a `Last tick failed:` line. A failed tick with nothing open sends
+nothing and does not use the day's send. Any shell command works, for example
 a `curl` to a Slack incoming webhook that reads the URL from a file or an
 environment variable. The tick logs only the exit status of the command,
 never the command or its output. A failed send is retried on the next tick.

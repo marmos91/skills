@@ -74,8 +74,9 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
     await sweep(rs);
     await run();
   } catch (e) { failed = e; throw e; } finally {
-    // the digest reads only local state: a GitHub outage or expired gh auth must not stop it
-    try { sendDigest({ repo, rs, config: loadCfg(), now, log, failed }); } catch (e) { log(`digest: ${e.message}`); }
+    // the digest reads only local state: a GitHub outage or expired gh auth must not stop it.
+    // null: the user config only (digest is user-only), so a bad repo .pr-review.json does not stop it either.
+    try { sendDigest({ repo, rs, config: loadCfg(null), now, log, failed }); } catch (e) { log(`digest: ${e.message}`); }
     release();
   }
   out.questions = openQuestions(rs).length;
