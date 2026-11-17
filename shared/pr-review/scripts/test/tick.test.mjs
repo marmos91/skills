@@ -694,3 +694,77 @@ test("core-paths question: a drop saves none, but never over a saved value; post
   assert.deepEqual(readCorePaths(rs), ["pkg/**"]);
   assert.equal(pendingAnswers(rs).length, 0);
 });
+
+// digest.command gets the digest on stdin once a day; nothing open sends nothing; a failed send is retried.
+const digestCfg = (command) => () => { const c = loadConfig(); c.digest = { command }; return c; };
+const QUEUED = { pr: 7, sha: "s", fingerprint: "deadbeefcafe", file: "a.js", line: 3, snippet: "x", finding: { title: "Off by one", case: "c" }, sides: { keep: "k", drop: "d" }, failure: "f" };
+
+test("digest: sent once a day through digest.command, with the open questions on stdin", async () => {
+  const rs = fresh();
+  withBaseline(rs);
+  const out = join(rs, "..", "digest.out");
+  queueQuestion(rs, QUEUED);
+  const at = (t) => go({ loadCfg: digestCfg(`cat > '${out}'`), now: () => t });
+  await at(NOW);
+  assert.match(readFileSync(out, "utf8"), /7-deadbeef: PR #7: Off by one\n  https:\/\/github\.com\/o\/r\/pull\/7\n/);
+  rmSync(out);
+  await at(NOW + 23 * 3600e3);
+  assert.equal(existsSync(out), false);
+  await at(NOW + 25 * 3600e3);
+  assert.ok(existsSync(out));
+});
+
+test("digest: nothing open sends nothing", async () => {
+  const rs = fresh();
+  withBaseline(rs);
+  const out = join(rs, "..", "digest.out");
+  writeAtomic(join(rs, "todo.md"), "- [x] done already\n");
+  await go({ loadCfg: digestCfg(`cat > '${out}'`) });
+  assert.equal(existsSync(out), false);
+});
+
+test("digest: a failed command is logged without its text and retried on the next tick", async () => {
+  const rs = fresh();
+  withBaseline(rs);
+  queueQuestion(rs, QUEUED);
+  const logs = [];
+  await go({ loadCfg: digestCfg("echo hooks.example/T0K3N >&2; exit 3"), log: (m) => logs.push(m) });
+  assert.ok(logs.includes("digest: digest.command failed (exit 3); retried next tick"));
+  assert.ok(!logs.join("\n").includes("T0K3N"));
+  const out = join(rs, "..", "digest.out");
+  await go({ loadCfg: digestCfg(`cat > '${out}'`), now: () => NOW + 60000 });
+  assert.ok(existsSync(out));
+});
+
+test("digest: still sent when the tick's run fails, with the reason", async () => {
+  const rs = fresh();
+  withBaseline(rs);
+  const out = join(rs, "..", "digest.out");
+  queueQuestion(rs, QUEUED);
+  const gh = { ...fakeGh(), viewer: async () => { throw new Error("gh: authentication expired\nmore"); } };
+  await assert.rejects(go({ gh, loadCfg: digestCfg(`cat > '${out}'`) }), /authentication expired/);
+  assert.match(readFileSync(out, "utf8"), /^pr-review-loop digest for o\/r\nLast tick failed: gh: authentication expired\n\n1 open question/);
+});
+
+test("digest: a bad repo config fails the tick but the digest still goes out, from the user config", async () => {
+  const rs = fresh();
+  withBaseline(rs);
+  const out = join(rs, "..", "digest.out");
+  queueQuestion(rs, QUEUED);
+  // no argument reads the repo's .pr-review.json (here: bad); null reads the user config only
+  const loadCfg = (repoText) => { if (repoText !== null) throw new Error("config key not allowed at repo level: bogus"); return digestCfg(`cat > '${out}'`)(); };
+  await assert.rejects(go({ loadCfg }), /not allowed at repo level/);
+  assert.match(readFileSync(out, "utf8"), /\nLast tick failed: config key not allowed at repo level: bogus\n/);
+});
+
+test("digest: a failed tick with nothing open sends nothing and keeps the day's slot", async () => {
+  const rs = fresh();
+  withBaseline(rs);
+  const out = join(rs, "..", "digest.out");
+  const gh = { ...fakeGh(), viewer: async () => { throw new Error("gh: authentication expired"); } };
+  await assert.rejects(go({ gh, loadCfg: digestCfg(`cat > '${out}'`) }));
+  assert.equal(existsSync(out), false);
+  queueQuestion(rs, QUEUED);
+  await go({ loadCfg: digestCfg(`cat > '${out}'`), now: () => NOW + 3600e3 });
+  assert.ok(existsSync(out));
+});

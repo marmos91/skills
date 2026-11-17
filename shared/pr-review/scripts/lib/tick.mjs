@@ -14,6 +14,7 @@ import { limiter } from "./limit.mjs";
 import { settleCoreQuestions } from "./setup.mjs";
 import { appliedAnswer, openQuestions, pendingAnswers, queueQuestion, questionWarnings } from "./questions.mjs";
 import { withdraws } from "./verdict.mjs";
+import { sendDigest } from "./digest.mjs";
 
 const sha1 = (s) => createHash("sha1").update(s).digest("hex");
 // A corrupt journal or baseline file counts as missing, so one bad write cannot stop every later tick.
@@ -62,7 +63,7 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
   const rs = stateRoot(repo);
   const out = { processed: 0, skipped: 0, questions: 0, todos: 0 };
   if (existsSync(join(rs, "paused"))) { log(`pr-review-loop: paused; run "pr-review-loop resume" to continue`); return { ...out, paused: true }; }
-  let release;
+  let release, failed;
   try { release = acquireLock(rs); } catch (e) {
     if (!(e instanceof Locked)) throw e;
     log(`pr-review-loop: ${e.message}; this tick does nothing`);
@@ -72,7 +73,12 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
     // reply-only runs end here, not in review(): sweep their worktrees too
     await sweep(rs);
     await run();
-  } finally { release(); }
+  } catch (e) { failed = e; throw e; } finally {
+    // the digest reads only local state: a GitHub outage or expired gh auth must not stop it.
+    // null: the user config only (digest is user-only), so a bad repo .pr-review.json does not stop it either.
+    try { sendDigest({ repo, rs, config: loadCfg(null), now, log, failed }); } catch (e) { log(`digest: ${e.message}`); }
+    release();
+  }
   out.questions = openQuestions(rs).length;
   const todoFile = join(rs, "todo.md");
   out.todos = existsSync(todoFile) ? (readFileSync(todoFile, "utf8").match(/^- \[ \]/gm) ?? []).length : 0;

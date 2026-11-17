@@ -108,6 +108,7 @@ test("allowed values are type-checked, with the key path in the error", () => {
     ['{"lenses":{"bogus":{"enabled":true}}}', /lenses.bogus must be a known lens/],
     ['{"lenses":{"security":true}}', /lenses.security must be an object/],
     ['{"loop":{"authors_ignore":"bot"}}', /loop.authors_ignore must be an array of strings/],
+    ['{"digest":{"command":["curl"]}}', /digest.command must be a non-empty string/],
     ['{"loop":{"max_prs_per_run":"x"}}', /loop.max_prs_per_run must be a positive integer/],
     ['{"loop":{"max_review_rounds":0}}', /loop.max_review_rounds must be a positive integer/],
     ['{"loop":{"max_replies_per_thread":1.5}}', /loop.max_replies_per_thread must be a positive integer/],
