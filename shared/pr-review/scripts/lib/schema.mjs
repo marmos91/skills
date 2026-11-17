@@ -66,6 +66,7 @@ const stages = {
       if (!str(x?.body)) errs.push(`${p}.body: required`);
       if (x?.also !== undefined && !(Array.isArray(x.also) && x.also.every(str))) errs.push(`${p}.also: must be an array of finding ids`);
     });
+    // the folded hygiene check (prompts.mjs composePrompt): review.mjs checks its items one by one and drops a bad one
   },
   hygiene(v, errs) {
     if (!v || typeof v !== "object") return errs.push("value: not an object");

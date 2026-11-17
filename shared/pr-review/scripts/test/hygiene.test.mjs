@@ -110,7 +110,8 @@ mkdirSync(join(ctxDir, "guidance"), { recursive: true });
 writeFileSync(join(ctxDir, "guidance", "CONTRIBUTING.md"), "Please link an issue.");
 const wrap = (s) => `<<<PR-DATA-ab12\nnote\n${s}\nPR-DATA-ab12>>>`;
 writeFileSync(join(ctxDir, "pr.json"), JSON.stringify({ title: wrap("Update stuff"), body: wrap(""), commits: [{ sha: "1", subject: wrap("Update stuff") }], closingIssues: [] }));
-const frame = { headSha: "HEAD", baseRef: "main", trusted: true, shellOk: true, ctxDir, worktree: dir, changedPaths: ["src/a.js"], nonce: "ab12", reviewNumber: 1, delta: {} };
+// two parts: a split PR runs the model child; a PR in one part folds it into compose
+const frame = { headSha: "HEAD", baseRef: "main", trusted: true, shellOk: true, ctxDir, worktree: dir, changedPaths: ["src/a.js"], nonce: "ab12", reviewNumber: 1, delta: {}, chunks: [{}, {}] };
 const fx = join(dir, "fx.json");
 const cfg = loadConfig();
 const model = { findings: [{ lens: "hygiene", severity: "should", title: "Description differs", case: "Body says X, diff does Y", fix: "Update the body" }] };
@@ -135,6 +136,18 @@ test("effort low skips the model child", async () => {
     const r = await hygiene(frame, cfg, "low");
     assert.deepEqual(r.warnings, []);
     assert.ok(r.findings.length > 0);
+  } finally { delete process.env.PR_REVIEW_FAKE; }
+});
+
+test("a PR in one part: no child, the model check is folded into compose", async () => {
+  process.env.PR_REVIEW_FAKE = join(dir, "missing.json"); // would fail the child if it ran
+  try {
+    for (const chunks of [[{}], undefined]) {
+      const r = await hygiene({ ...frame, chunks }, cfg, "medium");
+      assert.deepEqual([r.warnings, r.folded], [[], true]);
+      assert.ok(r.findings.length > 0, "the code checks still run");
+    }
+    assert.equal((await hygiene({ ...frame, chunks: [{}] }, cfg, "low")).folded, undefined, "low runs no model check at all");
   } finally { delete process.env.PR_REVIEW_FAKE; }
 });
 

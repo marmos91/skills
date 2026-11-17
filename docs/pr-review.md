@@ -187,7 +187,9 @@ Each seat that found a cluster on its own already counts as one `keep`.
 Round 2 runs only for clusters that some seats did not find, and only those
 seats vote. Each voting seat runs 1 child and votes `keep` or `drop` with a
 reason. A `drop` needs a counter-case. A vote child gets 10 turns plus 3 per
-finding it checks, and never more than its `max_turns`.
+finding it checks, and never more than its `max_turns`. Its prompt holds the
+head lines around each finding (15 above and below), so it reads the worktree
+only for what they do not show.
 
 ### 5. Tally
 
@@ -710,7 +712,9 @@ A cheap check next to the lenses. It is not a council lens.
   code; commit subjects follow the same style.
 - **1 child** (judge model, thinking `low`, skipped at effort `low`): does
   the description match the diff, and are docs missing for a changed public
-  interface?
+  interface? A PR in one part (not split, see `review.chunk_lines`) gets no
+  child: compose does this check itself and returns what it finds as hygiene
+  findings, which the engine lists and counts like the child's.
 
 Hygiene findings are `should` or `nit`, never `must`. They go into the
 summary as one short list, never as inline comments. A model finding is

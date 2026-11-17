@@ -150,7 +150,9 @@ export function round1Prompt(frame, lenses, maxTurns, part) {
   ].join("\n");
 }
 
-export function votePrompt(frame, clusters, maxTurns) {
+// code: [{ id, file, from, text }], the head lines around each finding (review.mjs), so a voter reads less.
+export function votePrompt(frame, clusters, maxTurns, code = []) {
+  const numbered = (x) => `${x.id}: ${x.file}\n${x.text.split("\n").map((l, i) => `${x.from + i}: ${l}`).join("\n")}`;
   return [
     context(frame),
     "",
@@ -161,8 +163,11 @@ export function votePrompt(frame, clusters, maxTurns) {
     "## Findings",
     seatData(json(clusters), frame.nonce),
     "",
+    ...(code.length ? ["## Code around each finding", `The head version of the lines around each finding, by finding id, with line numbers.`, prData(code.map(numbered).join("\n\n"), undefined, frame.nonce), ""] : []),
     "## Rules",
-    "- Read the code at each `file` and `line` in the worktree. Judge the code, not the text of the finding.",
+    code.length
+      ? "- Start from the code above. Read more of the worktree only when it does not decide the vote: a caller, a guard in another file. Judge the code, not the text of the finding."
+      : "- Read the code at each `file` and `line` in the worktree. Judge the code, not the text of the finding.",
     "- keep: the case is real. The input or situation leads to the wrong result in the head commit.",
     "- drop: the case is wrong. `counter_case` must show why, with a concrete input or a trace: the guard at file:line, or the caller that never passes the bad value. A drop with no counter-case counts as no vote.",
     "- Do not drop for taste, for severity, or because the fix is hard. For a keep, `counter_case` is \"\".",
@@ -225,7 +230,8 @@ const guide = (g) => g?.trim() || "None.";
 // Open points, dropped seats, the tracking line, the pass line and the thread index layout are engine text
 // (review.mjs bodyOf), never the judge's. retracted: earlier threads of ours that the seats now judge wrong;
 // blocking: earlier must threads of ours that are still open, so they block the merge.
-export function composePrompt(frame, agreed, guidance, { retracted = [], blocking = [] } = {}) {
+// hygiene: the severities of a hygiene check that compose does itself, when hygiene.mjs folded its child (small PR).
+export function composePrompt(frame, agreed, guidance, { retracted = [], blocking = [], hygiene = [] } = {}) {
   const n = frame.reviewNumber ?? 1, questions = frame.questions ?? [];
   return [
     context(frame),
@@ -245,6 +251,15 @@ export function composePrompt(frame, agreed, guidance, { retracted = [], blockin
     ...(questions.length ? ["## The author's questions", prData(questions.map((q, i) => `${i + 1}. ${q}`).join("\n"), undefined, frame.nonce), ""] : []),
     ...(retracted.length ? ["## Earlier findings of ours that the seats now judge wrong", seatData(json(retracted), frame.nonce), ""] : []),
     ...(blocking.length ? ["## Earlier must findings of ours that are still open", seatData(json(blocking), frame.nonce), ""] : []),
+    ...(hygiene.length ? [
+      "## Hygiene check",
+      "No other child checks the hygiene of this small PR: check it yourself. Check the PR as a whole, not its code lines.",
+      "- Description: a claim in the title or body that the diff does not do, a large change that the body never names, or tests named in the body that the diff does not add.",
+      "- Docs: a changed public interface (CLI flag, config key, API, exported function) with no change in the README, docs or help text. Grep the docs in the worktree before you report.",
+      "- Do not report the title style, an empty body, a linked issue, the changelog or commit subjects: code checks cover them.",
+      `- Put each problem in \`hygiene\`, not in \`body\`: the engine lists them. Write \`case\` as a question to the author: "The body says X. The diff does Y. Is X still true?" \`severity\`: ${hygiene.join(" or ")}${hygiene.includes("nit") ? "" : "; report only a problem that would mislead a reader"}.`,
+      "",
+    ] : []),
     "## Rules",
     "- Write 1 inline comment for each finding, with the finding `id` as `id`. Use the inline comment layout of the writing rules.",
     "- When 2 or more findings on the same file and line have the same root cause and the same fix (for example 2 lenses), write 1 comment for all of them. Use the id of one as `id`, and put the other ids in `also`. An id in `also` gets no comment of its own.",
@@ -276,7 +291,7 @@ export function composePrompt(frame, agreed, guidance, { retracted = [], blockin
     "",
     "## Output",
     OUT,
-    '{"verdict": "one line", "answers": ["..."], "confirmed": [{"thread_id": "...", "text": "..."}], "index": [{"theme": "", "items": [{"id": "<finding id>", "text": "one line"}]}], "praise": "", "body": "", "corrections": [{"thread_id": "...", "text": "..."}], "comments": [{"id": "<finding id>", "also": [], "body": "comment text"}]}',
+    `{"verdict": "one line", "answers": ["..."], "confirmed": [{"thread_id": "...", "text": "..."}], "index": [{"theme": "", "items": [{"id": "<finding id>", "text": "one line"}]}], "praise": "", "body": "", "corrections": [{"thread_id": "...", "text": "..."}], "comments": [{"id": "<finding id>", "also": [], "body": "comment text"}]${hygiene.length ? ', "hygiene": [{"lens": "hygiene", "severity": "should|nit", "title": "short title", "case": "the question", "fix": "the smallest change"}]' : ""}}`,
   ].join("\n");
 }
 
