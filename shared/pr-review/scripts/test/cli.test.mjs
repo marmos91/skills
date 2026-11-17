@@ -268,7 +268,7 @@ test("tick with several repos runs one tick per clone; a repo without a clone is
   const fx = multi();
   const r = cli(fx, "tick", "o/c", "o/a", "o/b");
   assert.equal(r.status, 4, r.stderr);
-  assert.match(r.stderr, /o\/c: no clone of o\/c/);
+  assert.match(r.stderr, /o\/c: no clone here or in \.\/c; skipped/);
   assert.equal(r.stderr.match(/paused/g)?.length, 2, r.stderr);
 });
 
@@ -280,6 +280,25 @@ test("tick --org lists the org's repos and keeps only loop.repos when set", () =
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stderr, /pr-review-loop: o\/b\n/);
   assert.doesNotMatch(r.stderr, /o\/a|o\/z/);
+});
+
+test("tick of one repo finds its clone in ./<name>, like a list", () => {
+  const r = cli(multi(), "tick", "o/a");
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /paused/);
+});
+
+test("tick --org skips a repo without a clone and exits 0", () => {
+  const r = cli(multi(), "tick", "--org", "o");
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /o\/z: no clone here or in \.\/z; skipped/);
+  assert.equal(r.stderr.match(/paused/g)?.length, 2, r.stderr);
+});
+
+test("--org outside tick and status is a usage error", () => {
+  const r = cli(fixture(), "answer", "--org", "o");
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /--org works only with tick and status/);
 });
 
 test("status with several repos prints each", () => {

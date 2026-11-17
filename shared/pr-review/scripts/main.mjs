@@ -254,6 +254,7 @@ export async function main(argv, deps = {}) {
     },
   });
   if (v.help || !cmd) { console.log(USAGE); return v.help ? 0 : 1; }
+  if (v.org && cmd !== "tick" && cmd !== "status") throw new Usage("--org works only with tick and status");
   if (cmd === "answer") {
     const [id, option] = rest;
     if (rest.length > 2 || (id && !option)) throw new Usage(USAGE);
@@ -310,20 +311,28 @@ export async function main(argv, deps = {}) {
   if (cmd === "tick") {
     const { tick } = await import("./lib/tick.mjs");
     const repos = reposOf(rest, v);
+    // The clone of owner/name is this folder or ./name; tick and review work in the current folder, so chdir there.
+    const home = process.cwd(), name = (repo) => repo.split("/")[1];
+    const cloneOf = (repo) => [home, join(home, name(repo))].find((d) => { try { process.chdir(d); return isClone(repo); } catch { return false; } });
     if (repos.length === 1 && !v.org) {
-      if (!isClone(repos[0])) throw new Usage(`this folder is not a clone of ${repos[0]}; cd into one: a tick fetches PR heads here`);
-      return (await tick({ repo: repos[0] }))?.exit ?? 0;
+      try {
+        if (!cloneOf(repos[0])) throw new Usage(`this folder is not a clone of ${repos[0]}, nor is ./${name(repos[0])}; cd into one: a tick fetches PR heads there`);
+        await tick({ repo: repos[0] });
+        return 0;
+      } finally { process.chdir(home); }
     }
-    // Several repos: one tick each, one after another, each with its own lock and queue. The clone of owner/name is
-    // this folder or ./name; tick and review work in the current folder, so chdir there. A failed repo does not stop the rest.
-    const home = process.cwd();
+    // Several repos: one tick each, one after another, each with its own lock and queue. A failed repo does not stop
+    // the rest; with --org a repo without a clone is only skipped, as an org lists repos you may not work on.
     let code = 0;
     for (const repo of repos) {
       console.error(`pr-review-loop: ${repo}`);
       try {
-        const dir = [home, join(home, repo.split("/")[1])].find((d) => { try { process.chdir(d); return isClone(repo); } catch { return false; } });
-        if (!dir) throw new Error(`no clone of ${repo} here or in ./${repo.split("/")[1]}; skipped`);
-        code = Math.max(code, (await tick({ repo }))?.exit ?? 0);
+        if (!cloneOf(repo)) {
+          console.error(`pr-review-loop: ${repo}: no clone here or in ./${name(repo)}; skipped`);
+          if (!v.org) code = 4;
+          continue;
+        }
+        await tick({ repo });
       } catch (e) { console.error(`pr-review-loop: ${repo}: ${e.message}`); code = 4; }
       finally { process.chdir(home); }
     }
