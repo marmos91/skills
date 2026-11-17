@@ -14,7 +14,7 @@ const c = (id, author, body, authorAssociation = "COLLABORATOR") => ({ id, autho
 const bot = (id, body) => ({ id, author: "copilot-pull-request-reviewer", authorType: "Bot", authorAssociation: "NONE", body });
 const th = (id, comments, over = {}) => ({ id, isResolved: false, isOutdated: false, viewerCanResolve: true, path: "a.js", line: 3, originalLine: 3, comments, ...over });
 
-function fakeGh(threads, { head = "h1", marker = false, perms = {} } = {}) {
+function fakeGh(threads, { head = "h1", marker = false, perms = {}, fps = [] } = {}) {
   const calls = { reply: [], edit: [], resolve: [], comment: [] };
   return {
     calls,
@@ -25,6 +25,7 @@ function fakeGh(threads, { head = "h1", marker = false, perms = {} } = {}) {
     editComment: async (_r, id, body) => { calls.edit.push({ id, body }); },
     resolve: async (id) => { calls.resolve.push(id); },
     findMarker: async () => marker,
+    markerFps: async () => new Set(fps),
     permission: async (_r, login) => perms[login] ?? "write",
     comment: async (_r, _n, body) => { calls.comment.push(body); },
   };
@@ -283,6 +284,26 @@ test("the fingerprints come from our own council marker: findings list them, sum
   const split = [{ ...pts[0], fps: [f1] }, { n: 2, status: "open", thread: "T1", fps: [f2], text: "kept." }];
   assert.deepEqual((await summary({ repo: REPO, n: N, points: split, gh })).points.map((p) => p.fps), [[f1], [f2]]);
   await assert.rejects(summary({ repo: REPO, n: N, points: [{ ...pts[0], fp: k }], gh: fakeGh([ours]) }), /is not a finding of thread T1/);
+});
+
+test("summary: a point with no thread (a finding outside the diff) carries its fp, one this PR recorded", async () => {
+  freshState();
+  const rs = stateRoot(REPO), [f1, k] = ["1", "9"].map((x) => x.repeat(40));
+  savePrState(rs, N, { ...prState(rs, N), agreed: [{ id: f1, lens: "correctness", severity: "must", file: "a.js", line: 99, title: "x" }] });
+  const pt = { n: 1, status: "done", sha: SHA, text: "fixed." };
+  assert.deepEqual((await summary({ repo: REPO, n: N, points: [{ ...pt, fp: f1 }], gh: fakeGh([]) })).points[0].fps, [f1]);
+  // a hygiene item (or a review run on another machine) is only in the state items of our markers on GitHub
+  freshState();
+  const h = "4".repeat(40);
+  assert.deepEqual((await summary({ repo: REPO, n: N, points: [{ ...pt, fp: h }], gh: fakeGh([], { fps: [h] }) })).points[0].fps, [h]);
+  // an unknown fp refuses the whole summary, naming it: nothing posted, nothing saved; the corrected rerun posts
+  freshState();
+  const gh = fakeGh([], { fps: [h] }), bad = [{ ...pt, fp: k }, { ...pt, n: 2, fp: h }];
+  await assert.rejects(summary({ repo: REPO, n: N, points: bad, gh }), /point 1: 9{40}/);
+  assert.equal(gh.calls.comment.length, 0);
+  assert.equal(recordedPoints(REPO, N, "h1"), null);
+  assert.equal((await summary({ repo: REPO, n: N, points: [{ ...pt, fp: h }, bad[1]], gh })).action, "posted");
+  assert.equal(gh.calls.comment.length, 1);
 });
 
 test("summary: a rerun at the same head keeps the points of the posted comment", async () => {

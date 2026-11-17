@@ -125,6 +125,8 @@ test("allowed values are type-checked, with the key path in the error", () => {
     ['{"review":{"guidance":"G.md"}}', /review.guidance must be an array of strings/],
     ['{"review":{"ci":"maybe"}}', /review.ci must be use or ignore/],
     ['{"review":{"max_diff_lines":0}}', /review.max_diff_lines must be a positive integer/],
+    ['{"review":{"sast_timeout_s":0}}', /review.sast_timeout_s must be a positive integer/],
+    ['{"review":{"sast_timeout_s":3601}}', /review.sast_timeout_s must be a positive integer, at most 3600/],
     ['{"seats":[{"harness":"pi","model":3,"thinking":"low"}]}', /seats\[0\].model must be/],
     ['{"seats":[{"harness":"pi","model":"m","thinking":"low","provider":1}]}', /seats\[0\].provider must be a string/],
     ['{"seats":["x"]}', /seats\[0\] must be an object/],

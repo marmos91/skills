@@ -53,7 +53,7 @@ export const DEFAULTS = {
   // core_paths has no default: auto asks for it once per repo.
   review: { guidance: [], ci: "use", max_diff_lines: 6000, chunk_lines: 500, max_children: 60, max_parallel: 9, max_turns: 40, timeout_minutes: 10, depth: "light", checks: null,
     // sast (sast.mjs): semgrep on the changed files at every depth, its hits are security candidates; a repo may turn it off
-    sast: true,
+    sast: true, sast_timeout_s: 120,
     // mutants (proof.mjs): at most max mutants, total_s for all of them (and again for the fix checks). Each run
     // keeps the repeat and timeout_s of its check.
     mutants: { max: 20, total_s: 900 } },
@@ -213,6 +213,7 @@ function validate(c, known) {
   need(isObj(c.prices), "prices", "an object");
   for (const [m, p] of Object.entries(c.prices)) for (const k of ["input", "output", "cache_read", "cache_write"]) need(isObj(p) && typeof p[k] === "number" && p[k] >= 0, `prices.${m}.${k}`, "a number >= 0");
   need(typeof c.review.sast === "boolean", "review.sast", "a boolean");
+  need(posInt(c.review.sast_timeout_s) && c.review.sast_timeout_s <= 3600, "review.sast_timeout_s", "a positive integer, at most 3600");
   need(["light", "full", "auto"].includes(c.review.depth), "review.depth", "light, full or auto");
   need(c.review.core_paths === undefined || strList(c.review.core_paths), "review.core_paths", "an array of strings");
   need(c.review.checks === null || Array.isArray(c.review.checks), "review.checks", "an array");
