@@ -237,7 +237,6 @@ test("tick takes the repo as a positional, like status", () => {
   const r = cli(fx, "tick", "O/R");
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stderr, /paused/);
-  assert.equal(cli(fx, "tick", "O/R", "z/w").status, 1);
 });
 
 test("tick outside a clone of the repo is a usage error: it fetches PR heads in this folder", () => {
@@ -246,6 +245,48 @@ test("tick outside a clone of the repo is a usage error: it fetches PR heads in 
   assert.equal(r.status, 1);
   assert.match(r.stderr, /not a clone of x\/y/);
   assert.doesNotMatch(cli(fx, "tick", "o/r").stderr, /not a clone/, "the clone check folds case like GitHub");
+});
+
+// A parent folder with clones of o/a and o/b (not o/c), all paused, so a tick needs no gh.
+function multi() {
+  const root = mkdtempSync(join(tmpdir(), "prr-multi-"));
+  for (const name of ["a", "b"]) {
+    execFileSync("git", ["init", "-q", join(root, name)]);
+    execFileSync("git", ["remote", "add", "origin", `https://github.com/o/${name}.git`], { cwd: join(root, name) });
+  }
+  for (const name of ["a", "b", "c"]) {
+    mkdirSync(join(root, "state", "pr-review", `o__${name}`), { recursive: true });
+    writeFileSync(join(root, "state", "pr-review", `o__${name}`, "paused"), "");
+  }
+  const gh = join(root, "gh");
+  writeFileSync(gh, `#!/bin/sh\n[ "$1 $2 $3 $4" = "repo list o --no-archived" ] || exit 9\necho '[{"nameWithOwner":"o/a"},{"nameWithOwner":"o/b"},{"nameWithOwner":"o/z"}]'\n`);
+  chmodSync(gh, 0o755);
+  return { root, dir: root, env: { ...process.env, GH_BIN: gh, XDG_STATE_HOME: join(root, "state"), XDG_CONFIG_HOME: join(root, "config") } };
+}
+
+test("tick with several repos runs one tick per clone; a repo without a clone is logged and does not stop the rest", () => {
+  const fx = multi();
+  const r = cli(fx, "tick", "o/c", "o/a", "o/b");
+  assert.equal(r.status, 4, r.stderr);
+  assert.match(r.stderr, /o\/c: no clone of o\/c/);
+  assert.equal(r.stderr.match(/paused/g)?.length, 2, r.stderr);
+});
+
+test("tick --org lists the org's repos and keeps only loop.repos when set", () => {
+  const fx = multi();
+  mkdirSync(join(fx.root, "config", "pr-review"), { recursive: true });
+  writeFileSync(join(fx.root, "config", "pr-review", "config.json"), JSON.stringify({ loop: { repos: ["O/B"] } }));
+  const r = cli(fx, "tick", "--org", "o");
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /pr-review-loop: o\/b\n/);
+  assert.doesNotMatch(r.stderr, /o\/a|o\/z/);
+});
+
+test("status with several repos prints each", () => {
+  const fx = multi();
+  const r = cli(fx, "status", "o/a", "o/b");
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout).map((s) => [s.repo, s.paused]), [["o/a", true], ["o/b", true]]);
 });
 
 test("--max-diff-lines takes a positive integer", () => {
