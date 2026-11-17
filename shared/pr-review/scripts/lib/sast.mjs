@@ -13,7 +13,7 @@ const REPO_RULES = [".semgrep.yml", ".semgrep.yaml", ".semgrep"];
  * Runs semgrep once per run (cached in file). changed: file -> Set of added lines.
  * -> { tool, ran, note, hits: [{ rule, file, line, message }] }; note says why it did not run or what went wrong.
  */
-export async function runSast(f, config, lenses, changed, file, log = () => {}, timeoutMs = (config.review.sast_timeout_s ?? 120) * 1000) {
+export async function runSast(f, config, lenses, changed, file, log = () => {}, timeoutMs = config.review.sast_timeout_s * 1000) {
   if (existsSync(file)) return JSON.parse(readFileSync(file, "utf8"));
   const r = await scan(f, config, lenses, changed, timeoutMs);
   if (stopping) throw new ChildFailed("engine is stopping on a signal"); // a killed scan is not a result

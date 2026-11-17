@@ -14,7 +14,7 @@ const c = (id, author, body, authorAssociation = "COLLABORATOR") => ({ id, autho
 const bot = (id, body) => ({ id, author: "copilot-pull-request-reviewer", authorType: "Bot", authorAssociation: "NONE", body });
 const th = (id, comments, over = {}) => ({ id, isResolved: false, isOutdated: false, viewerCanResolve: true, path: "a.js", line: 3, originalLine: 3, comments, ...over });
 
-function fakeGh(threads, { head = "h1", marker = false, perms = {} } = {}) {
+function fakeGh(threads, { head = "h1", marker = false, perms = {}, fps = [] } = {}) {
   const calls = { reply: [], edit: [], resolve: [], comment: [] };
   return {
     calls,
@@ -25,6 +25,7 @@ function fakeGh(threads, { head = "h1", marker = false, perms = {} } = {}) {
     editComment: async (_r, id, body) => { calls.edit.push({ id, body }); },
     resolve: async (id) => { calls.resolve.push(id); },
     findMarker: async () => marker,
+    markerFps: async () => new Set(fps),
     permission: async (_r, login) => perms[login] ?? "write",
     comment: async (_r, _n, body) => { calls.comment.push(body); },
   };
@@ -291,8 +292,17 @@ test("summary: a point with no thread (a finding outside the diff) carries its f
   savePrState(rs, N, { ...prState(rs, N), agreed: [{ id: f1, lens: "correctness", severity: "must", file: "a.js", line: 99, title: "x" }] });
   const pt = { n: 1, status: "done", sha: SHA, text: "fixed." };
   assert.deepEqual((await summary({ repo: REPO, n: N, points: [{ ...pt, fp: f1 }], gh: fakeGh([]) })).points[0].fps, [f1]);
+  // a hygiene item (or a review run on another machine) is only in the state items of our markers on GitHub
   freshState();
-  await assert.rejects(summary({ repo: REPO, n: N, points: [{ ...pt, fp: k }], gh: fakeGh([]) }), /is not a finding of a review/);
+  const h = "4".repeat(40);
+  assert.deepEqual((await summary({ repo: REPO, n: N, points: [{ ...pt, fp: h }], gh: fakeGh([], { fps: [h] }) })).points[0].fps, [h]);
+  // an unknown fp is dropped from its point with a warning; the summary still posts every point
+  freshState();
+  const warned = [], gh = fakeGh([], { fps: [h] });
+  const r = await summary({ repo: REPO, n: N, points: [{ ...pt, fp: k }, { ...pt, n: 2, fp: h }], gh, warn: (m) => warned.push(m) });
+  assert.deepEqual(r.points.map((p) => p.fps), [[], [h]]);
+  assert.equal(gh.calls.comment.length, 1);
+  assert.match(warned.join(), /point 1: 9{40} is not a finding/);
 });
 
 test("summary: a rerun at the same head keeps the points of the posted comment", async () => {

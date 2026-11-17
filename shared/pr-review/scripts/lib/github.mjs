@@ -117,12 +117,17 @@ export async function markerKeys(repo, n) {
   return keys;
 }
 
-/** The newest summary marker of the viewer's reviews at sha, with its review's node id and body, or null: a follow-up's fallback when local state has none. */
-export async function markerCounts(repo, n, sha) {
+// The summary markers of the viewer's reviews, oldest first, each with its review's node id and body.
+async function summaryMarkers(repo, n) {
   const me = await viewer();
-  const marks = (await json(["api", "--paginate", "--slurp", `repos/${repo}/pulls/${n}/reviews`])).flat().filter((r) => r?.user?.login === me).map((r) => ({ ...readSummaryMarker(r.body), id: r.node_id, body: r.body }));
-  return marks.filter((m) => m.sha === sha).at(-1) ?? null;
+  return (await json(["api", "--paginate", "--slurp", `repos/${repo}/pulls/${n}/reviews`])).flat().filter((r) => r?.user?.login === me).map((r) => ({ ...readSummaryMarker(r.body), id: r.node_id, body: r.body }));
 }
+
+/** The newest summary marker of the viewer's reviews at sha, with its review's node id and body, or null: a follow-up's fallback when local state has none. */
+export const markerCounts = async (repo, n, sha) => (await summaryMarkers(repo, n)).filter((m) => m.sha === sha).at(-1) ?? null;
+
+/** The fingerprints in the state items of the viewer's review markers: every finding a review of the PR raised, hygiene too. */
+export const markerFps = async (repo, n) => new Set((await summaryMarkers(repo, n)).flatMap((m) => (m.state?.items ?? []).map((i) => i.fp)).filter(Boolean));
 
 // Same full paging as markerKeys: a GraphQL walk caps comments per review at 100, and a missed marker means a duplicate post.
 export const findMarker = async (repo, n, key) => (await markerKeys(repo, n)).has(key.replace(/^key=/, ""));
