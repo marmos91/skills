@@ -196,6 +196,26 @@ test("status: a corrupt state.json and a young pid-less lock", () => {
   assert.match(s.prs.find((p) => p.pr === 9).error, /state.json unreadable/);
 });
 
+test("status prices each run and the PR total with the user's price table", () => {
+  const fx = fixture();
+  const run = join(fx.state, "pr", "4", "runs", "abc-1");
+  mkdirSync(join(run, "round1"), { recursive: true });
+  writeFileSync(join(run, "round1", "all~0.usage.json"), JSON.stringify({ input: 2e6, output: 0, cache_read: 0, cache_creation: 0, model: "opus" }));
+  mkdirSync(join(fx.env.XDG_CONFIG_HOME, "pr-review"), { recursive: true });
+  writeFileSync(join(fx.env.XDG_CONFIG_HOME, "pr-review", "config.json"), JSON.stringify({ prices: { opus: { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 } } }));
+  const r = cli(fx, "status", "--repo", "o/r");
+  assert.equal(r.status, 0, r.stderr);
+  const pr = JSON.parse(r.stdout).prs.find((p) => p.pr === 4);
+  assert.equal(pr.lastRunTokens.round1.cost, 10);
+  assert.equal(pr.prTokens.cost, 10);
+  // a config error elsewhere leaves status working, with tokens only
+  writeFileSync(join(fx.env.XDG_CONFIG_HOME, "pr-review", "config.json"), JSON.stringify({ round1: "bad" }));
+  const bad = cli(fx, "status", "--repo", "o/r");
+  assert.equal(bad.status, 0, bad.stderr);
+  assert.match(bad.stderr, /warning: config not loaded/);
+  assert.equal("cost" in JSON.parse(bad.stdout).prs.find((p) => p.pr === 4).prTokens, false);
+});
+
 test("review exits with Locked while another run holds that PR", async () => {
   const fx = fixture();
   const holder = spawn(process.execPath, ["--input-type=module", "-e",

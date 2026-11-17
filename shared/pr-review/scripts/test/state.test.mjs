@@ -224,6 +224,31 @@ test("usageByStage sums the usage records per stage, skips wt and ctx, and adds 
   });
 });
 
+test("usageByStage prices each stage per model; a stage with an unpriced model shows tokens only; prUsage sums the runs", async () => {
+  const { usageByStage, prUsage, usageText } = await import("../lib/state.mjs");
+  const runs = tmp(), d = join(runs, "abc-1"), u = (model, input, output, cache_read, cache_creation) => JSON.stringify({ input, output, cache_read, cache_creation, model });
+  const prices = { opus: { input: 15, output: 75, cache_read: 1.5, cache_write: 18.75 }, "cubbit/mimir": { input: 1, output: 2, cache_read: 0, cache_write: 0 } };
+  for (const s of ["round1", "vote"]) mkdirSync(join(d, s), { recursive: true });
+  writeFileSync(join(d, "round1", "all~0.usage.json"), u("opus", 1e6, 1e5, 2e6, 0)); // 15 + 7.5 + 3 + 0
+  writeFileSync(join(d, "round1", "all~1.usage.json"), u("cubbit/mimir", 5e5, 5e5, 0, 0)); // 0.5 + 1
+  writeFileSync(join(d, "vote", "v~0.usage.json"), u("unpriced", 10, 10, 0, 0));
+  const by = usageByStage(d, prices);
+  assert.equal(by.round1.cost, 27);
+  assert.equal("cost" in by.vote, false, "a model with no price: tokens only");
+  assert.equal("cost" in by.total, false, "a total with an unpriced stage is no cost");
+  assert.equal(usageText(by.round1), "input 1500000 output 600000 cache_read 2000000 cache_creation 0 cost 27.0000");
+  assert.equal(usageText(by.vote), "input 10 output 10 cache_read 0 cache_creation 0");
+  assert.equal("cost" in usageByStage(d).round1, false, "no price table: tokens only");
+  writeFileSync(join(d, "round1", "all~2.usage.json"), u("opus", 10, 10, null, 0));
+  assert.equal("cost" in usageByStage(d, prices).round1, false, "an unknown count: tokens only");
+  rmSync(join(d, "round1", "all~2.usage.json"));
+  rmSync(join(d, "vote"), { recursive: true });
+  mkdirSync(join(runs, "abc-2"));
+  writeFileSync(join(runs, "abc-2", "hygiene.usage.json"), u("opus", 1e6, 0, 0, 0));
+  assert.deepEqual(prUsage(runs, prices), { input: 2.5e6, output: 6e5, cache_read: 2e6, cache_creation: 0, cost: 42 });
+  assert.equal(prUsage(join(runs, "none"), prices), null);
+});
+
 test("readSummaryMarker reads only the engine's marker on the last line", () => {
   const sha = "a".repeat(40), key = "b".repeat(40);
   const real = summaryMarker("r1", sha, key, { must: 1, questions: 2, gaps: 3 });

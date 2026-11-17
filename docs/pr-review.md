@@ -20,7 +20,7 @@ attribution.
 | `pr-review review <n> [--repo o/r] [--effort low\|medium\|high\|max\|auto] [--depth light\|full\|auto] [--lens a,b] [--max-diff-lines N] [--dry-run] [--until stage] [--restart]` | Review one PR. `<n>` is a number or a PR URL. Without `--repo`, the repo of the current directory |
 | `pr-review answer` | Print the open questions as JSON |
 | `pr-review answer <id> <post\|drop\|ask-author>` | Record your answer to one question |
-| `pr-review status [owner/repo]` | Questions, to-do items, review and reply counts per PR, lock holder, unfinished runs, tokens per stage, paused flag |
+| `pr-review status [owner/repo]` | Questions, to-do items, review and reply counts per PR, lock holder, unfinished runs, tokens (and cost, with `prices`) per stage and per PR, paused flag |
 | `pr-review doctor` | Merged config, the loaded lenses, a 1-token probe per seat, `gh auth status`, jev, gitleaks, claude login mode, planned child count per effort level |
 | `pr-review config core-paths <owner/repo> ['glob'...]` | Save the core paths of a repo for `auto` depth. No glob saves "none". Quote each glob: an argument that is a file here gets a warning (the shell may have expanded a glob), and is saved as given |
 | `pr-review tick [owner/repo]` | One loop run (a tick); `pr-review-loop` calls it |
@@ -384,6 +384,25 @@ never fails a run. Reply children count under the `reply` stage.
 `pr-review status` shows the totals per stage of each unfinished run, and of
 the newest run of each PR (`lastRunTokens`), also a dry run or a run with
 `--until`.
+
+Each record also names the `model` of its seat. Set a price per model in the
+user config to see the cost in money as well, per million tokens, in the
+currency you use:
+
+```jsonc
+"prices": {
+  "opus": { "input": 5, "output": 25, "cache_read": 0.5, "cache_write": 6.25 }
+}
+```
+
+The key is the `model` as the seat names it. There are no built-in prices and
+no network call for them. A stage then carries a `cost` when every child in it
+has a priced model and all four counts; a model with no price or a count the
+harness did not report shows tokens only. `pr-review status`
+adds `prTokens`, the sum over all runs of each PR, and the run summary line
+(also a dry run) ends with the tokens and cost per stage and the PR total.
+Prices are user-level only and never posted on GitHub. A config that does not
+load makes `status` warn and show tokens only.
 
 The prompts help the prompt cache. Each prompt starts with the parts that all
 children of a run share: the context, the small context files (`pr.json`,
@@ -1078,7 +1097,8 @@ The last send time is in `digest.json` in the repo state.
 
 `pr-review status` shows the questions, the to-do items, the review and reply
 counts per PR, the lock holder, unfinished runs (PR, SHA, stage, children done
-of total, tokens per stage), the tokens of the last run of each PR, an
+of total, tokens per stage), the tokens of the last run of each PR and of all
+its runs, with the cost when `prices` is set, an
 interrupted tick queue, and the paused flag.
 
 ## Live dry runs

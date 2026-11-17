@@ -360,13 +360,13 @@ test("token usage: claude and pi json are unwrapped; each attempt adds to <key>.
   stub("claude", `echo x >>"${n}"; [ $(wc -l <"${n}") -ge 2 ] && printf '%s' '${env(OK)}' || printf '%s' '${env("no json")}'`);
   const outFile = join(dir, "u.json");
   assert.deepEqual(await runChild(base(claudeSeat, { outFile, retries: 1 })), JSON.parse(OK));
-  assert.deepEqual(JSON.parse(readFileSync(join(dir, "u.usage.json"), "utf8")), { input: 20, output: 10, cache_read: 200, cache_creation: 14 });
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "u.usage.json"), "utf8")), { input: 20, output: 10, cache_read: 200, cache_creation: 14, model: "opus" }, "the model prices the record");
   // the fake harness gives no usage: the record says so, and the child still succeeds
   const fx = join(dir, "fx-u.json");
   writeFileSync(fx, OK);
   process.env.PR_REVIEW_FAKE = fx;
   try { await runChild(base(claudeSeat, { outFile: join(dir, "f.json") })); } finally { delete process.env.PR_REVIEW_FAKE; }
-  assert.deepEqual(JSON.parse(readFileSync(join(dir, "f.usage.json"), "utf8")), { input: null, output: null, cache_read: null, cache_creation: null });
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "f.usage.json"), "utf8")), { input: null, output: null, cache_read: null, cache_creation: null, model: "opus" });
 });
 
 test("claude json at max_turns: the seat drops at once", async () => {

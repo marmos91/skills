@@ -193,10 +193,27 @@ export function savePrState(repoState, n, s) {
   writeAtomic(prFile(repoState, n), JSON.stringify(s, null, 2) + "\n");
 }
 
-/** Token usage of a run, summed per stage folder (hygiene at the top level), plus total; {} when none is recorded. */
-export function usageByStage(dir) {
+const TOKENS = ["input", "output", "cache_read", "cache_creation"];
+// Money of one usage record at its model's price per million tokens; undefined when the model has no price
+// or a count is unknown (null): a guessed 0 would pass for a known cost.
+function costOf(u, prices = {}) {
+  const p = Object.hasOwn(prices, u.model ?? "") ? prices[u.model] : null;
+  if (!p || !TOKENS.every((k) => typeof u[k] === "number")) return undefined;
+  return (u.input * p.input + u.output * p.output + u.cache_read * p.cache_read + u.cache_creation * p.cache_write) / 1e6;
+}
+// Sum of two priced records: the cost stays only while every record has one, so a partial sum never passes for the cost.
+const addPriced = (a, b) => {
+  const r = addUsage(a, b), cost = !a ? b.cost : a.cost == null || b.cost == null ? undefined : a.cost + b.cost;
+  return cost == null ? r : { ...r, cost };
+};
+
+/**
+ * Token usage of a run, summed per stage folder (hygiene at the top level), plus total; {} when none is recorded.
+ * With prices (config.prices), a stage whose children all have a priced model also carries its cost.
+ */
+export function usageByStage(dir, prices = {}) {
   const out = {};
-  const add = (stage, file) => { try { out[stage] = addUsage(out[stage], JSON.parse(readFileSync(file, "utf8"))); } catch {} };
+  const add = (stage, file) => { try { const u = JSON.parse(readFileSync(file, "utf8")); out[stage] = addPriced(out[stage], { ...u, cost: costOf(u, prices) }); } catch {} };
   let ls = [];
   try { ls = readdirSync(dir, { withFileTypes: true }); } catch { return out; }
   for (const e of ls) {
@@ -204,9 +221,19 @@ export function usageByStage(dir) {
     // recursive: reply children write reply/<thread>/<comment>/<role>.usage.json
     else if (e.isDirectory() && e.name !== "wt" && e.name !== "ctx") try { for (const f of readdirSync(join(dir, e.name), { recursive: true }).filter((x) => x.endsWith(".usage.json"))) add(e.name, join(dir, e.name, f)); } catch {}
   }
-  if (Object.keys(out).length) out.total = Object.values(out).reduce((a, b) => addUsage(a, b));
+  if (Object.keys(out).length) out.total = Object.values(out).reduce(addPriced);
   return out;
 }
+
+/** The usage of every run of a PR (its runs folder) summed, with the cost as in usageByStage; null when none is recorded. */
+export function prUsage(runsDir, prices = {}) {
+  let runs = [];
+  try { runs = readdirSync(runsDir); } catch {}
+  return runs.map((d) => usageByStage(join(runsDir, d), prices).total).filter(Boolean).reduce(addPriced, undefined) ?? null;
+}
+
+/** One usage record as text: its tokens, and the cost when it is known. */
+export const usageText = (u) => `${TOKENS.map((k) => `${k} ${u[k] ?? "?"}`).join(" ")}${u.cost == null ? "" : ` cost ${u.cost.toFixed(4)}`}`;
 
 // The summary marker of a full review carries the verdict's inputs; pr-land gates a merge on them. A follow-up carries the head's new ones; replies have none.
 // state (#65): JSON for agents (verdict, next step, open items); < and > escaped, so no text can close the comment.

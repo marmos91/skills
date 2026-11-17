@@ -13,7 +13,7 @@ import { askJev as realAskJev, findJev as realFindJev } from "./lib/decider.mjs"
 import { review, SetupError, STAGES } from "./lib/review.mjs";
 import { answer, markAsked, openQuestions, questionWarnings } from "./lib/questions.mjs";
 import { LEARNINGS, forget, suggestion } from "./lib/learnings.mjs";
-import { FINAL_STAGE, Locked, VERSION, done, holderAlive, prState, stateRoot, usageByStage } from "./lib/state.mjs";
+import { FINAL_STAGE, Locked, VERSION, done, holderAlive, prState, prUsage, stateRoot, usageByStage } from "./lib/state.mjs";
 import { remoteRepos } from "./lib/github.mjs";
 import { digestText } from "./lib/digest.mjs";
 import { DEPTHS, setCorePaths } from "./lib/setup.mjs";
@@ -91,7 +91,7 @@ function lockOf(parent) {
   return raw === undefined ? null : { pid: raw, stale: raw === null ? !young() : !holderAlive(dir, raw) };
 }
 
-function status(repo) {
+function status(repo, prices = {}) {
   const rs = stateRoot(repo);
   const lock = lockOf(rs);
   const questions = openQuestions(rs).map((q) => ({ id: q.id, pr: q.pr, file: join(rs, "questions", `${q.id}.md`) }));
@@ -107,10 +107,10 @@ function status(repo) {
       const dir = join(runsDir, d), run = readJson(join(dir, "run.json"));
       // setup/ holds check markers, not children
       const childDone = ls(dir).filter((s) => s !== "setup").reduce((k, s) => k + ls(join(dir, s)).filter((f) => f.endsWith(".done")).length, 0);
-      return { sha: d.slice(0, d.lastIndexOf("-")), stage: STAGES.find((s) => !done(dir, s)), children: { done: childDone, total: run?.planned ?? null }, tokens: usageByStage(dir) };
+      return { sha: d.slice(0, d.lastIndexOf("-")), stage: STAGES.find((s) => !done(dir, s)), children: { done: childDone, total: run?.planned ?? null }, tokens: usageByStage(dir, prices) };
     });
     const replies = Object.values(st.replies ?? {}).reduce((a, b) => a + (Number(b) || 0), 0);
-    return { pr: n, lock: lockOf(join(rs, "pr", String(n))), reviews: st.reviews, replies, lastReviewedSha: st.lastReviewedSha, lastRunTokens: latestRun ? usageByStage(join(runsDir, latestRun)) : {}, questions: questions.filter((q) => q.pr === n).length, runs };
+    return { pr: n, lock: lockOf(join(rs, "pr", String(n))), reviews: st.reviews, replies, lastReviewedSha: st.lastReviewedSha, lastRunTokens: latestRun ? usageByStage(join(runsDir, latestRun), prices) : {}, prTokens: prUsage(runsDir, prices), questions: questions.filter((q) => q.pr === n).length, runs };
   });
   return {
     repo, paused: existsSync(join(rs, "paused")), lock, questions, warnings: questionWarnings(rs),
@@ -250,7 +250,10 @@ export async function main(argv, deps = {}) {
   }
   if (cmd === "status") {
     if (rest.length > 1) throw new Usage(USAGE);
-    console.log(JSON.stringify(status(repoOf(rest[0] ?? v.repo)), null, 2));
+    // prices only: a config error never hides the status, it leaves tokens without a cost
+    let prices = {};
+    try { prices = loadUserConfig({ cliPath: v.config }).prices; } catch (e) { console.error(`warning: config not loaded, tokens shown without cost: ${e.message}`); }
+    console.log(JSON.stringify(status(repoOf(rest[0] ?? v.repo), prices), null, 2));
     return 0;
   }
   if (cmd === "digest") {

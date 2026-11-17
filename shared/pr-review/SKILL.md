@@ -107,7 +107,8 @@ The depth is `auto` and the repo has no core paths yet. Ask this one time:
 ## Other commands
 
 - `pr-review status [owner/repo]`: open questions, to-do items, unfinished
-  runs, tokens per stage, and the lock holder.
+  runs, tokens per stage and per PR (with a cost when the config sets
+  `prices`), and the lock holder.
 - `pr-review doctor`: merged config, a probe of each seat, `gh` login, jev,
   gitleaks, and the planned child count per effort level. Run it first on a new
   machine.
