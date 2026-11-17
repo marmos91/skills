@@ -735,3 +735,13 @@ test("digest: a failed command is logged without its text and retried on the nex
   await go({ loadCfg: digestCfg(`cat > '${out}'`), now: () => NOW + 60000 });
   assert.ok(existsSync(out));
 });
+
+test("digest: still sent when the tick's run fails, with the reason", async () => {
+  const rs = fresh();
+  withBaseline(rs);
+  const out = join(rs, "..", "digest.out");
+  queueQuestion(rs, QUEUED);
+  const gh = { ...fakeGh(), viewer: async () => { throw new Error("gh: authentication expired\nmore"); } };
+  await assert.rejects(go({ gh, loadCfg: digestCfg(`cat > '${out}'`) }), /authentication expired/);
+  assert.match(readFileSync(out, "utf8"), /^pr-review-loop digest for o\/r\nLast tick failed: gh: authentication expired\n\n1 open question/);
+});

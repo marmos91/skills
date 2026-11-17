@@ -63,7 +63,7 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
   const rs = stateRoot(repo);
   const out = { processed: 0, skipped: 0, questions: 0, todos: 0 };
   if (existsSync(join(rs, "paused"))) { log(`pr-review-loop: paused; run "pr-review-loop resume" to continue`); return { ...out, paused: true }; }
-  let release;
+  let release, failed;
   try { release = acquireLock(rs); } catch (e) {
     if (!(e instanceof Locked)) throw e;
     log(`pr-review-loop: ${e.message}; this tick does nothing`);
@@ -73,8 +73,11 @@ export async function tick({ repo, repoDir = process.cwd(), gh = github, review,
     // reply-only runs end here, not in review(): sweep their worktrees too
     await sweep(rs);
     await run();
-    sendDigest({ repo, rs, config: loadCfg(), now, log });
-  } finally { release(); }
+  } catch (e) { failed = e; throw e; } finally {
+    // the digest reads only local state: a GitHub outage or expired gh auth must not stop it
+    try { sendDigest({ repo, rs, config: loadCfg(), now, log, failed }); } catch (e) { log(`digest: ${e.message}`); }
+    release();
+  }
   out.questions = openQuestions(rs).length;
   const todoFile = join(rs, "todo.md");
   out.todos = existsSync(todoFile) ? (readFileSync(todoFile, "utf8").match(/^- \[ \]/gm) ?? []).length : 0;
