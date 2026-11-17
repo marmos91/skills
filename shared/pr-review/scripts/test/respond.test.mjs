@@ -285,6 +285,16 @@ test("the fingerprints come from our own council marker: findings list them, sum
   await assert.rejects(summary({ repo: REPO, n: N, points: [{ ...pts[0], fp: k }], gh: fakeGh([ours]) }), /is not a finding of thread T1/);
 });
 
+test("summary: a point with no thread (a finding outside the diff) carries its fp, one this PR recorded", async () => {
+  freshState();
+  const rs = stateRoot(REPO), [f1, k] = ["1", "9"].map((x) => x.repeat(40));
+  savePrState(rs, N, { ...prState(rs, N), agreed: [{ id: f1, lens: "correctness", severity: "must", file: "a.js", line: 99, title: "x" }] });
+  const pt = { n: 1, status: "done", sha: SHA, text: "fixed." };
+  assert.deepEqual((await summary({ repo: REPO, n: N, points: [{ ...pt, fp: f1 }], gh: fakeGh([]) })).points[0].fps, [f1]);
+  freshState();
+  await assert.rejects(summary({ repo: REPO, n: N, points: [{ ...pt, fp: k }], gh: fakeGh([]) }), /is not a finding of a review/);
+});
+
 test("summary: a rerun at the same head keeps the points of the posted comment", async () => {
   freshState();
   const first = [{ n: 1, status: "open", text: "kept open." }];

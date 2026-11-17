@@ -239,14 +239,22 @@ export function summaryText(repo, points) {
 /**
  * Posts the summary once per head and review it answers (a marker key): a respond step that pushes nothing answers a
  * newer review at the same head and gets its own summary. A point that names its thread (the finding's id) gets the
- * fingerprints of that thread's findings (fps), recorded for pr-converge. The first summary of a step wins: the
+ * fingerprints of that thread's findings (fps), recorded for pr-converge; a point with no thread (a finding outside the diff)
+ * carries its fp itself. The first summary of a step wins: the
  * recorded points stay those of the posted comment. -> { action: "posted"|"skipped", points }
  */
 export async function summary({ repo, n, points: given, gh }) {
   const { headSha } = await gh.pr(repo, n);
   const named = given.some((p) => p.thread) ? [await gh.viewer(), await gh.threads(repo, n)] : [];
+  // a finding outside the diff has no thread: its point names the fingerprint, one this PR's reviews recorded
+  const known = new Set((prState(stateRoot(repo), n).agreed ?? []).map((a) => a.id));
   const points = given.map((p) => {
-    if (!p.thread) return p;
+    if (!p.thread) {
+      const want = p.fps ?? (p.fp ? [p.fp] : null);
+      const bad = (want ?? []).find((f) => !known.has(f));
+      if (bad) throw new Error(`point ${p.n}: ${bad} is not a finding of a review of ${repo}#${n}`);
+      return want ? { ...p, fps: want } : p;
+    }
     const t = named[1].find((x) => x.id === p.thread);
     if (!t) throw new Error(`point ${p.n}: thread ${p.thread} not found on ${repo}#${n}`);
     // a thread can carry folded findings: a point answers only the ones it names, else the host (the first)
